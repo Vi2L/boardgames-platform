@@ -644,6 +644,274 @@ class PriceDatabase:
         ]
 
     # ------------------------------------------------------------------
+    # Database Explorer — метаданные и обозреватель товаров
+    # ------------------------------------------------------------------
+
+    async def get_db_metadata(self) -> dict:
+        """Сводка по содержимому БД: размер, кол-во записей, диапазон наблюдений."""
+        size_bytes = self._path.stat().st_size if self._path.exists() else 0
+
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            counts: dict[str, int] = {}
+            for tbl in ("stores", "products", "price_observations", "request_log", "parser_log"):
+                async with db.execute(f"SELECT COUNT(*) AS n FROM {tbl}") as cur:
+                    row = await cur.fetchone()
+                counts[tbl] = row["n"] if row else 0
+
+            async with db.execute(
+                "SELECT MIN(fetched_at) AS oldest, MAX(fetched_at) AS newest FROM price_observations"
+            ) as cur:
+                obs = await cur.fetchone()
+
+        return {
+            "db_size_bytes": size_bytes,
+            "db_size_mb": round(size_bytes / 1024 / 1024, 2),
+            "tables": counts,
+            "oldest_observation": obs["oldest"] if obs else None,
+            "newest_observation": obs["newest"] if obs else None,
+        }
+
+    async def get_store_inventory(self) -> list[dict]:
+        """Per-store инвентарь: число товаров, наблюдений, диапазон цен и дат.
+
+        Делаем три отдельных запроса вместо мульти-JOIN — иначе картезианское произведение
+        `products × price_observations × latest` ломает COUNT и AVG.
+
+        Цены конвертируются в рубли (price/100.0) — UI слой получает уже готовые рубли.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+
+            # 1. Кол-во товаров и наблюдений per store
+            async with db.execute(
+                """
+                SELECT p.store_slug,
+                       COUNT(DISTINCT p.id) AS products_count,
+                       COUNT(o.id)          AS observations_count,
+                       MIN(o.fetched_at)    AS oldest_obs,
+                       MAX(o.fetched_at)    AS newest_obs
+                FROM products p
+                LEFT JOIN price_observations o ON o.product_id = p.id
+                GROUP BY p.store_slug
+                """,
+            ) as cur:
+                base_rows = {r["store_slug"]: dict(r) for r in await cur.fetchall()}
+
+            # 2. Перцентили последней цены (min/avg/max) per store
+            async with db.execute(
+                """
+                WITH latest AS (
+                  SELECT p.store_slug, p.id AS product_id, l.price
+                  FROM products p
+                  JOIN (
+                    SELECT product_id, price,
+                           ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY fetched_at DESC) AS rn
+                    FROM price_observations
+                  ) l ON l.product_id = p.id AND l.rn = 1
+                )
+                SELECT store_slug,
+                       MIN(price) / 100.0 AS min_p,
+                       MAX(price) / 100.0 AS max_p,
+                       AVG(price) / 100.0 AS mean_p
+                FROM latest
+                GROUP BY store_slug
+                """,
+            ) as cur:
+                price_rows = {r["store_slug"]: dict(r) for r in await cur.fetchall()}
+
+        slugs = sorted(base_rows.keys(), key=lambda s: -base_rows[s]["products_count"])
+        return [
+            {
+                "store_slug": slug,
+                "products_count": base_rows[slug]["products_count"] or 0,
+                "observations_count": base_rows[slug]["observations_count"] or 0,
+                "oldest_obs": base_rows[slug]["oldest_obs"],
+                "newest_obs": base_rows[slug]["newest_obs"],
+                "min_price_rub": round(price_rows[slug]["min_p"], 2)
+                    if slug in price_rows and price_rows[slug]["min_p"] is not None else None,
+                "max_price_rub": round(price_rows[slug]["max_p"], 2)
+                    if slug in price_rows and price_rows[slug]["max_p"] is not None else None,
+                "mean_price_rub": round(price_rows[slug]["mean_p"], 2)
+                    if slug in price_rows and price_rows[slug]["mean_p"] is not None else None,
+            }
+            for slug in slugs
+        ]
+
+    async def list_products(
+        self,
+        store: str | None = None,
+        query: str | None = None,
+        sort: str = "newest",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[list[dict], int]:
+        """Список товаров с пагинацией. Возвращает (rows, total_count).
+
+        sort: 'newest' | 'oldest' | 'price_asc' | 'price_desc' | 'title'.
+        Поиск по normalized_title (lower-case кириллица — см. db.py:upsert_product).
+        """
+        sort_map = {
+            "newest":     "l.fetched_at DESC",
+            "oldest":     "l.fetched_at ASC",
+            "price_asc":  "l.price ASC",
+            "price_desc": "l.price DESC",
+            "title":      "p.title ASC",
+        }
+        order_by = sort_map.get(sort, sort_map["newest"])
+
+        where_clauses: list[str] = []
+        params: list = []
+        if store:
+            where_clauses.append("p.store_slug = ?")
+            params.append(store)
+        if query:
+            where_clauses.append("p.normalized_title LIKE ?")
+            params.append(f"%{query.lower()}%")
+
+        where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            # Сначала total — нужно для UI пагинации (отдельный запрос проще, чем COUNT() OVER())
+            async with db.execute(
+                f"SELECT COUNT(*) AS n FROM products p {where_sql}", params,
+            ) as cur:
+                total = (await cur.fetchone())["n"]
+
+            sql = f"""
+            WITH latest AS (
+              SELECT product_id, price, fetched_at,
+                     ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY fetched_at DESC) AS rn
+              FROM price_observations
+            )
+            SELECT
+              p.id, p.store_slug, p.title, p.url, p.image_url,
+              l.price, l.fetched_at,
+              (SELECT COUNT(*) FROM price_observations WHERE product_id = p.id) AS history_len
+            FROM products p
+            LEFT JOIN latest l ON l.product_id = p.id AND l.rn = 1
+            {where_sql}
+            ORDER BY {order_by}
+            LIMIT ? OFFSET ?
+            """
+            async with db.execute(sql, [*params, limit, offset]) as cur:
+                rows = await cur.fetchall()
+
+        items = [
+            {
+                "id": r["id"],
+                "store_slug": r["store_slug"],
+                "title": r["title"],
+                "url": r["url"],
+                "image_url": r["image_url"],
+                "price_rub": round(r["price"] / 100, 2) if r["price"] is not None else None,
+                "fetched_at": r["fetched_at"],
+                "history_len": r["history_len"],
+            }
+            for r in rows
+        ]
+        return items, total
+
+    async def get_product_full(self, product_id: int) -> dict | None:
+        """Полные данные товара + последние 50 точек истории цен."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT id, store_slug, external_id, title, url,
+                       image_url, image_url_hd, description,
+                       players, age_min, playtime, rules_url
+                FROM products WHERE id = ?
+                """,
+                (product_id,),
+            ) as cur:
+                p = await cur.fetchone()
+            if not p:
+                return None
+
+            async with db.execute(
+                """
+                SELECT price, fetched_at, raw_json
+                FROM price_observations
+                WHERE product_id = ?
+                ORDER BY fetched_at DESC
+                LIMIT 50
+                """,
+                (product_id,),
+            ) as cur:
+                obs_rows = await cur.fetchall()
+
+        history = [
+            {
+                "price_rub": round(r["price"] / 100, 2),
+                "price_kopecks": r["price"],
+                "fetched_at": r["fetched_at"],
+                "raw": json.loads(r["raw_json"]) if r["raw_json"] else {},
+            }
+            for r in obs_rows
+        ]
+        return {
+            "id": p["id"],
+            "store_slug": p["store_slug"],
+            "external_id": p["external_id"],
+            "title": p["title"],
+            "url": p["url"],
+            "image_url": p["image_url"],
+            "image_url_hd": p["image_url_hd"],
+            "description": p["description"],
+            "players": p["players"],
+            "age_min": p["age_min"],
+            "playtime": p["playtime"],
+            "rules_url": p["rules_url"],
+            "history": history,
+        }
+
+    async def get_price_distribution(self, store_slug: str | None = None) -> dict:
+        """Перцентили цены по последним наблюдениям (рубли)."""
+        async with aiosqlite.connect(self._path) as db:
+            params: list = []
+            where = ""
+            if store_slug:
+                where = "WHERE p.store_slug = ?"
+                params.append(store_slug)
+            async with db.execute(
+                f"""
+                WITH latest AS (
+                  SELECT product_id, price,
+                         ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY fetched_at DESC) AS rn
+                  FROM price_observations
+                )
+                SELECT l.price AS price
+                FROM products p
+                JOIN latest l ON l.product_id = p.id AND l.rn = 1
+                {where}
+                ORDER BY l.price
+                """,
+                params,
+            ) as cur:
+                rows = await cur.fetchall()
+
+        prices = [r[0] / 100 for r in rows]
+        n = len(prices)
+        if n == 0:
+            return {"count": 0, "min": None, "p25": None, "p50": None,
+                    "p75": None, "max": None}
+
+        def _p(p: float) -> float:
+            idx = max(0, min(n - 1, int(p * n) - 1 if int(p * n) > 0 else 0))
+            return round(prices[idx], 2)
+
+        return {
+            "count": n,
+            "min": round(prices[0], 2),
+            "p25": _p(0.25),
+            "p50": _p(0.50),
+            "p75": _p(0.75),
+            "max": round(prices[-1], 2),
+        }
+
+    # ------------------------------------------------------------------
     # История цен
     # ------------------------------------------------------------------
 

@@ -90,3 +90,51 @@ async def empty_responses(hours: int = 24, limit: int = 50):
 async def latency_histogram(hours: int = 24):
     """Гистограмма распределения latency: бины <100, 100-300, 300-1000, 1000-3000, >3000 мс."""
     return await _db.get_latency_histogram(hours=hours)
+
+
+# ---------------------------------------------------------------------------
+# Database Explorer
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/db/meta")
+async def db_meta():
+    """Сводка по БД: размер файла, кол-во строк в таблицах, диапазон наблюдений."""
+    return await _db.get_db_metadata()
+
+
+@router.get("/api/db/stores-inventory")
+async def db_stores_inventory():
+    """Per-store инвентарь: число товаров, наблюдений, диапазон цен и дат."""
+    return await _db.get_store_inventory()
+
+
+@router.get("/api/db/products")
+async def db_list_products(
+    store: str | None = None,
+    q: str | None = None,
+    sort: str = "newest",
+    limit: int = 50,
+    offset: int = 0,
+):
+    """Список товаров с пагинацией и поиском."""
+    items, total = await _db.list_products(
+        store=store, query=q, sort=sort, limit=limit, offset=offset,
+    )
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.get("/api/db/product/{product_id}")
+async def db_product(product_id: int):
+    """Полная карточка товара + последние 50 точек истории цен."""
+    p = await _db.get_product_full(product_id)
+    if p is None:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Товар не найден")
+    return p
+
+
+@router.get("/api/db/price-distribution")
+async def db_price_distribution(store: str | None = None):
+    """Перцентили цены (в рублях) по последним наблюдениям."""
+    return await _db.get_price_distribution(store_slug=store)

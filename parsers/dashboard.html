@@ -245,6 +245,73 @@
   table.sortable th.sorted-asc::after  { content: ' ↑'; color: #3b82f6; }
   table.sortable th.sorted-desc::after { content: ' ↓'; color: #3b82f6; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
+
+  /* ---- Filters bar ---- */
+  .filters {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 20px;
+    border-bottom: 1px solid #334155;
+  }
+  .filters input[type=text], .filters select {
+    background: #0f1117;
+    border: 1px solid #334155;
+    color: #e2e8f0;
+    padding: 6px 10px;
+    border-radius: 6px;
+    font-size: 0.85rem;
+    font-family: inherit;
+  }
+  .filters input[type=text] { min-width: 200px; }
+  .filters input[type=text]:focus, .filters select:focus { outline: none; border-color: #3b82f6; }
+  .pager { display: flex; gap: 8px; align-items: center; padding: 12px 20px; color: #64748b; font-size: 0.83rem; }
+  .pager button {
+    background: #0f1117; border: 1px solid #334155; color: #94a3b8;
+    border-radius: 6px; padding: 4px 10px; font-size: 0.82rem; cursor: pointer;
+  }
+  .pager button:hover:not(:disabled) { background: #243147; color: #e2e8f0; }
+  .pager button:disabled { opacity: .35; cursor: not-allowed; }
+
+  .product-thumb { width: 32px; height: 32px; object-fit: cover; border-radius: 4px; background: #0f1117; vertical-align: middle; margin-right: 8px; }
+  td.title-cell { max-width: 380px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  td.title-cell a { color: #cbd5e1; text-decoration: none; }
+  td.title-cell a:hover { color: #f8fafc; text-decoration: underline; }
+
+  /* ---- Modal ---- */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,.6);
+    display: none; align-items: flex-start; justify-content: center;
+    padding: 40px 20px; overflow-y: auto; z-index: 100;
+  }
+  .modal-backdrop.active { display: flex; }
+  .modal {
+    background: #1e293b; border: 1px solid #334155; border-radius: 10px;
+    width: 100%; max-width: 900px; padding: 24px 28px;
+  }
+  .modal-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 16px; }
+  .modal-head h3 { font-size: 1.1rem; color: #f8fafc; }
+  .modal-close { background: transparent; border: none; color: #94a3b8; font-size: 1.4rem; cursor: pointer; }
+  .modal-close:hover { color: #f8fafc; }
+  .modal-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 16px; }
+  .modal-grid .field-name { color: #64748b; font-size: 0.75rem; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 4px; }
+  .modal-grid .field-value { color: #cbd5e1; font-size: 0.88rem; word-break: break-word; }
+  .modal pre { background: #0f1117; border: 1px solid #334155; border-radius: 6px;
+              padding: 12px; color: #cbd5e1; font-size: 0.8rem; overflow-x: auto;
+              max-height: 280px; overflow-y: auto; }
+  .modal img.preview { max-width: 200px; max-height: 200px; border-radius: 6px; background: #0f1117; }
+
+  /* ---- DB metadata cards ---- */
+  .meta-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    padding: 14px 20px;
+  }
+  .meta-item { background: #0f1117; padding: 10px 14px; border-radius: 8px; border: 1px solid #1e293b; }
+  .meta-label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
+  .meta-value { color: #f8fafc; font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
 </style>
 </head>
 <body>
@@ -368,13 +435,77 @@
 </section>
 
 <!-- =================================================================
-     БАЗА ДАННЫХ — заглушка для этапа 4
+     БАЗА ДАННЫХ
 ================================================================= -->
 <section data-tab-panel="database">
-  <section class="panel"><h2>База данных</h2>
-    <p class="empty">Размер БД, инвентарь магазинов, обозреватель товаров — будут добавлены на следующем этапе.</p>
+  <section class="panel">
+    <h2>Метаданные БД</h2>
+    <div class="meta-grid" id="db-meta">
+      <p class="empty">Загрузка…</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Инвентарь по магазинам</h2>
+    <table>
+      <thead><tr>
+        <th>Магазин</th>
+        <th class="num">Товаров</th>
+        <th class="num">Наблюдений</th>
+        <th class="num">Min</th>
+        <th class="num">Avg</th>
+        <th class="num">Max</th>
+        <th>Свежее наблюдение</th>
+      </tr></thead>
+      <tbody id="db-inventory-tbody"><tr><td colspan="7" class="empty">Загрузка…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Товары</h2>
+    <div class="filters">
+      <input type="text" id="db-search" placeholder="Поиск по названию…">
+      <select id="db-filter-store">
+        <option value="">Все магазины</option>
+      </select>
+      <select id="db-sort">
+        <option value="newest">Сначала свежие</option>
+        <option value="oldest">Сначала старые</option>
+        <option value="price_asc">Цена ↑</option>
+        <option value="price_desc">Цена ↓</option>
+        <option value="title">Название</option>
+      </select>
+      <span style="flex:1"></span>
+      <span id="db-products-total" style="color:#64748b;font-size:.82rem">—</span>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Товар</th>
+        <th>Магазин</th>
+        <th class="num">Цена</th>
+        <th class="num">История</th>
+        <th>Обновлён</th>
+      </tr></thead>
+      <tbody id="db-products-tbody"><tr><td colspan="5" class="empty">Загрузка…</td></tr></tbody>
+    </table>
+    <div class="pager">
+      <button id="db-prev">‹ Назад</button>
+      <span id="db-pageinfo">—</span>
+      <button id="db-next">Далее ›</button>
+    </div>
   </section>
 </section>
+
+<!-- Modal с карточкой товара -->
+<div class="modal-backdrop" id="product-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <h3 id="modal-title">—</h3>
+      <button class="modal-close" id="modal-close">×</button>
+    </div>
+    <div id="modal-body">Загрузка…</div>
+  </div>
+</div>
 
 <!-- =================================================================
      LIVE TEST — заглушка для этапа 8
@@ -662,9 +793,211 @@ document.addEventListener('click', e => {
   renderTopQueries();
 });
 
+// ============================================================
+// Tab: Database — обозреватель товаров и метаданных
+// ============================================================
+const _dbState = {
+  store: '',
+  q: '',
+  sort: 'newest',
+  limit: 25,
+  offset: 0,
+  total: 0,
+  storesPopulated: false,
+  searchTimer: null,
+};
+
+function fmtRub(rub) {
+  if (rub == null) return '—';
+  return rub.toLocaleString('ru', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' ₽';
+}
+
+async function loadDbMeta() {
+  const meta = await safe(fetch('/api/db/meta'), null);
+  const grid = document.getElementById('db-meta');
+  if (!meta) { grid.innerHTML = '<p class="empty">Нет данных</p>'; return; }
+  grid.innerHTML = `
+    <div class="meta-item"><div class="meta-label">Размер БД</div><div class="meta-value">${meta.db_size_mb} МБ</div></div>
+    <div class="meta-item"><div class="meta-label">Магазинов</div><div class="meta-value">${meta.tables.stores}</div></div>
+    <div class="meta-item"><div class="meta-label">Товаров</div><div class="meta-value">${meta.tables.products}</div></div>
+    <div class="meta-item"><div class="meta-label">Наблюдений цен</div><div class="meta-value">${meta.tables.price_observations}</div></div>
+    <div class="meta-item"><div class="meta-label">Поисковых запросов</div><div class="meta-value">${meta.tables.request_log}</div></div>
+    <div class="meta-item"><div class="meta-label">Вызовов парсеров</div><div class="meta-value">${meta.tables.parser_log}</div></div>
+    <div class="meta-item"><div class="meta-label">Самое старое</div><div class="meta-value" style="font-size:.85rem">${fmtDate(meta.oldest_observation)}</div></div>
+    <div class="meta-item"><div class="meta-label">Самое свежее</div><div class="meta-value" style="font-size:.85rem">${fmtDate(meta.newest_observation)}</div></div>
+  `;
+}
+
+async function loadDbInventory() {
+  const inv = await safe(fetch('/api/db/stores-inventory'), []);
+  const tbody = document.getElementById('db-inventory-tbody');
+  if (!inv.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Нет товаров в БД</td></tr>';
+    return;
+  }
+  tbody.innerHTML = inv.map(s => `
+    <tr>
+      <td><strong>${s.store_slug}</strong></td>
+      <td class="num">${s.products_count}</td>
+      <td class="num">${s.observations_count}</td>
+      <td class="num">${fmtRub(s.min_price_rub)}</td>
+      <td class="num">${fmtRub(s.mean_price_rub)}</td>
+      <td class="num">${fmtRub(s.max_price_rub)}</td>
+      <td>${fmtDate(s.newest_obs)}</td>
+    </tr>`).join('');
+
+  // Заполнить select-store, если ещё не сделали
+  if (!_dbState.storesPopulated) {
+    const sel = document.getElementById('db-filter-store');
+    inv.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.store_slug;
+      opt.textContent = s.store_slug;
+      sel.appendChild(opt);
+    });
+    _dbState.storesPopulated = true;
+  }
+}
+
+async function loadDbProducts() {
+  const params = new URLSearchParams({
+    sort: _dbState.sort,
+    limit: _dbState.limit,
+    offset: _dbState.offset,
+  });
+  if (_dbState.store) params.set('store', _dbState.store);
+  if (_dbState.q) params.set('q', _dbState.q);
+
+  const data = await safe(fetch('/api/db/products?' + params), { items: [], total: 0 });
+  _dbState.total = data.total;
+
+  const tbody = document.getElementById('db-products-tbody');
+  if (!data.items.length) {
+    tbody.innerHTML = '<tr><td colspan="5" class="empty">Ничего не найдено</td></tr>';
+  } else {
+    tbody.innerHTML = data.items.map(p => `
+      <tr style="cursor:pointer" data-product-id="${p.id}">
+        <td class="title-cell">
+          ${p.image_url ? `<img class="product-thumb" src="${p.image_url}" loading="lazy">` : '<span class="product-thumb"></span>'}
+          ${p.title}
+        </td>
+        <td>${p.store_slug}</td>
+        <td class="num">${fmtRub(p.price_rub)}</td>
+        <td class="num">${p.history_len}</td>
+        <td>${fmtDate(p.fetched_at)}</td>
+      </tr>`).join('');
+  }
+
+  document.getElementById('db-products-total').textContent = `Всего: ${data.total}`;
+  const lastPage = _dbState.offset + _dbState.limit >= _dbState.total;
+  document.getElementById('db-prev').disabled = _dbState.offset === 0;
+  document.getElementById('db-next').disabled = lastPage;
+  const from = data.total ? _dbState.offset + 1 : 0;
+  const to = Math.min(_dbState.offset + _dbState.limit, _dbState.total);
+  document.getElementById('db-pageinfo').textContent = `${from}–${to} из ${_dbState.total}`;
+}
+
+async function refreshDatabase() {
+  await Promise.all([loadDbMeta(), loadDbInventory(), loadDbProducts()]);
+}
+
+async function showProductModal(productId) {
+  const modal = document.getElementById('product-modal');
+  const body = document.getElementById('modal-body');
+  document.getElementById('modal-title').textContent = 'Загрузка…';
+  body.innerHTML = '<p class="empty">Загрузка…</p>';
+  modal.classList.add('active');
+
+  const p = await safe(fetch(`/api/db/product/${productId}`), null);
+  if (!p) { body.innerHTML = '<p class="empty">Ошибка загрузки</p>'; return; }
+
+  document.getElementById('modal-title').textContent = p.title;
+
+  const fields = [
+    ['Магазин', p.store_slug], ['External ID', p.external_id],
+    ['Описание', p.description || '—'],
+    ['Игроки', p.players || '—'], ['Возраст', p.age_min ? `${p.age_min}+` : '—'],
+    ['Время партии', p.playtime || '—'],
+    ['Сайт', `<a href="${p.url}" target="_blank" style="color:#3b82f6">${p.url}</a>`],
+    ['Правила', p.rules_url ? `<a href="${p.rules_url}" target="_blank" style="color:#3b82f6">PDF</a>` : '—'],
+  ];
+
+  // Историю отсортируем по возрастанию для line chart
+  const history = [...p.history].sort((a, b) => new Date(a.fetched_at) - new Date(b.fetched_at));
+
+  body.innerHTML = `
+    ${p.image_url_hd || p.image_url ? `<div style="margin-bottom:14px"><img class="preview" src="${p.image_url_hd || p.image_url}" alt=""></div>` : ''}
+    <div class="modal-grid">
+      ${fields.map(([k, v]) => `<div><div class="field-name">${k}</div><div class="field-value">${v}</div></div>`).join('')}
+    </div>
+    <h4 style="font-size:.78rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">История цен (${p.history.length} точек)</h4>
+    ${history.length ? '<canvas id="chart-price-history" style="height:180px"></canvas>' : '<p class="empty">Нет истории</p>'}
+    ${p.history.length ? `<h4 style="font-size:.78rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">Raw данные (последнее наблюдение)</h4>
+      <pre>${JSON.stringify(p.history[0].raw, null, 2) || '{}'}</pre>` : ''}
+  `;
+
+  if (history.length) {
+    mkChart('chart-price-history', 'line', {
+      labels: history.map(h => fmtTsShort(h.fetched_at)),
+      datasets: [{
+        label: 'Цена, ₽',
+        data: history.map(h => h.price_rub),
+        borderColor: PALETTE.green,
+        backgroundColor: PALETTE.green + '33',
+        tension: 0.2, fill: true, pointRadius: 3,
+      }],
+    }, {
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { grid: { color: '#334155' }, ticks: { callback: v => v + ' ₽' } },
+        x: { grid: { color: '#334155' }, ticks: { maxTicksLimit: 6 } },
+      },
+    });
+  }
+}
+
+// Обработчики Database UI
+document.getElementById('db-search').addEventListener('input', e => {
+  clearTimeout(_dbState.searchTimer);
+  _dbState.searchTimer = setTimeout(() => {
+    _dbState.q = e.target.value.trim();
+    _dbState.offset = 0;
+    loadDbProducts();
+  }, 300);
+});
+document.getElementById('db-filter-store').addEventListener('change', e => {
+  _dbState.store = e.target.value;
+  _dbState.offset = 0;
+  loadDbProducts();
+});
+document.getElementById('db-sort').addEventListener('change', e => {
+  _dbState.sort = e.target.value;
+  _dbState.offset = 0;
+  loadDbProducts();
+});
+document.getElementById('db-prev').addEventListener('click', () => {
+  _dbState.offset = Math.max(0, _dbState.offset - _dbState.limit);
+  loadDbProducts();
+});
+document.getElementById('db-next').addEventListener('click', () => {
+  if (_dbState.offset + _dbState.limit < _dbState.total) {
+    _dbState.offset += _dbState.limit;
+    loadDbProducts();
+  }
+});
+document.getElementById('db-products-tbody').addEventListener('click', e => {
+  const row = e.target.closest('tr[data-product-id]');
+  if (row) showProductModal(row.dataset.productId);
+});
+document.getElementById('modal-close').addEventListener('click', () => {
+  document.getElementById('product-modal').classList.remove('active');
+});
+document.getElementById('product-modal').addEventListener('click', e => {
+  if (e.target.id === 'product-modal') e.target.classList.remove('active');
+});
+
 // Заглушки для не-реализованных табов
 async function refreshParsers() {}
-async function refreshDatabase() {}
 async function refreshLiveTest() {}
 
 // ============================================================
