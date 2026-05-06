@@ -4,24 +4,13 @@ import clsx from 'clsx'
 import type { HttpLog, ParserStatsOut } from '../../types/api'
 import { HttpLogEntry } from './HttpLogEntry'
 import { useSSE } from '../../lib/sse'
+import { getStoreBorderColor, getStoreDomain } from '../../lib/stores'
 
 interface Props {
   parser: ParserStatsOut
 }
 
 let localLogId = 0
-
-const STORE_LABELS: Record<string, string> = {
-  hobbygames: 'HobbyGames.ru',
-  lavkaigr:   'lavkaigr.ru',
-  gaga:       'gaga.ru',
-}
-
-const STORE_COLORS: Record<string, string> = {
-  hobbygames: 'bg-blue-900/40 border-blue-800',
-  lavkaigr:   'bg-green-900/40 border-green-800',
-  gaga:       'bg-orange-900/40 border-orange-800',
-}
 
 export function ParserCard({ parser }: Props) {
   const [runQuery, setRunQuery] = useState('')
@@ -93,10 +82,7 @@ export function ParserCard({ parser }: Props) {
   }
 
   return (
-    <div className={clsx(
-      'bg-gray-900 border rounded-lg p-4 space-y-3',
-      STORE_COLORS[parser.slug] ?? 'border-gray-800',
-    )}>
+    <div className={clsx('bg-gray-900 border rounded-lg p-4 space-y-3', getStoreBorderColor(parser.slug))}>
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -107,7 +93,7 @@ export function ParserCard({ parser }: Props) {
             }
             <span className="font-semibold text-gray-100">{parser.name}</span>
           </div>
-          <div className="text-xs text-gray-500 mt-0.5">{STORE_LABELS[parser.slug] ?? parser.base_url}</div>
+          <div className="text-xs text-gray-500 mt-0.5">{getStoreDomain(parser.slug, parser.base_url)}</div>
         </div>
         <span className="text-xs font-mono text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded">
           {parser.slug}

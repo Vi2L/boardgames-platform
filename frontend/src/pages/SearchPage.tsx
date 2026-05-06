@@ -1,15 +1,15 @@
-import { useCallback, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Clock, Zap, AlertCircle, CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
-import { fetchStores } from '../lib/api'
+import { fetchRecentDeltas, fetchStores } from '../lib/api'
 import { useSSE } from '../lib/sse'
 import { useSearchStore } from '../store/search'
 import { SearchForm } from '../components/search/SearchForm'
 import { StoreProgressBadge } from '../components/search/StoreProgressBadge'
 import { ResultsTable } from '../components/search/ResultsTable'
 import { ProductDrawer } from '../components/search/ProductDrawer'
-import type { ProductOut } from '../types/api'
+import type { PriceDeltaOut, ProductOut } from '../types/api'
 
 type Tab = 'results' | 'api-log'
 
@@ -23,6 +23,21 @@ export function SearchPage() {
   } = useSearchStore()
 
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: fetchStores })
+
+  // Δ-цена: грузим пакетом для всех id из текущих результатов. Ключ —
+  // сортированный список id, чтобы кэш переиспользовался между ре-рендерами
+  // и сбрасывался при новом поиске.
+  const productIds = useMemo(() => results.map(p => p.id).sort((a, b) => a - b), [results])
+  const { data: deltasArray = [] } = useQuery({
+    queryKey: ['recent-deltas', productIds.join(',')],
+    queryFn: () => fetchRecentDeltas(productIds),
+    enabled: productIds.length > 0,
+    staleTime: 60_000,
+  })
+  const deltas = useMemo<Map<number, PriceDeltaOut>>(() =>
+    new Map(deltasArray.map(d => [d.product_id, d])),
+    [deltasArray],
+  )
 
   const onEvent = useCallback((event: string, data: unknown) => {
     handleSSEEvent(event, data)
@@ -101,6 +116,7 @@ export function SearchPage() {
             {tab === 'results' && (
               <ResultsTable
                 products={results}
+                deltas={deltas}
                 onSelect={setSelectedProduct}
               />
             )}
@@ -179,7 +195,9 @@ export function SearchPage() {
       {/* Drawer с деталями товара */}
       <ProductDrawer
         product={selectedProduct}
+        pool={results}
         onClose={() => setSelectedProduct(null)}
+        onSelect={setSelectedProduct}
       />
     </div>
   )

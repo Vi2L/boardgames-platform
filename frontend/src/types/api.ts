@@ -4,6 +4,43 @@ export interface StoreOut {
   base_url: string
 }
 
+/**
+ * Известные поля extra. У разных магазинов разный набор:
+ * - HobbyGames:  gallery, rules, category, sku, complexity, availability
+ * - Лавка игр:   gallery, tags, rules, composition, language, category, complexity
+ * - GaGa:        gallery, rating, review_count, ranking, offline_price,
+ *                rules, composition, dimensions, weight
+ * - CrowdGames:  in_stock, language
+ *
+ * Все поля опциональные. `[k: string]: unknown` оставлен на случай новых
+ * магазинов / парсеров, чтобы не падать на типизации, но при этом IDE
+ * подсказывает известные имена.
+ */
+export interface ProductRule {
+  url: string
+  name: string
+}
+
+export interface ProductExtra {
+  gallery?: string[]
+  rules?: Array<string | ProductRule>
+  tags?: string[]
+  category?: string
+  language?: string
+  complexity?: string
+  composition?: string[] | string
+  rating?: string
+  review_count?: string
+  ranking?: string
+  offline_price?: number       // копейки
+  dimensions?: string
+  weight?: string
+  sku?: string
+  availability?: boolean        // hobbygames
+  in_stock?: boolean            // crowdgames
+  [k: string]: unknown
+}
+
 export interface ProductOut {
   id: number
   store_slug: string
@@ -18,13 +55,21 @@ export interface ProductOut {
   playtime: string | null       // "30-45 мин."
   rules_url: string | null
   fetched_at: string
-  extra: Record<string, unknown> // gallery, sku, rating, tags, offline_price...
+  extra: ProductExtra
 }
 
 export interface PricePointOut {
   price: number       // копейки
   price_rub: number   // рубли
   fetched_at: string
+}
+
+export interface PriceDeltaOut {
+  product_id: number
+  prev_price_rub: number | null
+  curr_price_rub: number | null
+  delta_pct: number | null      // положительная — рост, отрицательная — падение
+  days_between: number | null
 }
 
 export interface ParserStatsOut {
