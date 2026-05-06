@@ -41,9 +41,12 @@ async def lifespan(app: FastAPI):
         CrowdGamesParser(proxy=proxy),
     ]
 
-    # Регистрируем магазины в БД
+    # Регистрируем магазины в БД и подмешиваем _db для SnapshotRecorder.
+    # Парсер не зависит от БД для базовой работы; _db нужен только при
+    # ENABLE_RAW_SNAPSHOTS=1, иначе остаётся неиспользованным.
     for p in parsers:
         await _db.upsert_store(p.store)
+        p._db = _db
 
     _service = PriceService(_db, parsers, cache_ttl_hours=ttl)
     stats_set_db(_db)

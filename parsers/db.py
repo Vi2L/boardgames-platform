@@ -66,6 +66,27 @@ CREATE TABLE IF NOT EXISTS parser_log (
     ts           TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_parser_log_ts ON parser_log (store_slug, ts DESC);
+
+-- parser_snapshot — raw HTTP-ответы парсеров для отладки. Включается флагом
+-- ENABLE_RAW_SNAPSHOTS=1, иначе таблица существует, но не наполняется.
+-- body хранится как BLOB: иначе cp1251 у GaGa требует двойного encoding.
+CREATE TABLE IF NOT EXISTS parser_snapshot (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    store_slug   TEXT    NOT NULL,
+    query        TEXT,
+    url          TEXT    NOT NULL,
+    method       TEXT    NOT NULL DEFAULT 'GET',
+    status_code  INTEGER,
+    encoding     TEXT,
+    content_type TEXT,
+    body         BLOB,
+    body_size    INTEGER,
+    truncated    INTEGER NOT NULL DEFAULT 0,
+    duration_ms  INTEGER,
+    ts           TEXT    NOT NULL,
+    kind         TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_lookup ON parser_snapshot (store_slug, ts DESC);
 """
 
 # Колонки добавлены после начального деплоя — применяем как миграцию
@@ -745,6 +766,132 @@ class PriceDatabase:
             {"store_slug": r["store_slug"], "duration_ms": r["duration_ms"], "ts": r["ts"]}
             for r in rows
         ]
+
+    # ------------------------------------------------------------------
+    # Snapshot — raw HTTP-ответы парсеров (этап 7)
+    # ------------------------------------------------------------------
+
+    _SNAPSHOT_BODY_LIMIT = 1_048_576  # 1 MB
+
+    async def save_snapshot(
+        self,
+        store_slug: str,
+        query: str | None,
+        url: str,
+        method: str,
+        status_code: int | None,
+        encoding: str | None,
+        content_type: str | None,
+        body: bytes,
+        duration_ms: int | None,
+        ts: str,
+        kind: str,
+    ) -> int:
+        """Сохранить raw HTTP-ответ. Возвращает id snapshot'а.
+
+        Лимит body — 1 MB; если больше, обрезаем и помечаем truncated=1.
+        """
+        body_size = len(body)
+        truncated = 0
+        if body_size > self._SNAPSHOT_BODY_LIMIT:
+            body = body[: self._SNAPSHOT_BODY_LIMIT]
+            truncated = 1
+
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                """
+                INSERT INTO parser_snapshot
+                    (store_slug, query, url, method, status_code, encoding,
+                     content_type, body, body_size, truncated, duration_ms, ts, kind)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (store_slug, query, url, method, status_code, encoding, content_type,
+                 body, body_size, truncated, duration_ms, ts, kind),
+            )
+            await db.commit()
+            return cur.lastrowid
+
+    async def list_snapshots(
+        self,
+        store_slug: str | None = None,
+        query: str | None = None,
+        hours: int = 72,
+        limit: int = 50,
+    ) -> list[dict]:
+        """Список snapshot-ов без body (для UI-таблицы)."""
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        clauses = ["ts >= ?"]
+        params: list = [cutoff]
+        if store_slug:
+            clauses.append("store_slug = ?")
+            params.append(store_slug)
+        if query:
+            clauses.append("query LIKE ?")
+            params.append(f"%{query}%")
+        params.append(limit)
+
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"""
+                SELECT id, store_slug, query, url, method, status_code,
+                       encoding, content_type, body_size, truncated,
+                       duration_ms, ts, kind
+                FROM parser_snapshot
+                WHERE {' AND '.join(clauses)}
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                params,
+            ) as cur:
+                rows = await cur.fetchall()
+        return [dict(r) for r in rows]
+
+    async def get_snapshot(self, snapshot_id: int) -> dict | None:
+        """Полный snapshot, body декодирован в текст по encoding."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM parser_snapshot WHERE id = ?",
+                (snapshot_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return None
+        result = dict(row)
+        body: bytes = result.pop("body") or b""
+        encoding = result.get("encoding") or "utf-8"
+        try:
+            result["body_text"] = body.decode(encoding, errors="replace")
+        except (LookupError, TypeError):
+            result["body_text"] = body.decode("utf-8", errors="replace")
+        return result
+
+    async def get_snapshot_raw(self, snapshot_id: int) -> tuple[bytes, str | None] | None:
+        """Сырое тело + encoding (для скачивания файла)."""
+        async with aiosqlite.connect(self._path) as db:
+            async with db.execute(
+                "SELECT body, encoding FROM parser_snapshot WHERE id = ?",
+                (snapshot_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return None
+        return row[0] or b"", row[1]
+
+    async def delete_snapshot(self, snapshot_id: int) -> bool:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute("DELETE FROM parser_snapshot WHERE id = ?", (snapshot_id,))
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def prune_snapshots(self, keep_hours: int = 72) -> int:
+        """Удалить snapshot-ы старше keep_hours часов. Возвращает кол-во удалённых."""
+        cutoff = (_utcnow() - timedelta(hours=keep_hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute("DELETE FROM parser_snapshot WHERE ts < ?", (cutoff,))
+            await db.commit()
+            return cur.rowcount
 
     # ------------------------------------------------------------------
     # Database Explorer — метаданные и обозреватель товаров

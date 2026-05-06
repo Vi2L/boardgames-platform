@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
-from fastapi.responses import FileResponse
+import os
+
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse, Response
 
 from .db import PriceDatabase
 
@@ -162,3 +164,57 @@ async def db_product(product_id: int):
 async def db_price_distribution(store: str | None = None):
     """Перцентили цены (в рублях) по последним наблюдениям."""
     return await _db.get_price_distribution(store_slug=store)
+
+
+# ---------------------------------------------------------------------------
+# Debug — raw HTTP snapshots
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/debug/features")
+async def debug_features():
+    """Какие диагностические возможности включены сейчас на сервере."""
+    return {
+        "raw_snapshots": os.getenv("ENABLE_RAW_SNAPSHOTS") == "1",
+    }
+
+
+@router.get("/api/debug/snapshots")
+async def list_snapshots(
+    store: str | None = None,
+    query: str | None = None,
+    hours: int = 72,
+    limit: int = 50,
+):
+    """Список raw HTTP-snapshot'ов парсеров (без body — для UI-таблицы)."""
+    return await _db.list_snapshots(
+        store_slug=store, query=query, hours=hours, limit=limit,
+    )
+
+
+@router.get("/api/debug/snapshots/{snapshot_id}")
+async def get_snapshot(snapshot_id: int):
+    """Полный snapshot с декодированным body_text."""
+    snap = await _db.get_snapshot(snapshot_id)
+    if snap is None:
+        raise HTTPException(status_code=404, detail="Snapshot не найден")
+    return snap
+
+
+@router.get("/api/debug/snapshots/{snapshot_id}/raw")
+async def get_snapshot_raw(snapshot_id: int):
+    """Сырое тело ответа как text/plain (для скачивания/просмотра)."""
+    res = await _db.get_snapshot_raw(snapshot_id)
+    if res is None:
+        raise HTTPException(status_code=404, detail="Snapshot не найден")
+    body, encoding = res
+    media = "text/plain; charset=" + (encoding or "utf-8")
+    return Response(content=body, media_type=media)
+
+
+@router.delete("/api/debug/snapshots/{snapshot_id}")
+async def delete_snapshot(snapshot_id: int):
+    ok = await _db.delete_snapshot(snapshot_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Snapshot не найден")
+    return {"deleted": True}

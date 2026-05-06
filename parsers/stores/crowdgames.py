@@ -66,7 +66,11 @@ class CrowdGamesParser(StoreParser):
         self._http_counter = 0
         self.last_metrics = None
 
-        client_kwargs = {**self._client_kwargs, "event_hooks": {"request": [self._count_request]}}
+        recorder = self._make_recorder(query)
+        client_kwargs = {
+            **self._client_kwargs,
+            "event_hooks": recorder.merged_hooks({"request": [self._count_request]}),
+        }
 
         t0 = time.monotonic()
         async with httpx.AsyncClient(**client_kwargs) as client:

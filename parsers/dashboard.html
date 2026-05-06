@@ -468,7 +468,44 @@
     </div>
     <div id="parser-sample" style="padding:14px 20px"><p class="empty">Выберите магазин в селекте выше</p></div>
   </section>
+
+  <section class="panel">
+    <h2>Snapshots сырых HTTP-ответов</h2>
+    <div id="snapshots-banner" style="display:none;padding:12px 20px;background:#422006;color:#fbbf24;font-size:.85rem;border-bottom:1px solid #334155">
+      Сейчас snapshots выключены. Установите <code>ENABLE_RAW_SNAPSHOTS=1</code> в окружении и перезапустите сервер.
+    </div>
+    <div class="filters">
+      <input type="text" id="snap-search" placeholder="Фильтр по запросу…">
+      <select id="snap-store">
+        <option value="">Все магазины</option>
+      </select>
+      <button id="snap-refresh" style="background:#0f1117;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:6px 12px;cursor:pointer">Обновить</button>
+    </div>
+    <table>
+      <thead><tr>
+        <th>Время</th>
+        <th>Магазин</th>
+        <th>Запрос</th>
+        <th>Тип</th>
+        <th class="num">Status</th>
+        <th class="num">Размер</th>
+        <th class="num">Ms</th>
+      </tr></thead>
+      <tbody id="snap-tbody"><tr><td colspan="7" class="empty">Загрузка…</td></tr></tbody>
+    </table>
+  </section>
 </section>
+
+<!-- Modal для просмотра snapshot body -->
+<div class="modal-backdrop" id="snapshot-modal">
+  <div class="modal" style="max-width:1100px">
+    <div class="modal-head">
+      <h3 id="snap-modal-title">—</h3>
+      <button class="modal-close" id="snap-modal-close">×</button>
+    </div>
+    <div id="snap-modal-body">Загрузка…</div>
+  </div>
+</div>
 
 <!-- =================================================================
      ЗАПРОСЫ
@@ -1198,6 +1235,9 @@ async function refreshParsers() {
     });
     _parserSamplesPopulated = true;
   }
+
+  // Snapshots — обновляем в том же refresh для упрощения
+  await refreshSnapshots();
 }
 
 async function loadParserSample(store) {
@@ -1238,6 +1278,121 @@ async function loadParserSample(store) {
 }
 
 document.getElementById('parser-sample-store').addEventListener('change', e => loadParserSample(e.target.value));
+
+// ============================================================
+// Snapshots panel (на табе Parsers)
+// ============================================================
+let _snapStorePopulated = false;
+
+function fmtBytes(n) {
+  if (n == null) return '—';
+  if (n < 1024) return n + ' B';
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
+  return (n / 1024 / 1024).toFixed(2) + ' MB';
+}
+
+async function refreshSnapshots() {
+  const features = await safe(fetch('/api/debug/features'), { raw_snapshots: false });
+  document.getElementById('snapshots-banner').style.display = features.raw_snapshots ? 'none' : 'block';
+
+  const params = new URLSearchParams({ hours: 72, limit: 100 });
+  const store = document.getElementById('snap-store').value;
+  const q = document.getElementById('snap-search').value.trim();
+  if (store) params.set('store', store);
+  if (q) params.set('query', q);
+
+  const items = await safe(fetch('/api/debug/snapshots?' + params), []);
+  const tbody = document.getElementById('snap-tbody');
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">Нет snapshot-ов</td></tr>';
+  } else {
+    tbody.innerHTML = items.map(s => `
+      <tr style="cursor:pointer" data-snap-id="${s.id}">
+        <td>${fmtDate(s.ts)}</td>
+        <td><strong>${s.store_slug}</strong></td>
+        <td>${s.query || '—'}</td>
+        <td><span class="badge ${s.kind === 'search' ? 'badge-green' : 'badge-gray'}">${s.kind}</span></td>
+        <td class="num" style="color:${s.status_code >= 400 ? '#ef4444' : '#94a3b8'}">${s.status_code ?? '—'}</td>
+        <td class="num">${fmtBytes(s.body_size)}${s.truncated ? ' ⚠' : ''}</td>
+        <td class="num">${fmtMs(s.duration_ms)}</td>
+      </tr>`).join('');
+  }
+
+  if (!_snapStorePopulated) {
+    const inv = await safe(fetch('/api/db/stores-inventory'), []);
+    if (inv.length) {
+      const sel = document.getElementById('snap-store');
+      inv.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.store_slug; opt.textContent = s.store_slug;
+        sel.appendChild(opt);
+      });
+      _snapStorePopulated = true;
+    }
+  }
+}
+
+async function showSnapshotModal(snapId) {
+  const modal = document.getElementById('snapshot-modal');
+  document.getElementById('snap-modal-title').textContent = 'Загрузка…';
+  document.getElementById('snap-modal-body').innerHTML = '<p class="empty">Загрузка…</p>';
+  modal.classList.add('active');
+
+  const snap = await safe(fetch(`/api/debug/snapshots/${snapId}`), null);
+  if (!snap) {
+    document.getElementById('snap-modal-body').innerHTML = '<p class="empty">Не найдено</p>';
+    return;
+  }
+
+  document.getElementById('snap-modal-title').textContent =
+    `${snap.store_slug}: ${snap.kind} — ${snap.query || '?'}`;
+
+  const meta = [
+    ['url', snap.url], ['method', snap.method],
+    ['status', snap.status_code], ['encoding', snap.encoding],
+    ['content_type', snap.content_type], ['size', fmtBytes(snap.body_size) + (snap.truncated ? ' (обрезано до 1 MB)' : '')],
+    ['duration', fmtMs(snap.duration_ms)], ['ts', fmtDate(snap.ts)],
+  ];
+
+  document.getElementById('snap-modal-body').innerHTML = `
+    <div class="modal-grid" style="grid-template-columns:repeat(2,1fr)">
+      ${meta.map(([k, v]) => `<div><div class="field-name">${k}</div><div class="field-value">${v ?? '—'}</div></div>`).join('')}
+    </div>
+    <div style="display:flex;gap:8px;margin:14px 0 8px">
+      <a href="/api/debug/snapshots/${snap.id}/raw" target="_blank" style="background:#0f1117;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:6px 12px;text-decoration:none;font-size:.83rem">Открыть raw</a>
+      <button id="snap-delete-${snap.id}" style="background:#0f1117;border:1px solid #450a0a;color:#f87171;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:.83rem">Удалить</button>
+    </div>
+    <pre>${escapeHtml(snap.body_text || '')}</pre>
+  `;
+
+  document.getElementById(`snap-delete-${snap.id}`).addEventListener('click', async () => {
+    if (!confirm('Удалить snapshot?')) return;
+    await fetch(`/api/debug/snapshots/${snap.id}`, { method: 'DELETE' });
+    modal.classList.remove('active');
+    refreshSnapshots();
+  });
+}
+
+function escapeHtml(s) {
+  return s.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+document.getElementById('snap-search').addEventListener('input', () => {
+  clearTimeout(window._snapTimer);
+  window._snapTimer = setTimeout(refreshSnapshots, 300);
+});
+document.getElementById('snap-store').addEventListener('change', refreshSnapshots);
+document.getElementById('snap-refresh').addEventListener('click', refreshSnapshots);
+document.getElementById('snap-tbody').addEventListener('click', e => {
+  const row = e.target.closest('tr[data-snap-id]');
+  if (row) showSnapshotModal(row.dataset.snapId);
+});
+document.getElementById('snap-modal-close').addEventListener('click', () => {
+  document.getElementById('snapshot-modal').classList.remove('active');
+});
+document.getElementById('snapshot-modal').addEventListener('click', e => {
+  if (e.target.id === 'snapshot-modal') e.target.classList.remove('active');
+});
 
 // Заглушки
 async function refreshLiveTest() {}

@@ -67,7 +67,11 @@ class LavkaIgrParser(StoreParser):
         self.last_metrics = None
 
         params = {"query": query}
-        client_kwargs = {**self._client_kwargs, "event_hooks": {"request": [self._count_request]}}
+        recorder = self._make_recorder(query)
+        client_kwargs = {
+            **self._client_kwargs,
+            "event_hooks": recorder.merged_hooks({"request": [self._count_request]}),
+        }
 
         async with httpx.AsyncClient(**client_kwargs) as client:
             t0 = time.monotonic()
