@@ -867,6 +867,85 @@ class PriceDatabase:
             "history": history,
         }
 
+    async def get_field_coverage(self) -> list[dict]:
+        """Покрытие опциональных полей per-store: какой % товаров их имеет.
+
+        Используется для оценки качества данных: например, у HobbyGames структурно
+        нет players/age_min, у CrowdGames нет описания (нет enrich) — heatmap покажет
+        это сразу.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                  store_slug,
+                  COUNT(*) AS total,
+                  AVG(CASE WHEN description  IS NOT NULL AND description  != '' THEN 1.0 ELSE 0 END) AS description_pct,
+                  AVG(CASE WHEN image_url    IS NOT NULL AND image_url    != '' THEN 1.0 ELSE 0 END) AS image_url_pct,
+                  AVG(CASE WHEN image_url_hd IS NOT NULL AND image_url_hd != '' THEN 1.0 ELSE 0 END) AS image_url_hd_pct,
+                  AVG(CASE WHEN players      IS NOT NULL AND players      != '' THEN 1.0 ELSE 0 END) AS players_pct,
+                  AVG(CASE WHEN age_min      IS NOT NULL THEN 1.0 ELSE 0 END) AS age_min_pct,
+                  AVG(CASE WHEN playtime     IS NOT NULL AND playtime     != '' THEN 1.0 ELSE 0 END) AS playtime_pct,
+                  AVG(CASE WHEN rules_url    IS NOT NULL AND rules_url    != '' THEN 1.0 ELSE 0 END) AS rules_url_pct
+                FROM products
+                GROUP BY store_slug
+                ORDER BY total DESC
+                """,
+            ) as cur:
+                rows = await cur.fetchall()
+
+        fields = ["description", "image_url", "image_url_hd", "players",
+                  "age_min", "playtime", "rules_url"]
+        return [
+            {
+                "store_slug": r["store_slug"],
+                "total": r["total"],
+                "coverage": {
+                    f: round((r[f + "_pct"] or 0) * 100, 1) for f in fields
+                },
+            }
+            for r in rows
+        ]
+
+    async def get_raw_keys_distribution(self, top_n: int = 15) -> list[dict]:
+        """Топ ключей в price_observations.raw_json per-store.
+
+        Ключи raw отличаются у разных парсеров: gaga добавляет rating, complexity,
+        composition; lavkaigr — gallery, tags. Этот endpoint показывает реальный
+        контракт каждого парсера, без чтения кода.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            # json_each доступен в SQLite >= 3.38 (включён в Python 3.12+ stdlib).
+            async with db.execute(
+                """
+                WITH latest AS (
+                  SELECT product_id, raw_json,
+                         ROW_NUMBER() OVER (PARTITION BY product_id ORDER BY fetched_at DESC) AS rn
+                  FROM price_observations
+                )
+                SELECT p.store_slug, j.key, COUNT(*) AS occurrences
+                FROM products p
+                JOIN latest l ON l.product_id = p.id AND l.rn = 1
+                JOIN json_each(l.raw_json) j
+                GROUP BY p.store_slug, j.key
+                ORDER BY p.store_slug, occurrences DESC
+                """,
+            ) as cur:
+                rows = await cur.fetchall()
+
+        # Группируем по магазину, оставляем top_n ключей
+        by_store: dict[str, list[dict]] = {}
+        for r in rows:
+            slug = r["store_slug"]
+            if slug not in by_store:
+                by_store[slug] = []
+            if len(by_store[slug]) < top_n:
+                by_store[slug].append({"key": r["key"], "count": r["occurrences"]})
+
+        return [{"store_slug": s, "keys": ks} for s, ks in by_store.items()]
+
     async def get_price_distribution(self, store_slug: str | None = None) -> dict:
         """Перцентили цены по последним наблюдениям (рубли)."""
         async with aiosqlite.connect(self._path) as db:

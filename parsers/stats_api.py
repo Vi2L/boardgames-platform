@@ -92,6 +92,18 @@ async def latency_histogram(hours: int = 24):
     return await _db.get_latency_histogram(hours=hours)
 
 
+@router.get("/api/stats/field-coverage")
+async def field_coverage():
+    """Покрытие опциональных полей товара per-store (data quality)."""
+    return await _db.get_field_coverage()
+
+
+@router.get("/api/stats/raw-keys")
+async def raw_keys(top_n: int = 15):
+    """Топ ключей в price_observations.raw_json per-store — фактический контракт парсера."""
+    return await _db.get_raw_keys_distribution(top_n=top_n)
+
+
 # ---------------------------------------------------------------------------
 # Database Explorer
 # ---------------------------------------------------------------------------

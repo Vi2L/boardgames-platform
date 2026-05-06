@@ -312,6 +312,35 @@
   .meta-item { background: #0f1117; padding: 10px 14px; border-radius: 8px; border: 1px solid #1e293b; }
   .meta-label { font-size: 0.7rem; color: #64748b; text-transform: uppercase; letter-spacing: .04em; }
   .meta-value { color: #f8fafc; font-size: 1.1rem; font-weight: 600; margin-top: 4px; }
+
+  /* ---- Heatmap (field coverage) ---- */
+  table.heatmap td.cov {
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+    font-weight: 600;
+  }
+  /* Цвет фона = градиент по проценту (0% red → 50% yellow → 100% green) */
+  td.cov-good   { background: rgba(34, 197, 94, 0.20);  color: #4ade80; }
+  td.cov-fair   { background: rgba(234, 179, 8, 0.20);  color: #fbbf24; }
+  td.cov-poor   { background: rgba(239, 68, 68, 0.20);  color: #f87171; }
+  td.cov-zero   { background: rgba(71, 85, 105, 0.15); color: #475569; }
+
+  /* Raw keys list */
+  .raw-keys-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px;
+    padding: 14px 20px;
+  }
+  .raw-keys-store { background: #0f1117; padding: 12px 14px; border-radius: 8px; border: 1px solid #1e293b; }
+  .raw-keys-store h4 { color: #f8fafc; font-size: 0.85rem; margin-bottom: 8px; }
+  .raw-keys-store ul { list-style: none; }
+  .raw-keys-store li {
+    display: flex; justify-content: space-between;
+    font-size: 0.78rem; padding: 3px 0; color: #94a3b8;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+  }
+  .raw-keys-store li .count { color: #64748b; }
 </style>
 </head>
 <body>
@@ -374,11 +403,42 @@
 </section>
 
 <!-- =================================================================
-     ПАРСЕРЫ — заглушка для этапов 5-7
+     ПАРСЕРЫ
 ================================================================= -->
 <section data-tab-panel="parsers">
-  <section class="panel"><h2>Парсеры — детальная аналитика</h2>
-    <p class="empty">Heatmap покрытия полей, breakdown search/enrich, snapshots — будут добавлены на следующих этапах.</p>
+  <section class="panel">
+    <h2>Покрытие полей (Data Quality)</h2>
+    <table class="heatmap">
+      <thead><tr id="coverage-thead">
+        <th>Магазин</th>
+        <th class="num">Товаров</th>
+        <th class="cov">description</th>
+        <th class="cov">image_url</th>
+        <th class="cov">image_url_hd</th>
+        <th class="cov">players</th>
+        <th class="cov">age_min</th>
+        <th class="cov">playtime</th>
+        <th class="cov">rules_url</th>
+      </tr></thead>
+      <tbody id="coverage-tbody"><tr><td colspan="9" class="empty">Загрузка…</td></tr></tbody>
+    </table>
+  </section>
+
+  <section class="panel">
+    <h2>Топ ключей в raw_json (фактический контракт парсера)</h2>
+    <div class="raw-keys-grid" id="raw-keys-grid">
+      <p class="empty">Загрузка…</p>
+    </div>
+  </section>
+
+  <section class="panel">
+    <h2>Что отдаёт парсер (последний товар)</h2>
+    <div class="filters">
+      <select id="parser-sample-store">
+        <option value="">Выберите магазин…</option>
+      </select>
+    </div>
+    <div id="parser-sample" style="padding:14px 20px"><p class="empty">Выберите магазин в селекте выше</p></div>
   </section>
 </section>
 
@@ -996,8 +1056,107 @@ document.getElementById('product-modal').addEventListener('click', e => {
   if (e.target.id === 'product-modal') e.target.classList.remove('active');
 });
 
-// Заглушки для не-реализованных табов
-async function refreshParsers() {}
+// ============================================================
+// Tab: Parsers — Data Quality (coverage + raw keys + sample)
+// ============================================================
+function covClass(pct) {
+  if (pct === 0) return 'cov-zero';
+  if (pct >= 80) return 'cov-good';
+  if (pct >= 50) return 'cov-fair';
+  return 'cov-poor';
+}
+
+let _parserSamplesPopulated = false;
+
+async function refreshParsers() {
+  const [coverage, rawKeys, inv] = await Promise.all([
+    safe(fetch('/api/stats/field-coverage'), []),
+    safe(fetch('/api/stats/raw-keys'), []),
+    safe(fetch('/api/db/stores-inventory'), []),
+  ]);
+
+  // Heatmap покрытия
+  const tbody = document.getElementById('coverage-tbody');
+  if (!coverage.length) {
+    tbody.innerHTML = '<tr><td colspan="9" class="empty">Нет товаров в БД</td></tr>';
+  } else {
+    const fields = ["description","image_url","image_url_hd","players","age_min","playtime","rules_url"];
+    tbody.innerHTML = coverage.map(s => `
+      <tr>
+        <td><strong>${s.store_slug}</strong></td>
+        <td class="num">${s.total}</td>
+        ${fields.map(f => {
+          const pct = s.coverage[f] || 0;
+          return `<td class="cov ${covClass(pct)}">${pct}%</td>`;
+        }).join('')}
+      </tr>`).join('');
+  }
+
+  // Raw keys
+  const grid = document.getElementById('raw-keys-grid');
+  if (!rawKeys.length) {
+    grid.innerHTML = '<p class="empty">Нет данных в raw_json</p>';
+  } else {
+    grid.innerHTML = rawKeys.map(s => `
+      <div class="raw-keys-store">
+        <h4>${s.store_slug}</h4>
+        <ul>${s.keys.map(k => `<li><span>${k.key}</span><span class="count">${k.count}</span></li>`).join('')}</ul>
+      </div>`).join('');
+  }
+
+  // Заполнить select для sample
+  if (!_parserSamplesPopulated && inv.length) {
+    const sel = document.getElementById('parser-sample-store');
+    inv.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s.store_slug;
+      opt.textContent = s.store_slug;
+      sel.appendChild(opt);
+    });
+    _parserSamplesPopulated = true;
+  }
+}
+
+async function loadParserSample(store) {
+  const container = document.getElementById('parser-sample');
+  if (!store) {
+    container.innerHTML = '<p class="empty">Выберите магазин в селекте выше</p>';
+    return;
+  }
+  container.innerHTML = '<p class="empty">Загрузка…</p>';
+  const data = await safe(fetch(`/api/db/products?store=${encodeURIComponent(store)}&sort=newest&limit=1`), { items: [] });
+  if (!data.items.length) {
+    container.innerHTML = '<p class="empty">Нет товаров для этого магазина</p>';
+    return;
+  }
+  const product = await safe(fetch(`/api/db/product/${data.items[0].id}`), null);
+  if (!product) { container.innerHTML = '<p class="empty">Ошибка загрузки</p>'; return; }
+
+  const fields = [
+    ['title', product.title], ['external_id', product.external_id],
+    ['url', product.url], ['image_url', product.image_url],
+    ['image_url_hd', product.image_url_hd], ['description', product.description],
+    ['players', product.players], ['age_min', product.age_min],
+    ['playtime', product.playtime], ['rules_url', product.rules_url],
+  ];
+
+  const lastObs = product.history[0] || {};
+  container.innerHTML = `
+    <div class="modal-grid">
+      ${fields.map(([k, v]) => `
+        <div>
+          <div class="field-name">${k}</div>
+          <div class="field-value" style="${v == null ? 'color:#475569' : ''}">${v ?? '— null —'}</div>
+        </div>`).join('')}
+    </div>
+    <h4 style="font-size:.78rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 8px">raw_json (последнее наблюдение)</h4>
+    <pre>${JSON.stringify(lastObs.raw || {}, null, 2)}</pre>
+  `;
+}
+
+document.getElementById('parser-sample-store').addEventListener('change', e => loadParserSample(e.target.value));
+
+// Заглушки
 async function refreshLiveTest() {}
 
 // ============================================================
