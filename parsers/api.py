@@ -10,6 +10,7 @@ from .db import PriceDatabase
 from .service import PriceService
 from .stats_api import router as stats_router
 from .stats_api import set_db as stats_set_db
+from .stores.crowdgames import CrowdGamesParser
 from .stores.gaga import GagaParser
 from .stores.hobbygames import HobbyGamesParser
 from .stores.lavkaigr import LavkaIgrParser
@@ -37,6 +38,7 @@ async def lifespan(app: FastAPI):
         HobbyGamesParser(proxy=proxy),
         LavkaIgrParser(proxy=proxy),
         GagaParser(proxy=proxy),
+        CrowdGamesParser(proxy=proxy),
     ]
 
     # Регистрируем магазины в БД
