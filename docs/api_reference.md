@@ -390,7 +390,7 @@ const data = await res.json();
       "age_min": 7,
       "playtime": "0.5 - 1.5 ч.",
       "rules_url": "https://gaga.ru/gaga/files/pdf/rules/ru/4814.pdf",
-      "fetched_at": "2026-05-06T18:48:15.545885+00:00",
+      "fetched_at": "2026-05-06T19:37:39.431517+00:00",
       "extra": {
         "complexity": "правила простые",
         "rating": "5",
@@ -398,20 +398,34 @@ const data = await res.json();
         "offline_price": 234000,
         "gallery": [
           "https://gaga.ru/gaga/files/images/fullsize/4814/1.jpg",
+          "https://gaga.ru/gaga/files/images/fullsize/4814/8.jpg",
+          "https://gaga.ru/gaga/files/images/fullsize/4814/7.jpg",
+          "https://gaga.ru/gaga/files/images/fullsize/4814/9.jpg",
+          "https://gaga.ru/gaga/files/images/fullsize/4814/3.jpg",
+          "https://gaga.ru/gaga/files/images/fullsize/4814/4.jpg",
           "https://gaga.ru/gaga/files/images/fullsize/4814/2.jpg",
-          "https://gaga.ru/gaga/files/images/fullsize/4814/3.jpg"
+          "https://gaga.ru/gaga/files/images/fullsize/4814/6.jpg"
         ],
         "rules": [
           "https://gaga.ru/gaga/files/pdf/rules/ru/4814.pdf",
           "https://gaga.ru/gaga/files/pdf/rules/ru/4814-426681.pdf"
         ],
         "dimensions": "27.7см x 19.4см x 6.7см",
-        "composition": "Состав:• 72 квадрата местности • дорожка подсчёта очков • 40 фишек подданных • правила игры"
+        "composition": "Состав:• 72 квадрата местности • дорожка подсчёта очков • 40 фишек подданных • правила игры Состав дополнений: • 5 фишек аббатов • 12 квадратов с рекой"
       }
     }
   ]
 }
 ```
+
+> **GaGa-специфика:**
+> - `extra.rating` — строка, рейтинг из 5 звёзд по голосам пользователей
+> - `extra.review_count` — строка, количество отзывов
+> - `extra.offline_price` — цена в **копейках** (без регистрации, выше онлайн-цены); `234000` = 2340 руб.
+> - `extra.gallery` — fullsize-фотографии товара (нумерованные: `1.jpg`, `2.jpg`, …)
+> - `extra.rules` — массив строк-URL (в отличие от Лавки, где `[{url, name}]`)
+> - `extra.complexity` — словесная оценка: `"правила простые"` / `"правила средние"` / `"правила сложные"`
+> - `extra.dimensions` — размеры коробки; `extra.weight` — вес (если указан на сайте)
 
 ### `/search?q=Каркассон&stores=hobbygames&limit=1`
 
