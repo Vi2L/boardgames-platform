@@ -61,32 +61,49 @@ class PriceService:
         saved_count = 0
         t0 = time.monotonic()
 
-        tasks = {
-            slug: self._parsers[slug].search(query, limit)
-            for slug in stale_slugs if slug in self._parsers
-        }
-        # Замеряем время каждого парсера отдельно
-        per_parser_t0 = time.monotonic()
-        results = await asyncio.gather(*tasks.values(), return_exceptions=True)
-        per_parser_elapsed = int((time.monotonic() - per_parser_t0) * 1000)
+        # Каждый парсер замеряем индивидуально через wrapper. Раньше использовался
+        # общий per_parser_elapsed, в результате в parser_log писалось одинаковое
+        # время для всех — это давало некорректную аналитику.
+        async def _run_one(slug: str):
+            t = time.monotonic()
+            try:
+                products = await self._parsers[slug].search(query, limit)
+                elapsed = int((time.monotonic() - t) * 1000)
+                return slug, products, elapsed, None
+            except Exception as e:
+                elapsed = int((time.monotonic() - t) * 1000)
+                return slug, None, elapsed, e
 
-        for slug, result in zip(tasks.keys(), results):
-            if isinstance(result, Exception):
-                logger.warning("Парсер %s упал: %s", slug, result)
-                errors[slug] = str(result)
+        runs = [_run_one(s) for s in stale_slugs if s in self._parsers]
+        finished = await asyncio.gather(*runs)
+
+        for slug, products, elapsed_ms, exc in finished:
+            metrics = getattr(self._parsers[slug], "last_metrics", None)
+            metric_kwargs: dict = {}
+            if metrics is not None:
+                metric_kwargs = {
+                    "search_ms": metrics.search_ms,
+                    "enrich_ms": metrics.enrich_ms,
+                    "http_requests": metrics.http_requests,
+                    "result_after_enrich": metrics.result_after_enrich,
+                }
+
+            if exc is not None:
+                logger.warning("Парсер %s упал: %s", slug, exc)
+                errors[slug] = str(exc)
                 asyncio.create_task(self._db.log_parser(
                     store_slug=slug, success=False, result_count=0,
-                    duration_ms=per_parser_elapsed, error_msg=str(result),
-                    ts=_utcnow_iso(),
+                    duration_ms=elapsed_ms, error_msg=str(exc),
+                    ts=_utcnow_iso(), **metric_kwargs,
                 ))
                 continue
 
             asyncio.create_task(self._db.log_parser(
-                store_slug=slug, success=True, result_count=len(result),
-                duration_ms=per_parser_elapsed, error_msg=None,
-                ts=_utcnow_iso(),
+                store_slug=slug, success=True, result_count=len(products),
+                duration_ms=elapsed_ms, error_msg=None,
+                ts=_utcnow_iso(), **metric_kwargs,
             ))
-            for product in result:
+            for product in products:
                 try:
                     await self._db.upsert_product(product)
                     saved_count += 1

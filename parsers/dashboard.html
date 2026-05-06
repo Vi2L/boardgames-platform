@@ -406,6 +406,34 @@
      ПАРСЕРЫ
 ================================================================= -->
 <section data-tab-panel="parsers">
+  <div class="chart-row">
+    <div class="chart-card">
+      <h3>Search vs Enrich latency (24ч)</h3>
+      <canvas id="chart-breakdown"></canvas>
+      <p class="empty" id="chart-breakdown-empty" style="display:none;padding:8px 0">Нет данных</p>
+    </div>
+    <div class="chart-card">
+      <h3>HTTP-запросов на вызов (24ч)</h3>
+      <canvas id="chart-http-counter"></canvas>
+      <p class="empty" id="chart-http-counter-empty" style="display:none;padding:8px 0">Нет данных</p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Latency breakdown по магазинам (24ч)</h2>
+    <table>
+      <thead><tr>
+        <th>Магазин</th>
+        <th class="num">Вызовов</th>
+        <th class="num">Search</th>
+        <th class="num">Enrich</th>
+        <th class="num">Total</th>
+        <th class="num">HTTP</th>
+      </tr></thead>
+      <tbody id="breakdown-tbody"><tr><td colspan="6" class="empty">Загрузка…</td></tr></tbody>
+    </table>
+  </section>
+
   <section class="panel">
     <h2>Покрытие полей (Data Quality)</h2>
     <table class="heatmap">
@@ -1069,11 +1097,66 @@ function covClass(pct) {
 let _parserSamplesPopulated = false;
 
 async function refreshParsers() {
-  const [coverage, rawKeys, inv] = await Promise.all([
+  const [coverage, rawKeys, inv, breakdown] = await Promise.all([
     safe(fetch('/api/stats/field-coverage'), []),
     safe(fetch('/api/stats/raw-keys'), []),
     safe(fetch('/api/db/stores-inventory'), []),
+    safe(fetch('/api/stats/parser-breakdown?hours=24'), []),
   ]);
+
+  // Breakdown table
+  const bdtbody = document.getElementById('breakdown-tbody');
+  if (!breakdown.length) {
+    bdtbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных за 24ч</td></tr>';
+  } else {
+    bdtbody.innerHTML = breakdown.map(b => `
+      <tr>
+        <td><strong>${b.store_slug}</strong></td>
+        <td class="num">${b.successes}/${b.calls}</td>
+        <td class="num">${fmtMs(b.avg_search_ms)}</td>
+        <td class="num">${fmtMs(b.avg_enrich_ms)}</td>
+        <td class="num">${fmtMs(b.avg_total_ms)}</td>
+        <td class="num">${b.avg_http_requests ?? '—'}</td>
+      </tr>`).join('');
+  }
+
+  // Stacked bar chart: search/enrich
+  const hasBd = breakdown.some(b => b.avg_search_ms != null || b.avg_enrich_ms != null);
+  showChart('chart-breakdown', hasBd);
+  if (hasBd) {
+    mkChart('chart-breakdown', 'bar', {
+      labels: breakdown.map(b => b.store_slug),
+      datasets: [
+        { label: 'Search', data: breakdown.map(b => b.avg_search_ms || 0), backgroundColor: PALETTE.blue,   stack: 'a' },
+        { label: 'Enrich', data: breakdown.map(b => b.avg_enrich_ms || 0), backgroundColor: PALETTE.orange, stack: 'a' },
+      ],
+    }, {
+      scales: {
+        x: { stacked: true, grid: { display: false } },
+        y: { stacked: true, grid: { color: '#334155' }, ticks: { callback: v => v + ' мс' } },
+      },
+    });
+  }
+
+  // HTTP requests bar
+  const hasHttp = breakdown.some(b => b.avg_http_requests != null);
+  showChart('chart-http-counter', hasHttp);
+  if (hasHttp) {
+    mkChart('chart-http-counter', 'bar', {
+      labels: breakdown.map(b => b.store_slug),
+      datasets: [{
+        label: 'HTTP-запросов',
+        data: breakdown.map(b => b.avg_http_requests || 0),
+        backgroundColor: PALETTE.purple,
+      }],
+    }, {
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { display: false } },
+        y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { precision: 1 } },
+      },
+    });
+  }
 
   // Heatmap покрытия
   const tbody = document.getElementById('coverage-tbody');

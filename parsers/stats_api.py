@@ -104,6 +104,18 @@ async def raw_keys(top_n: int = 15):
     return await _db.get_raw_keys_distribution(top_n=top_n)
 
 
+@router.get("/api/stats/parser-breakdown")
+async def parser_breakdown(hours: int = 24):
+    """Per-store разбиение времени parser.search() на search vs enrich + http counter."""
+    return await _db.get_parser_breakdown(hours=hours)
+
+
+@router.get("/api/stats/parser-breakdown-timeline")
+async def parser_breakdown_timeline(hours: int = 24, bucket: str = "hour"):
+    """Timeline search/enrich latency per-store для line chart."""
+    return await _db.get_parser_breakdown_timeline(hours=hours, bucket=bucket)
+
+
 # ---------------------------------------------------------------------------
 # Database Explorer
 # ---------------------------------------------------------------------------

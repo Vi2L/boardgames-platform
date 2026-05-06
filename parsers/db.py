@@ -76,6 +76,12 @@ _MIGRATIONS = [
     "ALTER TABLE products ADD COLUMN age_min INTEGER",
     "ALTER TABLE products ADD COLUMN playtime TEXT",
     "ALTER TABLE products ADD COLUMN rules_url TEXT",
+    # Этап 6 — разбиение duration_ms парсера на search/enrich + HTTP-счётчик.
+    # Старые строки получат NULL — аналитические запросы это учитывают.
+    "ALTER TABLE parser_log ADD COLUMN search_ms INTEGER",
+    "ALTER TABLE parser_log ADD COLUMN enrich_ms INTEGER",
+    "ALTER TABLE parser_log ADD COLUMN http_requests INTEGER",
+    "ALTER TABLE parser_log ADD COLUMN result_after_enrich INTEGER",
 ]
 
 
@@ -282,15 +288,27 @@ class PriceDatabase:
         duration_ms: int | None,
         error_msg: str | None,
         ts: str,
+        search_ms: int | None = None,
+        enrich_ms: int | None = None,
+        http_requests: int | None = None,
+        result_after_enrich: int | None = None,
     ) -> None:
+        """Лог одного вызова parser.search().
+
+        search_ms / enrich_ms / http_requests / result_after_enrich — опциональные
+        метрики per-parser (см. ParserMetrics в base.py). Если парсер их не
+        заполнил, в БД будет NULL — все аналитические запросы это учитывают.
+        """
         async with aiosqlite.connect(self._path) as db:
             await db.execute(
                 """
                 INSERT INTO parser_log
-                    (store_slug, success, result_count, duration_ms, error_msg, ts)
-                VALUES (?, ?, ?, ?, ?, ?)
+                    (store_slug, success, result_count, duration_ms, error_msg, ts,
+                     search_ms, enrich_ms, http_requests, result_after_enrich)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                (store_slug, 1 if success else 0, result_count, duration_ms, error_msg, ts),
+                (store_slug, 1 if success else 0, result_count, duration_ms, error_msg, ts,
+                 search_ms, enrich_ms, http_requests, result_after_enrich),
             )
             await db.commit()
 
@@ -590,6 +608,91 @@ class PriceDatabase:
             }
             for r in rows_data
         ]
+
+    async def get_parser_breakdown(self, hours: int = 24) -> list[dict]:
+        """Per-store разбиение времени: search vs enrich vs total + http counter.
+
+        Помогает увидеть, что именно тормозит конкретный парсер: первый запрос
+        поиска или массовое обогащение страниц товара.
+        """
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                  store_slug,
+                  COUNT(*)                                       AS calls,
+                  AVG(CASE WHEN success=1 THEN search_ms END)    AS avg_search_ms,
+                  AVG(CASE WHEN success=1 THEN enrich_ms END)    AS avg_enrich_ms,
+                  AVG(CASE WHEN success=1 THEN duration_ms END)  AS avg_total_ms,
+                  AVG(CASE WHEN success=1 THEN http_requests END) AS avg_http_requests,
+                  SUM(CASE WHEN success=1 THEN 1 ELSE 0 END)     AS successes
+                FROM parser_log
+                WHERE ts >= ?
+                GROUP BY store_slug
+                ORDER BY calls DESC
+                """,
+                (cutoff,),
+            ) as cur:
+                rows = await cur.fetchall()
+
+        def _r(v):
+            return round(v) if v is not None else None
+        return [
+            {
+                "store_slug": r["store_slug"],
+                "calls": r["calls"],
+                "successes": r["successes"] or 0,
+                "avg_search_ms": _r(r["avg_search_ms"]),
+                "avg_enrich_ms": _r(r["avg_enrich_ms"]),
+                "avg_total_ms": _r(r["avg_total_ms"]),
+                "avg_http_requests": round(r["avg_http_requests"], 1) if r["avg_http_requests"] is not None else None,
+            }
+            for r in rows
+        ]
+
+    async def get_parser_breakdown_timeline(
+        self, hours: int = 24, bucket: str = "hour",
+    ) -> dict[str, list[dict]]:
+        """Timeline search/enrich времени per-store. Возвращает {slug: [{ts, search_ms, enrich_ms, calls}]}."""
+        if bucket == "day":
+            fmt = "%Y-%m-%d"
+        elif bucket == "hour":
+            fmt = "%Y-%m-%dT%H:00:00"
+        else:
+            raise ValueError(f"unsupported bucket: {bucket}")
+
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"""
+                SELECT
+                  store_slug,
+                  strftime('{fmt}', ts) AS ts_bucket,
+                  COUNT(*)              AS calls,
+                  AVG(CASE WHEN success=1 THEN search_ms END) AS avg_search_ms,
+                  AVG(CASE WHEN success=1 THEN enrich_ms END) AS avg_enrich_ms
+                FROM parser_log
+                WHERE ts >= ?
+                GROUP BY store_slug, ts_bucket
+                ORDER BY ts_bucket
+                """,
+                (cutoff,),
+            ) as cur:
+                rows = await cur.fetchall()
+
+        result: dict[str, list[dict]] = {}
+        for r in rows:
+            slug = r["store_slug"]
+            result.setdefault(slug, []).append({
+                "ts": r["ts_bucket"],
+                "calls": r["calls"],
+                "search_ms": round(r["avg_search_ms"]) if r["avg_search_ms"] is not None else None,
+                "enrich_ms": round(r["avg_enrich_ms"]) if r["avg_enrich_ms"] is not None else None,
+            })
+        return result
 
     async def get_latency_histogram(self, hours: int = 24) -> list[dict]:
         """Гистограмма распределения latency для bar chart.

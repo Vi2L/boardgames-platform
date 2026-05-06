@@ -19,12 +19,13 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import time
 from dataclasses import replace
 from urllib.parse import urljoin
 
 import httpx
 
-from ..base import StoreParser
+from ..base import ParserMetrics, StoreParser
 from ..models import ParsedProduct, StoreInfo
 
 STORE = StoreInfo(
@@ -51,30 +52,55 @@ class HobbyGamesParser(StoreParser):
     store = STORE
 
     def __init__(self, proxy: str | None = None) -> None:
+        super().__init__()
         self._client_kwargs: dict = {"headers": _HEADERS, "follow_redirects": True, "timeout": 20}
         if proxy:
             self._client_kwargs["proxy"] = proxy
 
     async def search(self, query: str, limit: int = 10) -> list[ParsedProduct]:
+        # Сбрасываем метрики перед каждым вызовом, чтобы dashboard видел
+        # данные именно этого запуска
+        self._http_counter = 0
+        self.last_metrics = None
+
         params = {"keyword": query}
-        async with httpx.AsyncClient(**self._client_kwargs) as client:
+        client_kwargs = {**self._client_kwargs, "event_hooks": {"request": [self._count_request]}}
+
+        async with httpx.AsyncClient(**client_kwargs) as client:
+            t0 = time.monotonic()
             resp = await client.get(_SEARCH_URL, params=params)
             resp.raise_for_status()
-
             basic = _parse_search_page(resp.text, limit)
+            search_ms = int((time.monotonic() - t0) * 1000)
+
             if not basic:
+                self.last_metrics = ParserMetrics(
+                    search_ms=search_ms, enrich_ms=0,
+                    http_requests=self._http_counter, result_after_enrich=0,
+                )
                 return []
 
+            t1 = time.monotonic()
             enriched = await asyncio.gather(
                 *[self._enrich(client, p) for p in basic],
                 return_exceptions=True,
             )
+            enrich_ms = int((time.monotonic() - t1) * 1000)
 
         results = []
+        successful_enrich = 0
         for product, extra in zip(basic, enriched):
             if isinstance(extra, Exception):
                 extra = {}
+            else:
+                successful_enrich += 1
             results.append(replace(product, **extra))
+
+        self.last_metrics = ParserMetrics(
+            search_ms=search_ms, enrich_ms=enrich_ms,
+            http_requests=self._http_counter,
+            result_after_enrich=successful_enrich,
+        )
         return results
 
     # ------------------------------------------------------------------

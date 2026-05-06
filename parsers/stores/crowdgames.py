@@ -20,10 +20,11 @@ from __future__ import annotations
 
 import asyncio
 import re
+import time
 
 import httpx
 
-from ..base import StoreParser
+from ..base import ParserMetrics, StoreParser
 from ..models import ParsedProduct, StoreInfo
 
 STORE = StoreInfo(
@@ -49,6 +50,7 @@ class CrowdGamesParser(StoreParser):
     store = STORE
 
     def __init__(self, proxy: str | None = None) -> None:
+        super().__init__()
         self._client_kwargs: dict = {
             "headers": _HEADERS,
             "follow_redirects": True,
@@ -58,9 +60,16 @@ class CrowdGamesParser(StoreParser):
             self._client_kwargs["proxy"] = proxy
 
     async def search(self, query: str, limit: int = 10) -> list[ParsedProduct]:
-        async with httpx.AsyncClient(**self._client_kwargs) as client:
-            # Качаем первую страницу, последовательно обходим цепочку
-            # data-collection-infinity чтобы собрать все URL страниц
+        # CrowdGames особый случай: нет enrich — поиск это и есть обход всех страниц
+        # каталога. search_ms = время загрузки и парсинга всех страниц,
+        # enrich_ms = None (этапа просто нет).
+        self._http_counter = 0
+        self.last_metrics = None
+
+        client_kwargs = {**self._client_kwargs, "event_hooks": {"request": [self._count_request]}}
+
+        t0 = time.monotonic()
+        async with httpx.AsyncClient(**client_kwargs) as client:
             pages_html: list[str] = []
             html = await self._fetch_page(client, _CATALOG_URL)
             pages_html.append(html)
@@ -77,7 +86,6 @@ class CrowdGamesParser(StoreParser):
                 html = await self._fetch_page(client, next_url)
                 pages_html.append(html)
 
-        # Парсим все страницы, собираем все товары
         all_products: list[ParsedProduct] = []
         seen_ids: set[str] = set()
         for page_html in pages_html:
@@ -86,11 +94,16 @@ class CrowdGamesParser(StoreParser):
                     seen_ids.add(p.external_id)
                     all_products.append(p)
 
-        # Фильтрация по запросу (регистронезависимо)
         q_lower = query.lower()
-        matched = [p for p in all_products if q_lower in p.title.lower()]
+        matched = [p for p in all_products if q_lower in p.title.lower()][:limit]
+        search_ms = int((time.monotonic() - t0) * 1000)
 
-        return matched[:limit]
+        self.last_metrics = ParserMetrics(
+            search_ms=search_ms, enrich_ms=None,
+            http_requests=self._http_counter,
+            result_after_enrich=len(matched),  # без enrich = просто кол-во найденных
+        )
+        return matched
 
     async def _fetch_page(self, client: httpx.AsyncClient, url: str) -> str:
         resp = await client.get(url)
