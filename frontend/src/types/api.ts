@@ -175,6 +175,123 @@ export interface StoreHealthEntry {
   [k: string]: unknown
 }
 
+// ── Snapshots / Suites / Favorites (фаза 4) ────────────────────────────
+
+export interface SnapshotMeta {
+  id: number
+  name: string | null
+  query: string
+  stores: string | null
+  limit_n: number
+  refresh: boolean
+  source: string | null
+  total_ms: number | null
+  error_count: number
+  summary: {
+    ms_per_product?: number | null
+    error_rate?: number
+    failed?: boolean
+    products_count?: number
+  }
+  created_at: string
+}
+
+export interface SnapshotsPage {
+  items: SnapshotMeta[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** Полный snapshot с products (для diff/просмотра). */
+export interface SnapshotFull extends SnapshotMeta {
+  errors: Record<string, string>
+  products: ProductOut[]
+}
+
+export type DiffStatus = 'added' | 'removed' | 'changed'
+
+export interface DiffField {
+  a: unknown
+  b: unknown
+  delta_pct?: number
+}
+
+export interface DiffProductItem {
+  key: string
+  status: DiffStatus
+  a?: ProductOut
+  b?: ProductOut
+  fields?: Record<string, DiffField>
+}
+
+export interface DiffResult {
+  summary: {
+    a_count: number
+    b_count: number
+    added: number
+    removed: number
+    changed: number
+    same: number
+    ms_a?: number | null
+    ms_b?: number | null
+  }
+  products: DiffProductItem[]
+  meta: {
+    a: { id: number; query: string; created_at: string }
+    b: { id: number; query: string; created_at: string }
+  }
+}
+
+export interface SuiteQuery {
+  q: string
+  stores?: string[] | null
+  limit?: number | null
+  refresh?: boolean
+}
+
+export interface SuiteOut {
+  id: number
+  name: string
+  description: string | null
+  queries: SuiteQuery[]
+  created_at: string
+  updated_at: string
+}
+
+export interface SuiteRunMeta {
+  id: number
+  suite_id: number
+  started_at: string
+  finished_at: string | null
+  summary: {
+    total?: number
+    passed?: number
+    failed?: number
+    ms_total?: number
+    ms_per_query?: number
+    source_breakdown?: Record<string, number>
+  }
+}
+
+export interface SuiteRunItem {
+  id: number
+  query: string
+  snapshot_id: number | null
+  ms: number | null
+  status: 'ok' | 'partial' | 'error'
+  error: string | null
+}
+
+export interface FavoriteOut {
+  id: number
+  query: string
+  stores: string | null
+  limit_n: number | null
+  refresh: boolean
+  created_at: string
+}
+
 /** Маркер недоступности parsers — приходит вместо реального ответа. */
 export interface UnavailableMarker {
   _unavailable: true

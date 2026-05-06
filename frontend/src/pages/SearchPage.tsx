@@ -1,8 +1,11 @@
-import { useCallback, useMemo, useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
-import { Clock, Zap, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { Link } from 'react-router-dom'
+import { Clock, Zap, AlertCircle, CheckCircle2, Save, Star, Eye, EyeOff } from 'lucide-react'
 import clsx from 'clsx'
-import { fetchRecentDeltas, fetchStores } from '../lib/api'
+import {
+  createFavorite, createSnapshot, fetchRecentDeltas, fetchStores,
+} from '../lib/api'
 import { useSSE } from '../lib/sse'
 import { useSearchStore } from '../store/search'
 import { SearchForm } from '../components/search/SearchForm'
@@ -16,8 +19,16 @@ type Tab = 'results' | 'api-log'
 export function SearchPage() {
   const [tab, setTab] = useState<Tab>('results')
   const [selectedProduct, setSelectedProduct] = useState<ProductOut | null>(null)
+  const [savedSnapshotId, setSavedSnapshotId] = useState<number | null>(null)
+  const [savingSnap, setSavingSnap] = useState(false)
+  const [savingFav, setSavingFav] = useState(false)
+  const [favSaved, setFavSaved] = useState(false)
+  const [watchMin, setWatchMin] = useState<number>(0)   // 0 = выключено
+  const watchTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  const queryClient = useQueryClient()
 
   const {
+    query, selectedStores, refresh, limit,
     sseUrl, storeProgress, results, apiLogs, totalMs, source,
     startSearch, stopSearch, handleSSEEvent, isSearching,
   } = useSearchStore()
@@ -38,6 +49,68 @@ export function SearchPage() {
     new Map(deltasArray.map(d => [d.product_id, d])),
     [deltasArray],
   )
+
+  // Параметры для кнопок «Snapshot» и «В избранное» — берём напрямую из стора.
+  const buildPayload = () => ({
+    query: query.trim(),
+    stores: selectedStores.length > 0 ? selectedStores : undefined,
+    limit,
+    refresh,
+  })
+
+  const handleSaveSnapshot = async () => {
+    if (!query.trim()) return
+    setSavingSnap(true)
+    try {
+      const res = await createSnapshot(buildPayload())
+      setSavedSnapshotId(res.id)
+      void queryClient.invalidateQueries({ queryKey: ['snapshots'] })
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setSavingSnap(false)
+    }
+  }
+
+  const handleSaveFavorite = async () => {
+    if (!query.trim()) return
+    setSavingFav(true)
+    try {
+      await createFavorite(buildPayload())
+      setFavSaved(true)
+      void queryClient.invalidateQueries({ queryKey: ['favorites'] })
+      setTimeout(() => setFavSaved(false), 2500)
+    } catch (e) {
+      console.error(e)
+    } finally {
+      setSavingFav(false)
+    }
+  }
+
+  // Watch-режим: интервал N минут → автозапуск snapshot.
+  // Простой опрос на стороне клиента; уважает Page Visibility API чтобы
+  // не дёргать parsers, когда вкладка скрыта.
+  useEffect(() => {
+    if (watchTimerRef.current) {
+      clearInterval(watchTimerRef.current)
+      watchTimerRef.current = null
+    }
+    if (watchMin <= 0 || !query.trim()) return
+
+    const intervalMs = watchMin * 60_000
+    watchTimerRef.current = setInterval(() => {
+      if (document.visibilityState !== 'visible') return
+      void createSnapshot(buildPayload()).then(() => {
+        void queryClient.invalidateQueries({ queryKey: ['snapshots'] })
+      })
+    }, intervalMs)
+
+    return () => {
+      if (watchTimerRef.current) clearInterval(watchTimerRef.current)
+      watchTimerRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [watchMin, query, selectedStores.join(','), refresh, limit])
 
   const onEvent = useCallback((event: string, data: unknown) => {
     handleSSEEvent(event, data)
@@ -103,13 +176,71 @@ export function SearchPage() {
       {/* Результаты и API Log */}
       {(hasActivity || results.length > 0) && (
         <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-          <div className="flex px-4 border-b border-gray-800 bg-gray-900/50">
+          <div className="flex items-center px-4 border-b border-gray-800 bg-gray-900/50 gap-2 flex-wrap">
             <button className={tabCls('results')} onClick={() => setTab('results')}>
               Результаты{results.length > 0 && ` (${results.length})`}
             </button>
             <button className={tabCls('api-log')} onClick={() => setTab('api-log')}>
               API Log{apiLogs.length > 0 && ` (${apiLogs.length})`}
             </button>
+
+            {/* Action-кнопки для snapshot/favorite/watch */}
+            <div className="ml-auto flex items-center gap-2 py-1.5">
+              <button
+                type="button"
+                onClick={handleSaveSnapshot}
+                disabled={savingSnap || !query.trim()}
+                title="Сохранить snapshot этого запроса"
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Save size={11} />
+                {savingSnap ? '…' : 'Snapshot'}
+              </button>
+              {savedSnapshotId !== null && (
+                <Link
+                  to={`/testing`}
+                  className="text-xs text-violet-400 hover:text-violet-300"
+                  title={`Snapshot #${savedSnapshotId} сохранён`}
+                >
+                  #{savedSnapshotId}
+                </Link>
+              )}
+
+              <button
+                type="button"
+                onClick={handleSaveFavorite}
+                disabled={savingFav || !query.trim()}
+                title="Сохранить запрос в избранное"
+                className={clsx(
+                  'flex items-center gap-1 px-2 py-1 rounded text-xs',
+                  favSaved
+                    ? 'bg-yellow-950 text-yellow-400'
+                    : 'bg-gray-800 hover:bg-gray-700 text-gray-200',
+                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                )}
+              >
+                <Star size={11} fill={favSaved ? 'currentColor' : 'none'} />
+                {favSaved ? 'Сохр.' : 'Избр.'}
+              </button>
+
+              {/* Watch-режим */}
+              <select
+                value={watchMin}
+                onChange={e => setWatchMin(Number(e.target.value))}
+                className="px-2 py-1 rounded text-xs bg-gray-800 border border-gray-700 text-gray-200"
+                title={watchMin > 0 ? `Watch включён: snapshot каждые ${watchMin} мин` : 'Watch — авто-snapshot по интервалу'}
+              >
+                <option value={0}>Watch: off</option>
+                <option value={5}>каждые 5 мин</option>
+                <option value={15}>каждые 15 мин</option>
+                <option value={30}>каждые 30 мин</option>
+                <option value={60}>каждый час</option>
+              </select>
+              {watchMin > 0
+                ? <Eye size={12} className="text-green-400" />
+                : <EyeOff size={12} className="text-gray-600" />
+              }
+            </div>
           </div>
 
           <div className="p-4">

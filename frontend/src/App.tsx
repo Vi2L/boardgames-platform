@@ -1,17 +1,20 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
-import { Search, Cpu, Database, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { Search, Cpu, Database, FlaskConical, PanelLeftClose, PanelLeft } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
 import { DatabasePage } from './pages/DatabasePage'
 import { ProductPage } from './pages/ProductPage'
+import { TestingPage } from './pages/TestingPage'
+import { DiffView } from './components/testing/DiffView'
 import { HealthBadge } from './components/shared/HealthBadge'
 
 const NAV = [
   { to: '/', label: 'Поиск', icon: Search },
   { to: '/parsers', label: 'Парсеры', icon: Cpu },
   { to: '/database', label: 'БД', icon: Database },
+  { to: '/testing', label: 'Тесты', icon: FlaskConical },
 ]
 
 const STORAGE_KEY = 'sidebar:collapsed'
@@ -103,6 +106,8 @@ export default function App() {
           <Route path="/parsers" element={<ParsersPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/products/:id" element={<ProductPage />} />
+          <Route path="/testing" element={<TestingPage />} />
+          <Route path="/testing/diff" element={<DiffView />} />
         </Routes>
       </main>
     </div>

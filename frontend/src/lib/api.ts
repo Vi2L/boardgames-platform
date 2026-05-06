@@ -1,7 +1,9 @@
 import type {
+  DiffResult, FavoriteOut,
   HealthOut, ParserStatsOut, PriceDeltaOut, PricePointOut,
   ProductDetailOut, ProductsPage, SearchesPage,
-  StoreOut, StoreStatsResponse, SummaryStatsResponse,
+  SnapshotFull, SnapshotsPage, StoreOut, StoreStatsResponse,
+  SuiteOut, SuiteQuery, SuiteRunMeta, SummaryStatsResponse,
 } from '../types/api'
 
 const BASE = '/api'
@@ -69,3 +71,63 @@ export const fetchStatsStores = () =>
 
 export const fetchStatsErrors = (limit = 20) =>
   fetch(`${BASE}/stats/errors?limit=${limit}`).then(r => json<unknown[]>(r))
+
+// ── Snapshots / Suites / Favorites ─────────────────────────────────────
+
+export const createSnapshot = (payload: {
+  name?: string; query: string; stores?: string[]; limit?: number; refresh?: boolean
+}) =>
+  fetch(`${BASE}/snapshots`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<{ id: number; summary: unknown }>(r))
+
+export const fetchSnapshots = (page = 1, page_size = 50, query?: string) => {
+  const sp = new URLSearchParams({ page: String(page), page_size: String(page_size) })
+  if (query) sp.set('query', query)
+  return fetch(`${BASE}/snapshots?${sp}`).then(r => json<SnapshotsPage>(r))
+}
+
+export const fetchSnapshot = (id: number) =>
+  fetch(`${BASE}/snapshots/${id}`).then(r => json<SnapshotFull>(r))
+
+export const deleteSnapshot = (id: number) =>
+  fetch(`${BASE}/snapshots/${id}`, { method: 'DELETE' }).then(r => json<{ deleted: boolean }>(r))
+
+export const fetchSnapshotDiff = (a: number, b: number) =>
+  fetch(`${BASE}/snapshots/diff?a=${a}&b=${b}`).then(r => json<DiffResult>(r))
+
+export const fetchSuites = () =>
+  fetch(`${BASE}/suites`).then(r => json<SuiteOut[]>(r))
+
+export const fetchSuite = (id: number) =>
+  fetch(`${BASE}/suites/${id}`).then(r => json<SuiteOut>(r))
+
+export const createSuite = (payload: { name: string; description?: string; queries: SuiteQuery[] }) =>
+  fetch(`${BASE}/suites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<SuiteOut>(r))
+
+export const deleteSuite = (id: number) =>
+  fetch(`${BASE}/suites/${id}`, { method: 'DELETE' }).then(r => json<{ deleted: boolean }>(r))
+
+export const fetchSuiteRuns = (suiteId: number, limit = 10) =>
+  fetch(`${BASE}/suites/${suiteId}/runs?limit=${limit}`).then(r => json<SuiteRunMeta[]>(r))
+
+export const fetchFavorites = () =>
+  fetch(`${BASE}/favorites`).then(r => json<FavoriteOut[]>(r))
+
+export const createFavorite = (payload: {
+  query: string; stores?: string[]; limit?: number; refresh?: boolean
+}) =>
+  fetch(`${BASE}/favorites`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<FavoriteOut>(r))
+
+export const deleteFavorite = (id: number) =>
+  fetch(`${BASE}/favorites/${id}`, { method: 'DELETE' }).then(r => json<{ deleted: boolean }>(r))
