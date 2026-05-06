@@ -88,6 +88,30 @@ class ParsersClient:
             for p in resp.json()
         ]
 
+    async def get_history_batch(
+        self, product_ids: list[int],
+    ) -> dict[int, list[PricePointOut]]:
+        """Параллельно тянет историю для нескольких товаров.
+
+        parsers API не имеет batch-эндпоинта (см. parsers-wishlist.md п. 3),
+        поэтому делаем N запросов через `asyncio.gather`. Это всё равно
+        быстрее, чем N последовательных запросов с фронта, и держит fan-out
+        на бекенде, где есть HTTP/2 keep-alive к parsers.
+
+        Падение одного запроса не валит остальные — просто пустая история
+        для упавшего id.
+        """
+        import asyncio
+
+        async def _safe(pid: int) -> tuple[int, list[PricePointOut]]:
+            try:
+                return pid, await self.get_history(pid)
+            except Exception:
+                return pid, []
+
+        results = await asyncio.gather(*(_safe(pid) for pid in product_ids))
+        return dict(results)
+
 
 def _product_from_api(data: dict[str, Any]) -> ProductOut:
     """Маппинг ответа parsers API → ProductOut.

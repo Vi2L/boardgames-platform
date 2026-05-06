@@ -22,7 +22,7 @@ from httpx import ASGITransport, AsyncClient
 import app.deps as deps_module
 from app.main import app
 from app.parsers_client import ParsersSearchResponse
-from app.schemas import ProductOut, StoreOut
+from app.schemas import PricePointOut, ProductOut, StoreOut
 
 
 # ── Фейковый клиент parsers ────────────────────────────────────────────────
@@ -59,6 +59,8 @@ class FakeParsersClient:
         )
         self.should_fail_stores: bool = False
         self.should_fail_search: bool = False
+        # История цен per-product. Тесты могут пополнять напрямую.
+        self.histories: dict[int, list[PricePointOut]] = {}
 
     async def get_stores(self) -> list[StoreOut]:
         if self.should_fail_stores:
@@ -71,8 +73,13 @@ class FakeParsersClient:
             raise RuntimeError("parsers search failed")
         return self.search_response
 
-    async def get_history(self, product_id: int):  # pragma: no cover — пока не используется
-        return []
+    async def get_history(self, product_id: int) -> list[PricePointOut]:
+        return self.histories.get(product_id, [])
+
+    async def get_history_batch(
+        self, product_ids: list[int],
+    ) -> dict[int, list[PricePointOut]]:
+        return {pid: await self.get_history(pid) for pid in product_ids}
 
     async def close(self) -> None:
         pass

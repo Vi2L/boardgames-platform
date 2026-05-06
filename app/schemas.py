@@ -50,3 +50,17 @@ class ParserStatsOut(BaseModel):
 
 class ProductDetailOut(ProductOut):
     observations: list[PricePointOut] = []
+
+
+class PriceDeltaOut(BaseModel):
+    """Дельта между двумя последними точками истории.
+
+    Используется в ResultsTable для колонки «Δ цена», чтобы показать тренд
+    без открытия Drawer. None во всех числовых полях — если истории < 2 точек.
+    """
+    product_id: int
+    prev_price_rub: float | None = None
+    curr_price_rub: float | None = None
+    delta_pct: float | None = None      # положительная — рост, отрицательная — падение
+    days_between: float | None = None
+
