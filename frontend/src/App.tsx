@@ -4,6 +4,7 @@ import { Search, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
+import { HealthBadge } from './components/shared/HealthBadge'
 
 const NAV = [
   { to: '/', label: 'Поиск', icon: Search },
@@ -85,10 +86,11 @@ export default function App() {
         </nav>
 
         <div className={clsx(
-          'border-t border-gray-800 text-xs text-gray-600',
-          collapsed ? 'py-3 text-center' : 'px-4 py-3',
+          'border-t border-gray-800',
+          collapsed ? 'py-3 flex flex-col items-center gap-2' : 'px-4 py-3 space-y-1.5',
         )}>
-          v0.1.0
+          <HealthBadge compact={collapsed} />
+          {!collapsed && <div className="text-xs text-gray-600">v0.1.0</div>}
         </div>
       </aside>
 

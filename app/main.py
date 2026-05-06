@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import history, parsers as parsers_router_module
+from app.api import health, history, parsers as parsers_router_module
 from app.api import search as search_router_module
 from app.api import stores as stores_router_module
 from app.deps import close_services, init_services
@@ -48,6 +48,7 @@ app.include_router(search_router_module.router, prefix="/api")
 app.include_router(parsers_router_module.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
 app.include_router(stores_router_module.router, prefix="/api")
+app.include_router(health.router, prefix="/api")
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.exists():

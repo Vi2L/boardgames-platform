@@ -1,4 +1,4 @@
-import type { ParserStatsOut, PricePointOut, StoreOut } from '../types/api'
+import type { HealthOut, ParserStatsOut, PricePointOut, StoreOut } from '../types/api'
 
 const BASE = '/api'
 
@@ -15,3 +15,6 @@ export const fetchParsers = () =>
 
 export const fetchHistory = (id: number) =>
   fetch(`${BASE}/products/${id}/history`).then(r => json<PricePointOut[]>(r))
+
+export const fetchHealth = () =>
+  fetch(`${BASE}/health`).then(r => json<HealthOut>(r))

@@ -83,3 +83,11 @@ export interface ApiLog {
   error?: string
   timestamp: number
 }
+
+// ── Health ────────────────────────────────────────────────────────────────
+export interface HealthOut {
+  app: 'ok'
+  parsers_url: string
+  parsers_api: 'ok' | 'unreachable'
+  error?: string
+}
