@@ -162,18 +162,20 @@ def _parse_search_page(html: str, limit: int) -> list[ParsedProduct]:
     if not item_list:
         return []
 
-    # 2. data-product_id из HTML-карточек → сопоставляем по slug URL
-    # Формат: <div class="product-card ..." data-product_id="72557" ...>
-    #   <a href="/karkasson" ...>
-    # Строим словарь slug → product_id
-    slug_to_id: dict[str, str] = {}
+    # 2. HTML-карточки (.product-card) → product_id и актуальная цена (data-price).
+    #    JSON-LD хранит оригинальную цену, data-price — цену со скидкой.
+    #    Сопоставляем карточку с JSON-LD по slug из URL.
+    slug_to_id:    dict[str, str] = {}
+    slug_to_price: dict[str, int] = {}  # актуальная цена в копейках
+
     for m in re.finditer(
-        r'<div[^>]+class="product-card[^"]*"[^>]+data-product_id="(\d+)"[^>]*>.*?href="(/[^"?#]+)"',
+        r'data-product_id="(\d+)"\s+data-price="(\d+)"[^>]*>.*?href="(/[^"?#]+)"',
         html, re.DOTALL
     ):
-        product_id, href = m.group(1), m.group(2)
+        product_id, price_str, href = m.group(1), m.group(2), m.group(3)
         slug = href.strip("/").split("/")[-1]
-        slug_to_id[slug] = product_id
+        slug_to_id[slug]    = product_id
+        slug_to_price[slug] = int(price_str) * 100
 
     # 3. Собираем ParsedProduct
     products: list[ParsedProduct] = []
@@ -185,15 +187,19 @@ def _parse_search_page(html: str, limit: int) -> list[ParsedProduct]:
         if not url:
             continue
 
+        slug = url.rstrip("/").split("/")[-1]
+        external_id = slug_to_id.get(slug, slug)
+
+        # Цена: data-price из HTML-карточки (со скидкой, если есть).
+        # Если карточки нет — fallback на JSON-LD price (без скидки).
         offers = item.get("offers", {})
-        price_rub = offers.get("price", 0)
+        ld_price_rub = offers.get("price", 0)
         try:
-            price = int(float(price_rub)) * 100  # рубли → копейки
+            ld_price = int(float(ld_price_rub)) * 100
         except (ValueError, TypeError):
             continue
 
-        slug = url.rstrip("/").split("/")[-1]
-        external_id = slug_to_id.get(slug, slug)  # числовой ID или slug как fallback
+        actual_price = slug_to_price.get(slug, ld_price)
 
         # Изображение: относительный путь → абсолютный кеш-URL
         image_rel = item.get("image", "")
@@ -202,15 +208,22 @@ def _parse_search_page(html: str, limit: int) -> list[ParsedProduct]:
         availability = offers.get("availability", "")
         in_stock = "InStock" in availability
 
+        # Флаг скидки: data-price меньше JSON-LD price
+        on_sale = actual_price < ld_price
+        raw: dict = {"availability": in_stock}
+        if on_sale:
+            raw["on_sale"] = True
+            raw["original_price"] = ld_price  # оригинальная цена в копейках
+
         products.append(ParsedProduct(
             store_slug=STORE.slug,
             external_id=external_id,
             title=item.get("name", ""),
-            price=price,
+            price=actual_price,            # текущая цена (со скидкой, если есть)
             url=url if url.startswith("http") else STORE.base_url + url,
             image_url=image_url,
             description=item.get("description"),
-            raw={"availability": in_stock},
+            raw=raw,
         ))
 
     return products
