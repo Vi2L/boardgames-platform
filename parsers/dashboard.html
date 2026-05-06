@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Parser Monitor</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -214,6 +215,36 @@
   /* ---- Tab panels ---- */
   [data-tab-panel] { display: none; }
   [data-tab-panel].active { display: block; }
+
+  /* ---- Charts grid ---- */
+  .chart-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+  .chart-card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    padding: 16px 20px;
+  }
+  .chart-card h3 {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin-bottom: 12px;
+  }
+  .chart-card canvas { width: 100% !important; height: 220px !important; }
+
+  /* ---- Sortable table ---- */
+  table.sortable th { cursor: pointer; user-select: none; }
+  table.sortable th:hover { color: #cbd5e1; }
+  table.sortable th.sorted-asc::after  { content: ' ↑'; color: #3b82f6; }
+  table.sortable th.sorted-desc::after { content: ' ↓'; color: #3b82f6; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
 </style>
 </head>
 <body>
@@ -246,6 +277,19 @@
     <div class="card"><div class="card-label">Ошибок парсеров</div><div class="card-value" id="c-errors">—</div></div>
   </div>
 
+  <div class="chart-row">
+    <div class="chart-card">
+      <h3>Запросы по часам (24ч)</h3>
+      <canvas id="chart-timeline"></canvas>
+      <p class="empty" id="chart-timeline-empty" style="display:none;padding:8px 0">Нет данных</p>
+    </div>
+    <div class="chart-card">
+      <h3>Cache hit rate (7 дней)</h3>
+      <canvas id="chart-cache-rate"></canvas>
+      <p class="empty" id="chart-cache-rate-empty" style="display:none;padding:8px 0">Нет данных</p>
+    </div>
+  </div>
+
   <section class="panel">
     <h2>Здоровье парсеров (24ч)</h2>
     <table>
@@ -272,11 +316,42 @@
 </section>
 
 <!-- =================================================================
-     ЗАПРОСЫ — заглушка для этапа 3
+     ЗАПРОСЫ
 ================================================================= -->
 <section data-tab-panel="queries">
-  <section class="panel"><h2>Запросы и аналитика</h2>
-    <p class="empty">Топ запросов, latency percentiles, графики — будут добавлены на следующем этапе.</p>
+  <div class="cards">
+    <div class="card"><div class="card-label">p50 latency</div><div class="card-value" id="c-p50">—</div></div>
+    <div class="card"><div class="card-label">p95 latency</div><div class="card-value" id="c-p95">—</div></div>
+    <div class="card"><div class="card-label">p99 latency</div><div class="card-value" id="c-p99">—</div></div>
+    <div class="card"><div class="card-label">Запросов / 24ч</div><div class="card-value" id="c-q-count">—</div></div>
+  </div>
+
+  <div class="chart-row">
+    <div class="chart-card">
+      <h3>Распределение по магазинам (24ч)</h3>
+      <canvas id="chart-store-dist"></canvas>
+      <p class="empty" id="chart-store-dist-empty" style="display:none;padding:8px 0">Нет данных</p>
+    </div>
+    <div class="chart-card">
+      <h3>Распределение latency (24ч)</h3>
+      <canvas id="chart-latency-hist"></canvas>
+      <p class="empty" id="chart-latency-hist-empty" style="display:none;padding:8px 0">Нет данных</p>
+    </div>
+  </div>
+
+  <section class="panel">
+    <h2>Топ запросов (7 дней)</h2>
+    <table class="sortable" id="top-queries-table">
+      <thead><tr>
+        <th data-sort="query">Запрос</th>
+        <th data-sort="count" class="num">Запросов</th>
+        <th data-sort="cache_hit_rate" class="num">Cache rate</th>
+        <th data-sort="avg_ms" class="num">Ср. время</th>
+        <th data-sort="errors" class="num">Ошибок</th>
+        <th data-sort="last_seen">Последний</th>
+      </tr></thead>
+      <tbody id="top-queries-tbody"><tr><td colspan="6" class="empty">Загрузка…</td></tr></tbody>
+    </table>
   </section>
 </section>
 
@@ -312,11 +387,55 @@
 
 <script>
 // ============================================================
+// Chart.js — глобальная конфигурация для тёмной темы
+// ============================================================
+if (window.Chart) {
+  Chart.defaults.color = '#94a3b8';
+  Chart.defaults.borderColor = '#334155';
+  Chart.defaults.font.family = '-apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
+}
+
+// Хранилище инстансов графиков. Перед `new Chart()` обязательно вызывать destroy(),
+// иначе утечка canvas-контекста и ghost-tooltips при пересоздании.
+const _charts = {};
+function mkChart(id, type, data, options = {}) {
+  const canvas = document.getElementById(id);
+  if (!canvas || !window.Chart) return null;
+  if (_charts[id]) _charts[id].destroy();
+  _charts[id] = new Chart(canvas, { type, data, options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: { legend: { labels: { boxWidth: 12, font: { size: 11 } } } },
+    ...options,
+  }});
+  return _charts[id];
+}
+
+// Цветовая палитра для графиков (синхронизирована с темой)
+const PALETTE = {
+  blue:   '#3b82f6',
+  green:  '#22c55e',
+  yellow: '#eab308',
+  red:    '#ef4444',
+  purple: '#a78bfa',
+  cyan:   '#06b6d4',
+  orange: '#f97316',
+};
+
+function showChart(id, hasData) {
+  const canvas = document.getElementById(id);
+  const empty = document.getElementById(id + '-empty');
+  if (canvas) canvas.style.display = hasData ? '' : 'none';
+  if (empty) empty.style.display = hasData ? 'none' : '';
+}
+
+// ============================================================
 // Утилиты форматирования
 // ============================================================
 const fmtMs = ms => ms == null ? '—' : ms < 1000 ? `${ms} мс` : `${(ms/1000).toFixed(1)} с`;
 const fmtTs = iso => iso ? new Date(iso).toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
 const fmtDate = iso => iso ? new Date(iso).toLocaleString('ru', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) : '—';
+const fmtTsShort = iso => iso ? new Date(iso).toLocaleString('ru', {day:'2-digit', month:'2-digit', hour:'2-digit'}) : '';
 
 function dotClass(rate) {
   if (rate == null) return 'dot-gray';
@@ -339,9 +458,11 @@ const safe = (promise, fallback) => promise.then(r => r.ok ? r.json() : fallback
 // ============================================================
 
 async function refreshOverview() {
-  const [stats, stores] = await Promise.all([
+  const [stats, stores, timeline, cacheTl] = await Promise.all([
     safe(fetch('/api/stats'), null),
     safe(fetch('/api/stats/stores'), []),
+    safe(fetch('/api/stats/timeline?hours=24&bucket=hour'), []),
+    safe(fetch('/api/stats/cache-timeline?hours=168&bucket=hour'), []),
   ]);
 
   if (stats) {
@@ -351,6 +472,49 @@ async function refreshOverview() {
       `${stats.cache_hits} cache / ${stats.network_hits} network`;
     document.getElementById('c-avg').textContent = fmtMs(stats.avg_response_ms);
     document.getElementById('c-errors').textContent = stats.total_errors;
+  }
+
+  // График запросов по часам — stacked area по source
+  showChart('chart-timeline', timeline.length > 0);
+  if (timeline.length > 0) {
+    const labels = timeline.map(p => fmtTsShort(p.ts));
+    mkChart('chart-timeline', 'line', {
+      labels,
+      datasets: [
+        { label: 'Cache',   data: timeline.map(p => p.cache),   borderColor: PALETTE.green,  backgroundColor: PALETTE.green + '33', tension: 0.3, fill: true },
+        { label: 'Network', data: timeline.map(p => p.network), borderColor: PALETTE.blue,   backgroundColor: PALETTE.blue + '33',  tension: 0.3, fill: true },
+        { label: 'Partial', data: timeline.map(p => p.partial), borderColor: PALETTE.yellow, backgroundColor: PALETTE.yellow + '33',tension: 0.3, fill: true },
+        { label: 'Errors',  data: timeline.map(p => p.errors),  borderColor: PALETTE.red,    backgroundColor: PALETTE.red + '33',   tension: 0.3, fill: false },
+      ],
+    }, {
+      scales: {
+        x: { stacked: false, grid: { color: '#334155' } },
+        y: { stacked: false, grid: { color: '#334155' }, beginAtZero: true, ticks: { precision: 0 } },
+      },
+      interaction: { mode: 'index', intersect: false },
+    });
+  }
+
+  // График cache hit rate (7 дней)
+  showChart('chart-cache-rate', cacheTl.length > 0);
+  if (cacheTl.length > 0) {
+    mkChart('chart-cache-rate', 'line', {
+      labels: cacheTl.map(p => fmtTsShort(p.ts)),
+      datasets: [{
+        label: 'Cache hit rate, %',
+        data: cacheTl.map(p => p.cache_hit_rate),
+        borderColor: PALETTE.cyan,
+        backgroundColor: PALETTE.cyan + '33',
+        tension: 0.3,
+        fill: true,
+        pointRadius: 2,
+      }],
+    }, {
+      scales: {
+        y: { min: 0, max: 100, grid: { color: '#334155' }, ticks: { callback: v => v + '%' } },
+        x: { grid: { color: '#334155' }, ticks: { maxTicksLimit: 8 } },
+      },
+    });
   }
 
   const tbody = document.getElementById('store-tbody');
@@ -389,8 +553,116 @@ async function refreshErrors() {
   }
 }
 
-// Заглушки для не-реализованных табов (заполняются на этапах 3-8)
-async function refreshQueries() {}
+// ============================================================
+// Tab: Queries — топ запросов, latency, store distribution
+// ============================================================
+let _topQueriesCache = [];
+let _topQueriesSort = { key: 'count', dir: 'desc' };
+
+function renderTopQueries() {
+  const tbody = document.getElementById('top-queries-tbody');
+  if (!_topQueriesCache.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных</td></tr>';
+    return;
+  }
+  const { key, dir } = _topQueriesSort;
+  const sorted = [..._topQueriesCache].sort((a, b) => {
+    const va = a[key], vb = b[key];
+    if (va == null) return 1;
+    if (vb == null) return -1;
+    const cmp = typeof va === 'string' ? va.localeCompare(vb) : va - vb;
+    return dir === 'desc' ? -cmp : cmp;
+  });
+  tbody.innerHTML = sorted.map(q => `
+    <tr>
+      <td>${q.query}</td>
+      <td class="num">${q.count}</td>
+      <td class="num">${q.cache_hit_rate}%</td>
+      <td class="num">${fmtMs(q.avg_ms)}</td>
+      <td class="num" style="color:${q.errors > 0 ? '#ef4444' : '#64748b'}">${q.errors}</td>
+      <td>${fmtDate(q.last_seen)}</td>
+    </tr>`).join('');
+
+  // Подсветка отсортированной колонки
+  document.querySelectorAll('#top-queries-table th').forEach(th => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.sort === key) th.classList.add(dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+  });
+}
+
+async function refreshQueries() {
+  const [latency, top, dist, hist] = await Promise.all([
+    safe(fetch('/api/stats/latency?hours=24'), null),
+    safe(fetch('/api/stats/top-queries?hours=168&limit=30'), []),
+    safe(fetch('/api/stats/store-distribution?hours=24'), []),
+    safe(fetch('/api/stats/latency-histogram?hours=24'), []),
+  ]);
+
+  if (latency) {
+    document.getElementById('c-p50').textContent = fmtMs(latency.p50);
+    document.getElementById('c-p95').textContent = fmtMs(latency.p95);
+    document.getElementById('c-p99').textContent = fmtMs(latency.p99);
+    document.getElementById('c-q-count').textContent = latency.count;
+  }
+
+  // Pie chart распределения по магазинам
+  showChart('chart-store-dist', dist.length > 0);
+  if (dist.length > 0) {
+    const palette = [PALETTE.blue, PALETTE.green, PALETTE.yellow, PALETTE.purple, PALETTE.orange, PALETTE.cyan];
+    mkChart('chart-store-dist', 'doughnut', {
+      labels: dist.map(d => `${d.store_slug} (${d.share_pct}%)`),
+      datasets: [{
+        data: dist.map(d => d.calls),
+        backgroundColor: dist.map((_, i) => palette[i % palette.length]),
+        borderColor: '#1e293b',
+        borderWidth: 2,
+      }],
+    }, {
+      plugins: { legend: { position: 'right', labels: { boxWidth: 12, font: { size: 11 } } } },
+    });
+  }
+
+  // Histogram латенси
+  const histTotal = hist.reduce((s, b) => s + b.count, 0);
+  showChart('chart-latency-hist', histTotal > 0);
+  if (histTotal > 0) {
+    mkChart('chart-latency-hist', 'bar', {
+      labels: hist.map(b => b.bin),
+      datasets: [{
+        label: 'Запросов',
+        data: hist.map(b => b.count),
+        backgroundColor: hist.map((_, i) => {
+          // Чем больше latency — тем более красный цвет
+          return [PALETTE.green, PALETTE.green, PALETTE.yellow, PALETTE.orange, PALETTE.red][i];
+        }),
+      }],
+    }, {
+      plugins: { legend: { display: false } },
+      scales: {
+        y: { beginAtZero: true, grid: { color: '#334155' }, ticks: { precision: 0 } },
+        x: { grid: { display: false } },
+      },
+    });
+  }
+
+  _topQueriesCache = top;
+  renderTopQueries();
+}
+
+// Click-сортировка таблицы топ-запросов
+document.addEventListener('click', e => {
+  const th = e.target.closest('#top-queries-table th[data-sort]');
+  if (!th) return;
+  const key = th.dataset.sort;
+  if (_topQueriesSort.key === key) {
+    _topQueriesSort.dir = _topQueriesSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _topQueriesSort = { key, dir: 'desc' };
+  }
+  renderTopQueries();
+});
+
+// Заглушки для не-реализованных табов
 async function refreshParsers() {}
 async function refreshDatabase() {}
 async function refreshLiveTest() {}

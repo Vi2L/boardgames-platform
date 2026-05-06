@@ -84,3 +84,9 @@ async def store_distribution(hours: int = 24):
 async def empty_responses(hours: int = 24, limit: int = 50):
     """Успешные вызовы парсеров, вернувшие 0 товаров — 'тихие' сбои."""
     return await _db.get_empty_responses(hours=hours, limit=limit)
+
+
+@router.get("/api/stats/latency-histogram")
+async def latency_histogram(hours: int = 24):
+    """Гистограмма распределения latency: бины <100, 100-300, 300-1000, 1000-3000, >3000 мс."""
+    return await _db.get_latency_histogram(hours=hours)

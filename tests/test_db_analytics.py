@@ -198,6 +198,29 @@ class TestEmptyResponses(_DBTestBase):
         self.assertEqual(result[0]["store_slug"], "hobbygames")
 
 
+class TestLatencyHistogram(_DBTestBase):
+
+    async def test_returns_zeros_for_empty_log(self) -> None:
+        result = await self.db.get_latency_histogram(hours=24)
+        self.assertEqual(len(result), 5)
+        for bin_data in result:
+            self.assertEqual(bin_data["count"], 0)
+
+    async def test_distributes_into_correct_bins(self) -> None:
+        now = datetime.now(timezone.utc)
+        # 1 в bin <100, 2 в bin 100-300, 3 в bin 300-1000, 0 в bin 1-3с, 1 в bin >3с
+        for ms in [50, 150, 250, 400, 500, 800, 5000]:
+            await self.db.log_request(
+                query="x", source="network", result_count=1, error_count=0,
+                duration_ms=ms, errors={}, ts=_iso(now),
+            )
+        result = await self.db.get_latency_histogram(hours=24)
+        counts = [b["count"] for b in result]
+        self.assertEqual(counts, [1, 2, 3, 0, 1])
+        self.assertEqual(result[0]["bin"], "<100мс")
+        self.assertEqual(result[4]["bin"], ">3с")
+
+
 class TestCacheRateTimeline(_DBTestBase):
 
     async def test_computes_rate_per_bucket(self) -> None:

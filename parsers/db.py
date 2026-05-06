@@ -591,6 +591,33 @@ class PriceDatabase:
             for r in rows_data
         ]
 
+    async def get_latency_histogram(self, hours: int = 24) -> list[dict]:
+        """Гистограмма распределения latency для bar chart.
+
+        Фиксированные бины: 0-100, 100-300, 300-1000, 1000-3000, 3000+ мс.
+        Распределение по этим границам помогает увидеть форму latency без сжатия в percentile.
+        """
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN duration_ms <  100 THEN 1 ELSE 0 END) AS b0,
+                    SUM(CASE WHEN duration_ms >= 100  AND duration_ms <  300 THEN 1 ELSE 0 END) AS b1,
+                    SUM(CASE WHEN duration_ms >= 300  AND duration_ms < 1000 THEN 1 ELSE 0 END) AS b2,
+                    SUM(CASE WHEN duration_ms >= 1000 AND duration_ms < 3000 THEN 1 ELSE 0 END) AS b3,
+                    SUM(CASE WHEN duration_ms >= 3000 THEN 1 ELSE 0 END) AS b4
+                FROM request_log
+                WHERE ts >= ? AND duration_ms IS NOT NULL
+                """,
+                (cutoff,),
+            ) as cur:
+                row = await cur.fetchone()
+        labels = ["<100мс", "100-300мс", "300мс-1с", "1-3с", ">3с"]
+        keys = ["b0", "b1", "b2", "b3", "b4"]
+        return [{"bin": labels[i], "count": (row[keys[i]] or 0)} for i in range(5)]
+
     async def get_empty_responses(self, hours: int = 24, limit: int = 50) -> list[dict]:
         """Успешные вызовы парсеров с пустым результатом — потенциально 'тихие' сбои.
 
