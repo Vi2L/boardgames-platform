@@ -136,3 +136,50 @@ export interface HealthOut {
   parsers_api: 'ok' | 'unreachable'
   error?: string
 }
+
+// ── DatabasePage / Stats ────────────────────────────────────────────────
+export interface ProductsPage {
+  items: ProductOut[]
+  total: number
+  page: number
+  page_size: number
+}
+
+export interface SearchLogOut {
+  id: number
+  query: string
+  stores: string | null
+  source: string | null
+  total_ms: number | null
+  products_count: number
+  error_count: number
+  errors_json: string
+  created_at: string
+}
+
+export interface SearchesPage {
+  items: SearchLogOut[]
+  total: number
+  page: number
+  page_size: number
+}
+
+/** parsers /api/stats/stores — структура зависит от parsers, держим частично типизированной. */
+export interface StoreHealthEntry {
+  slug?: string
+  name?: string
+  success_rate?: number
+  avg_ms?: number
+  last_error?: string | null
+  total?: number
+  [k: string]: unknown
+}
+
+/** Маркер недоступности parsers — приходит вместо реального ответа. */
+export interface UnavailableMarker {
+  _unavailable: true
+  _error: string
+}
+
+export type StoreStatsResponse = StoreHealthEntry[] | UnavailableMarker
+export type SummaryStatsResponse = Record<string, unknown> | UnavailableMarker

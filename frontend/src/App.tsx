@@ -1,14 +1,17 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink } from 'react-router-dom'
-import { Search, Cpu, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { Search, Cpu, Database, PanelLeftClose, PanelLeft } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
+import { DatabasePage } from './pages/DatabasePage'
+import { ProductPage } from './pages/ProductPage'
 import { HealthBadge } from './components/shared/HealthBadge'
 
 const NAV = [
   { to: '/', label: 'Поиск', icon: Search },
   { to: '/parsers', label: 'Парсеры', icon: Cpu },
+  { to: '/database', label: 'БД', icon: Database },
 ]
 
 const STORAGE_KEY = 'sidebar:collapsed'
@@ -98,6 +101,8 @@ export default function App() {
         <Routes>
           <Route path="/" element={<SearchPage />} />
           <Route path="/parsers" element={<ParsersPage />} />
+          <Route path="/database" element={<DatabasePage />} />
+          <Route path="/products/:id" element={<ProductPage />} />
         </Routes>
       </main>
     </div>
