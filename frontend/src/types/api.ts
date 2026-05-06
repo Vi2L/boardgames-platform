@@ -1,0 +1,85 @@
+export interface StoreOut {
+  slug: string
+  name: string
+  base_url: string
+}
+
+export interface ProductOut {
+  id: number
+  store_slug: string
+  title: string
+  price_rub: number             // рубли (float) — уже в рублях из API
+  url: string
+  image_url: string | null
+  image_url_hd: string | null   // HD-изображение
+  description: string | null
+  players: string | null        // "2-5" или null (HobbyGames не даёт)
+  age_min: number | null
+  playtime: string | null       // "30-45 мин."
+  rules_url: string | null
+  fetched_at: string
+  extra: Record<string, unknown> // gallery, sku, rating, tags, offline_price...
+}
+
+export interface PricePointOut {
+  price: number       // копейки
+  price_rub: number   // рубли
+  fetched_at: string
+}
+
+export interface ParserStatsOut {
+  slug: string
+  name: string
+  base_url: string
+  available: boolean | null
+}
+
+export interface ProductDetailOut extends ProductOut {
+  observations: PricePointOut[]
+}
+
+// ── SSE types ──────────────────────────────────────────────────────────────
+
+export type StoreStatus = 'pending' | 'running' | 'done' | 'error' | 'cache'
+
+export interface StoreProgress {
+  slug: string
+  name: string
+  status: StoreStatus
+  count?: number
+  elapsed_ms?: number
+  error?: string
+}
+
+// HttpLog используется в HttpLogEntry и ParserCard для отображения запросов к parsers API
+export interface HttpLog {
+  id: number
+  slug: string
+  type: 'request' | 'response'
+  method?: string
+  url?: string
+  status?: number
+  size_bytes?: number
+  elapsed_ms?: number
+  headers: Record<string, string>
+  body_preview?: string
+  timestamp: number
+}
+
+export interface ApiLog {
+  id: number
+  type: 'request' | 'response' | 'error'
+  // request
+  url?: string
+  q?: string
+  stores?: string[] | null
+  // response
+  status?: number
+  elapsed_ms?: number
+  source?: string
+  products_count?: number
+  error_count?: number
+  // error
+  error?: string
+  timestamp: number
+}

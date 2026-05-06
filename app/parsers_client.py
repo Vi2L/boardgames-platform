@@ -1,0 +1,114 @@
+"""HTTP-клиент для parsers REST API.
+
+Синглтон создаётся в deps.py при старте приложения.
+Все методы — async, используют единый httpx.AsyncClient.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+
+import httpx
+
+from app.schemas import ProductOut, PricePointOut, StoreOut
+
+
+@dataclass
+class ParsersSearchResponse:
+    source: str                   # "cache" | "network" | "partial-cache"
+    errors: dict[str, str]        # slug → описание ошибки
+    products: list[ProductOut]
+
+
+class ParsersClient:
+    """Тонкий клиент для parsers FastAPI-сервиса."""
+
+    def __init__(self, base_url: str, timeout: float = 30.0) -> None:
+        self.base_url = base_url.rstrip("/")
+        self._client = httpx.AsyncClient(
+            base_url=self.base_url,
+            timeout=timeout,
+            headers={"Accept": "application/json"},
+        )
+
+    async def close(self) -> None:
+        await self._client.aclose()
+
+    # ------------------------------------------------------------------
+    # Публичные методы
+    # ------------------------------------------------------------------
+
+    async def get_stores(self) -> list[StoreOut]:
+        """GET /stores → список магазинов."""
+        resp = await self._client.get("/stores")
+        resp.raise_for_status()
+        return [StoreOut(**s) for s in resp.json()]
+
+    async def search(
+        self,
+        q: str,
+        stores: list[str] | None = None,
+        limit: int = 10,
+        refresh: bool = False,
+    ) -> ParsersSearchResponse:
+        """GET /search → результаты поиска с кешированием.
+
+        price_rub в ответе уже в рублях (float), не в копейках.
+        """
+        params: dict[str, Any] = {"q": q, "limit": limit}
+        if stores:
+            params["stores"] = ",".join(stores)
+        if refresh:
+            params["refresh"] = "true"
+
+        resp = await self._client.get("/search", params=params)
+        resp.raise_for_status()
+
+        data = resp.json()
+        products = [_product_from_api(p) for p in data.get("products", [])]
+        return ParsersSearchResponse(
+            source=data.get("source", "unknown"),
+            errors=data.get("errors", {}),
+            products=products,
+        )
+
+    async def get_history(self, product_id: int) -> list[PricePointOut]:
+        """GET /history/{product_id} → история цен в копейках."""
+        resp = await self._client.get(f"/history/{product_id}")
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        return [
+            PricePointOut(
+                price=p["price"],
+                price_rub=round(p["price"] / 100, 2),
+                fetched_at=p["fetched_at"],
+            )
+            for p in resp.json()
+        ]
+
+
+def _product_from_api(data: dict[str, Any]) -> ProductOut:
+    """Маппинг ответа parsers API → ProductOut.
+
+    parsers API возвращает price_rub (float, рубли).
+    Поля nullable: image_url, image_url_hd, description, players, age_min,
+                   playtime, rules_url.
+    """
+    return ProductOut(
+        id=data["id"],
+        store_slug=data["store_slug"],
+        title=data["title"],
+        price_rub=float(data["price_rub"]),
+        url=data["url"],
+        image_url=data.get("image_url"),
+        image_url_hd=data.get("image_url_hd"),
+        description=data.get("description"),
+        players=data.get("players"),
+        age_min=data.get("age_min"),
+        playtime=data.get("playtime"),
+        rules_url=data.get("rules_url"),
+        fetched_at=data.get("fetched_at", ""),
+        extra=data.get("extra") or {},
+    )

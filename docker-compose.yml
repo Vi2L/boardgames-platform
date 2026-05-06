@@ -1,0 +1,18 @@
+services:
+
+  # ── debug portal (порт 8000) ───────────────────────────────────────────────
+  # parsers API запускается отдельно из /Users/vitaliy/Projects/parsers на :8080
+  app:
+    build:
+      context: ..
+      dockerfile: parsers_web_test/Dockerfile
+    image: parsers-debug-portal:latest
+    container_name: parsers-debug-portal
+    ports:
+      - "8000:8000"
+    environment:
+      # host.docker.internal — хост-машина из Docker-контейнера
+      - PARSERS_API_URL=http://host.docker.internal:8080
+    restart: unless-stopped
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
