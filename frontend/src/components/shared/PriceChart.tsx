@@ -9,7 +9,7 @@ export function PriceChart({ data }: Props) {
   if (data.length === 0) {
     return (
       <div className="flex items-center justify-center h-32 text-gray-500 text-sm">
-        No price history
+        Нет истории цен
       </div>
     )
   }
@@ -19,6 +19,9 @@ export function PriceChart({ data }: Props) {
     price: p.price_rub,
   }))
 
+  // Форматируем как 1 234 ₽ (с неразрывными пробелами через ru-RU локаль)
+  const formatRub = (v: number) => `${v.toLocaleString('ru-RU')} ₽`
+
   return (
     <ResponsiveContainer width="100%" height={200}>
       <LineChart data={chartData} margin={{ top: 5, right: 20, left: 10, bottom: 5 }}>
@@ -26,13 +29,13 @@ export function PriceChart({ data }: Props) {
         <XAxis dataKey="date" tick={{ fill: '#9ca3af', fontSize: 11 }} />
         <YAxis
           tick={{ fill: '#9ca3af', fontSize: 11 }}
-          tickFormatter={v => `${v} ₽`}
+          tickFormatter={formatRub}
           width={72}
         />
         <Tooltip
           contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }}
           labelStyle={{ color: '#9ca3af' }}
-          formatter={(v: number) => [`${v} ₽`, 'Цена']}
+          formatter={(v: number) => [formatRub(v), 'Цена']}
         />
         <Line
           type="monotone"
