@@ -8,6 +8,8 @@ from fastapi import FastAPI, HTTPException, Query
 
 from .db import PriceDatabase
 from .service import PriceService
+from .stats_api import router as stats_router
+from .stats_api import set_db as stats_set_db
 from .stores.gaga import GagaParser
 from .stores.hobbygames import HobbyGamesParser
 from .stores.lavkaigr import LavkaIgrParser
@@ -42,6 +44,7 @@ async def lifespan(app: FastAPI):
         await _db.upsert_store(p.store)
 
     _service = PriceService(_db, parsers, cache_ttl_hours=ttl)
+    stats_set_db(_db)
 
     yield  # приложение работает
 
@@ -49,6 +52,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Board Game Price Parser", lifespan=lifespan)
+app.include_router(stats_router)
 
 # ---------------------------------------------------------------------------
 # Маршруты

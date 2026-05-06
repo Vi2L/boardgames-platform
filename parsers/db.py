@@ -43,6 +43,29 @@ CREATE TABLE IF NOT EXISTS price_observations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_obs_product ON price_observations (product_id, fetched_at DESC);
+
+CREATE TABLE IF NOT EXISTS request_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    query        TEXT    NOT NULL,
+    source       TEXT    NOT NULL,
+    result_count INTEGER NOT NULL DEFAULT 0,
+    error_count  INTEGER NOT NULL DEFAULT 0,
+    duration_ms  INTEGER,
+    errors_json  TEXT    NOT NULL DEFAULT '{}',
+    ts           TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_request_log_ts ON request_log (ts DESC);
+
+CREATE TABLE IF NOT EXISTS parser_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    store_slug   TEXT    NOT NULL,
+    success      INTEGER NOT NULL,
+    result_count INTEGER NOT NULL DEFAULT 0,
+    duration_ms  INTEGER,
+    error_msg    TEXT,
+    ts           TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_parser_log_ts ON parser_log (store_slug, ts DESC);
 """
 
 # Колонки добавлены после начального деплоя — применяем как миграцию
@@ -224,6 +247,167 @@ class PriceDatabase:
                 rows = await cur.fetchall()
 
         return {r[0] for r in rows}
+
+    # ------------------------------------------------------------------
+    # Мониторинг — запись
+    # ------------------------------------------------------------------
+
+    async def log_request(
+        self,
+        query: str,
+        source: str,
+        result_count: int,
+        error_count: int,
+        duration_ms: int | None,
+        errors: dict,
+        ts: str,
+    ) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                """
+                INSERT INTO request_log
+                    (query, source, result_count, error_count, duration_ms, errors_json, ts)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (query, source, result_count, error_count, duration_ms,
+                 json.dumps(errors, ensure_ascii=False), ts),
+            )
+            await db.commit()
+
+    async def log_parser(
+        self,
+        store_slug: str,
+        success: bool,
+        result_count: int,
+        duration_ms: int | None,
+        error_msg: str | None,
+        ts: str,
+    ) -> None:
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                """
+                INSERT INTO parser_log
+                    (store_slug, success, result_count, duration_ms, error_msg, ts)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (store_slug, 1 if success else 0, result_count, duration_ms, error_msg, ts),
+            )
+            await db.commit()
+
+    # ------------------------------------------------------------------
+    # Мониторинг — чтение
+    # ------------------------------------------------------------------
+
+    async def get_stats(self, hours: int = 24) -> dict:
+        """Сводная статистика запросов за последние N часов."""
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    COUNT(*)                                      AS total,
+                    SUM(CASE WHEN source='cache'         THEN 1 ELSE 0 END) AS cache_hits,
+                    SUM(CASE WHEN source='network'       THEN 1 ELSE 0 END) AS network_hits,
+                    SUM(CASE WHEN source='partial-cache' THEN 1 ELSE 0 END) AS partial_hits,
+                    SUM(error_count)                              AS total_errors,
+                    AVG(duration_ms)                              AS avg_ms,
+                    MAX(duration_ms)                              AS max_ms
+                FROM request_log
+                WHERE ts >= ?
+                """,
+                (cutoff,),
+            ) as cur:
+                row = await cur.fetchone()
+        total = row["total"] or 0
+        return {
+            "period_hours": hours,
+            "total_requests": total,
+            "cache_hits": row["cache_hits"] or 0,
+            "network_hits": row["network_hits"] or 0,
+            "partial_hits": row["partial_hits"] or 0,
+            "cache_hit_rate": round((row["cache_hits"] or 0) / total * 100, 1) if total else 0,
+            "total_errors": row["total_errors"] or 0,
+            "avg_response_ms": round(row["avg_ms"]) if row["avg_ms"] else None,
+            "max_response_ms": row["max_ms"],
+        }
+
+    async def get_store_stats(self) -> list[dict]:
+        """Здоровье каждого парсера: last 24h success rate, среднее время, последняя ошибка."""
+        cutoff_24h = (_utcnow() - timedelta(hours=24)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+
+            # Статистика за 24ч
+            async with db.execute(
+                """
+                SELECT
+                    store_slug,
+                    COUNT(*)                                    AS total,
+                    SUM(success)                                AS successes,
+                    AVG(CASE WHEN success=1 THEN duration_ms END) AS avg_ms,
+                    MAX(ts)                                     AS last_seen,
+                    MAX(CASE WHEN success=1 THEN ts END)        AS last_success
+                FROM parser_log
+                WHERE ts >= ?
+                GROUP BY store_slug
+                """,
+                (cutoff_24h,),
+            ) as cur:
+                stats_rows = await cur.fetchall()
+
+            # Последняя ошибка по каждому магазину (за всё время)
+            async with db.execute(
+                """
+                SELECT store_slug, error_msg, ts
+                FROM parser_log
+                WHERE success=0
+                  AND ts IN (
+                      SELECT MAX(ts) FROM parser_log WHERE success=0 GROUP BY store_slug
+                  )
+                """,
+            ) as cur:
+                error_rows = await cur.fetchall()
+
+        last_errors = {r["store_slug"]: {"msg": r["error_msg"], "ts": r["ts"]} for r in error_rows}
+
+        result = []
+        for r in stats_rows:
+            slug = r["store_slug"]
+            total = r["total"] or 0
+            succ = r["successes"] or 0
+            result.append({
+                "store_slug": slug,
+                "total_calls_24h": total,
+                "success_count_24h": succ,
+                "success_rate_24h": round(succ / total * 100, 1) if total else 0,
+                "avg_response_ms": round(r["avg_ms"]) if r["avg_ms"] else None,
+                "last_seen": r["last_seen"],
+                "last_success": r["last_success"],
+                "last_error": last_errors.get(slug),
+            })
+        return result
+
+    async def get_recent_errors(self, limit: int = 20) -> list[dict]:
+        """Последние N ошибок парсеров."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT store_slug, error_msg, duration_ms, ts
+                FROM parser_log
+                WHERE success=0
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {"store_slug": r["store_slug"], "error": r["error_msg"],
+             "duration_ms": r["duration_ms"], "ts": r["ts"]}
+            for r in rows
+        ]
 
     # ------------------------------------------------------------------
     # История цен
