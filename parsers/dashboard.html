@@ -633,12 +633,28 @@
 </div>
 
 <!-- =================================================================
-     LIVE TEST — заглушка для этапа 8
+     LIVE TEST
 ================================================================= -->
 <section data-tab-panel="livetest">
-  <section class="panel"><h2>Live Test (отладка парсеров)</h2>
-    <p class="empty">Форма запуска парсеров мимо кеша — будет добавлена на следующем этапе.</p>
+  <section class="panel">
+    <h2>Live Test — диагностический запрос мимо кеша</h2>
+    <div class="filters" style="flex-wrap:wrap;align-items:flex-start">
+      <input type="text" id="lt-query" placeholder="Запрос (например, Каркассон)" style="min-width:240px">
+      <div id="lt-stores" style="display:flex;gap:10px;align-items:center"></div>
+      <label style="display:flex;align-items:center;gap:6px;color:#94a3b8;font-size:.85rem">
+        Limit:
+        <input type="number" id="lt-limit" min="1" max="20" value="3" style="width:60px">
+      </label>
+      <button id="lt-run" style="background:#3b82f6;border:none;color:#fff;border-radius:6px;padding:8px 18px;cursor:pointer;font-size:.85rem;font-weight:500">▶ Запустить тест</button>
+      <button id="lt-cancel" style="background:#0f1117;border:1px solid #334155;color:#94a3b8;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:.85rem;display:none">Отменить</button>
+    </div>
+    <p class="empty" style="padding:8px 20px;font-size:.78rem">
+      Live Test запускает каждый выбранный парсер напрямую (минуя 4-часовой кеш) и не сохраняет результаты в БД.
+      Запись в parser_log делается с флагом is_test=1 — production-аналитика её игнорирует.
+    </p>
   </section>
+
+  <div id="lt-results"></div>
 </section>
 
 <script>
@@ -1394,8 +1410,140 @@ document.getElementById('snapshot-modal').addEventListener('click', e => {
   if (e.target.id === 'snapshot-modal') e.target.classList.remove('active');
 });
 
-// Заглушки
-async function refreshLiveTest() {}
+// ============================================================
+// Tab: Live Test — отладочный запрос мимо кеша
+// ============================================================
+let _ltStoresPopulated = false;
+let _ltAbortCtl = null;
+
+async function populateLiveTestStores() {
+  if (_ltStoresPopulated) return;
+  const inv = await safe(fetch('/api/db/stores-inventory'), []);
+  const known = inv.length ? inv : [
+    { store_slug: 'hobbygames' }, { store_slug: 'lavkaigr' },
+    { store_slug: 'gaga' }, { store_slug: 'crowdgames' },
+  ];
+  const container = document.getElementById('lt-stores');
+  container.innerHTML = known.map(s => `
+    <label style="display:flex;gap:6px;align-items:center;color:#cbd5e1;font-size:.85rem">
+      <input type="checkbox" class="lt-store-cb" value="${s.store_slug}" checked>
+      ${s.store_slug}
+    </label>`).join('');
+  _ltStoresPopulated = true;
+}
+
+async function runLiveTest() {
+  const query = document.getElementById('lt-query').value.trim();
+  if (!query) { alert('Введите запрос'); return; }
+  const checked = [...document.querySelectorAll('.lt-store-cb:checked')].map(c => c.value);
+  if (!checked.length) { alert('Выберите хотя бы один магазин'); return; }
+  const limit = parseInt(document.getElementById('lt-limit').value, 10) || 3;
+
+  const params = new URLSearchParams({ q: query, limit, stores: checked.join(',') });
+  const results = document.getElementById('lt-results');
+  results.innerHTML = `
+    <section class="panel"><h2>Выполняется…</h2>
+      <p class="empty">Парсеры работают параллельно. Это может занять 5-30 секунд (особенно у HobbyGames и CrowdGames).</p>
+    </section>`;
+
+  document.getElementById('lt-run').disabled = true;
+  document.getElementById('lt-cancel').style.display = '';
+  _ltAbortCtl = new AbortController();
+
+  try {
+    const resp = await fetch('/api/debug/parse?' + params, { signal: _ltAbortCtl.signal });
+    if (!resp.ok) {
+      results.innerHTML = `<section class="panel"><h2>Ошибка</h2><p class="empty">${resp.status} ${resp.statusText}</p></section>`;
+      return;
+    }
+    const data = await resp.json();
+    renderLiveTestResults(data);
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      results.innerHTML = '<section class="panel"><h2>Отменено</h2><p class="empty">Запрос прерван пользователем.</p></section>';
+    } else {
+      results.innerHTML = `<section class="panel"><h2>Ошибка</h2><p class="empty">${e.message}</p></section>`;
+    }
+  } finally {
+    document.getElementById('lt-run').disabled = false;
+    document.getElementById('lt-cancel').style.display = 'none';
+  }
+}
+
+function renderLiveTestResults(data) {
+  const container = document.getElementById('lt-results');
+  const stores = Object.entries(data.results);
+  container.innerHTML = stores.map(([slug, r]) => {
+    const m = r.metrics || {};
+    const errorBox = r.error
+      ? `<div style="padding:12px 20px;background:#450a0a;color:#f87171;border-bottom:1px solid #334155;font-size:.85rem">⚠ ${escapeHtml(r.error)}</div>`
+      : '';
+    const metrics = `
+      <div class="meta-grid" style="grid-template-columns:repeat(auto-fit,minmax(120px,1fr));padding:12px 20px;border-bottom:1px solid #334155">
+        <div class="meta-item"><div class="meta-label">Найдено</div><div class="meta-value">${r.count}</div></div>
+        <div class="meta-item"><div class="meta-label">Total</div><div class="meta-value" style="font-size:.95rem">${fmtMs(r.duration_ms)}</div></div>
+        <div class="meta-item"><div class="meta-label">Search</div><div class="meta-value" style="font-size:.95rem">${fmtMs(m.search_ms)}</div></div>
+        <div class="meta-item"><div class="meta-label">Enrich</div><div class="meta-value" style="font-size:.95rem">${fmtMs(m.enrich_ms)}</div></div>
+        <div class="meta-item"><div class="meta-label">HTTP</div><div class="meta-value">${m.http_requests ?? '—'}</div></div>
+        <div class="meta-item"><div class="meta-label">Enriched</div><div class="meta-value">${m.result_after_enrich ?? '—'}</div></div>
+      </div>`;
+
+    const products = r.products.length
+      ? r.products.map(p => `
+        <details style="border-bottom:1px solid #1e293b">
+          <summary style="padding:10px 20px;cursor:pointer;color:#cbd5e1;display:flex;align-items:center;gap:10px">
+            ${p.image_url ? `<img class="product-thumb" src="${p.image_url}" loading="lazy">` : ''}
+            <span style="flex:1">${escapeHtml(p.title)}</span>
+            <span style="color:#94a3b8;font-variant-numeric:tabular-nums">${p.price_rub.toLocaleString('ru')} ₽</span>
+            <span style="color:#475569;font-size:.78rem">${p.external_id}</span>
+          </summary>
+          <div style="padding:12px 20px;background:#0f1117">
+            ${p.image_url_hd ? `<img src="${p.image_url_hd}" style="max-width:200px;max-height:200px;border-radius:6px;margin-bottom:12px;display:block">` : ''}
+            <div class="modal-grid" style="grid-template-columns:repeat(auto-fit,minmax(160px,1fr))">
+              ${[
+                ['external_id', p.external_id],
+                ['url', `<a href="${p.url}" target="_blank" style="color:#3b82f6">link</a>`],
+                ['price (kop)', p.price],
+                ['price_rub', p.price_rub],
+                ['players', p.players],
+                ['age_min', p.age_min],
+                ['playtime', p.playtime],
+                ['rules_url', p.rules_url ? `<a href="${p.rules_url}" target="_blank" style="color:#3b82f6">PDF</a>` : null],
+                ['description', p.description],
+              ].map(([k, v]) => `
+                <div><div class="field-name">${k}</div>
+                  <div class="field-value" style="${v == null ? 'color:#475569' : ''}">${v ?? '— null —'}</div>
+                </div>`).join('')}
+            </div>
+            <h4 style="font-size:.75rem;color:#94a3b8;text-transform:uppercase;letter-spacing:.04em;margin:14px 0 6px">raw</h4>
+            <pre>${escapeHtml(JSON.stringify(p.raw, null, 2))}</pre>
+          </div>
+        </details>`).join('')
+      : '<p class="empty">Парсер не вернул товаров</p>';
+
+    return `
+      <section class="panel" style="margin-bottom:14px">
+        <h2 style="display:flex;justify-content:space-between;align-items:center">
+          <span>${slug}</span>
+          <span class="badge ${r.error ? 'badge-red' : (r.count > 0 ? 'badge-green' : 'badge-yellow')}">
+            ${r.error ? 'ERROR' : (r.count > 0 ? 'OK' : 'EMPTY')}
+          </span>
+        </h2>
+        ${errorBox}
+        ${metrics}
+        ${products}
+      </section>`;
+  }).join('');
+}
+
+document.getElementById('lt-run').addEventListener('click', runLiveTest);
+document.getElementById('lt-cancel').addEventListener('click', () => {
+  if (_ltAbortCtl) _ltAbortCtl.abort();
+});
+
+async function refreshLiveTest() {
+  await populateLiveTestStores();
+}
 
 // ============================================================
 // Tab router (hash-based)

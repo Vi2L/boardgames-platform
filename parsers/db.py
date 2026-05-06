@@ -103,6 +103,9 @@ _MIGRATIONS = [
     "ALTER TABLE parser_log ADD COLUMN enrich_ms INTEGER",
     "ALTER TABLE parser_log ADD COLUMN http_requests INTEGER",
     "ALTER TABLE parser_log ADD COLUMN result_after_enrich INTEGER",
+    # Этап 8 — флаг "тестовый запуск" (Live Test). Все аналитические запросы
+    # фильтруют is_test=0, чтобы UI-эксперименты не искажали production-метрики.
+    "ALTER TABLE parser_log ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0",
 ]
 
 
@@ -313,6 +316,7 @@ class PriceDatabase:
         enrich_ms: int | None = None,
         http_requests: int | None = None,
         result_after_enrich: int | None = None,
+        is_test: bool = False,
     ) -> None:
         """Лог одного вызова parser.search().
 
@@ -325,11 +329,11 @@ class PriceDatabase:
                 """
                 INSERT INTO parser_log
                     (store_slug, success, result_count, duration_ms, error_msg, ts,
-                     search_ms, enrich_ms, http_requests, result_after_enrich)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     search_ms, enrich_ms, http_requests, result_after_enrich, is_test)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (store_slug, 1 if success else 0, result_count, duration_ms, error_msg, ts,
-                 search_ms, enrich_ms, http_requests, result_after_enrich),
+                 search_ms, enrich_ms, http_requests, result_after_enrich, 1 if is_test else 0),
             )
             await db.commit()
 
@@ -388,21 +392,22 @@ class PriceDatabase:
                     MAX(ts)                                     AS last_seen,
                     MAX(CASE WHEN success=1 THEN ts END)        AS last_success
                 FROM parser_log
-                WHERE ts >= ?
+                WHERE ts >= ? AND is_test = 0
                 GROUP BY store_slug
                 """,
                 (cutoff_24h,),
             ) as cur:
                 stats_rows = await cur.fetchall()
 
-            # Последняя ошибка по каждому магазину (за всё время)
+            # Последняя ошибка по каждому магазину (за всё время, исключая Live Test)
             async with db.execute(
                 """
                 SELECT store_slug, error_msg, ts
                 FROM parser_log
-                WHERE success=0
+                WHERE success=0 AND is_test = 0
                   AND ts IN (
-                      SELECT MAX(ts) FROM parser_log WHERE success=0 GROUP BY store_slug
+                      SELECT MAX(ts) FROM parser_log
+                      WHERE success=0 AND is_test = 0 GROUP BY store_slug
                   )
                 """,
             ) as cur:
@@ -435,7 +440,7 @@ class PriceDatabase:
                 """
                 SELECT store_slug, error_msg, duration_ms, ts
                 FROM parser_log
-                WHERE success=0
+                WHERE success=0 AND is_test = 0
                 ORDER BY ts DESC
                 LIMIT ?
                 """,
@@ -607,7 +612,7 @@ class PriceDatabase:
                     AVG(result_count)     AS avg_results,
                     AVG(CASE WHEN success=1 THEN duration_ms END) AS avg_ms
                 FROM parser_log
-                WHERE ts >= ?
+                WHERE ts >= ? AND is_test = 0
                 GROUP BY store_slug
                 ORDER BY calls DESC
                 """,
@@ -650,7 +655,7 @@ class PriceDatabase:
                   AVG(CASE WHEN success=1 THEN http_requests END) AS avg_http_requests,
                   SUM(CASE WHEN success=1 THEN 1 ELSE 0 END)     AS successes
                 FROM parser_log
-                WHERE ts >= ?
+                WHERE ts >= ? AND is_test = 0
                 GROUP BY store_slug
                 ORDER BY calls DESC
                 """,
@@ -696,7 +701,7 @@ class PriceDatabase:
                   AVG(CASE WHEN success=1 THEN search_ms END) AS avg_search_ms,
                   AVG(CASE WHEN success=1 THEN enrich_ms END) AS avg_enrich_ms
                 FROM parser_log
-                WHERE ts >= ?
+                WHERE ts >= ? AND is_test = 0
                 GROUP BY store_slug, ts_bucket
                 ORDER BY ts_bucket
                 """,
@@ -755,7 +760,7 @@ class PriceDatabase:
                 """
                 SELECT store_slug, duration_ms, ts
                 FROM parser_log
-                WHERE ts >= ? AND success=1 AND result_count=0
+                WHERE ts >= ? AND success=1 AND result_count=0 AND is_test = 0
                 ORDER BY ts DESC
                 LIMIT ?
                 """,

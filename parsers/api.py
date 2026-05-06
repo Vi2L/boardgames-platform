@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 
@@ -124,3 +127,96 @@ def _product_to_dict(p) -> dict:
         # raw содержит gallery, tags, dimensions, rating и т.д.
         "extra": p.raw,
     }
+
+
+def _parsed_product_to_dict_full(p) -> dict:
+    """Сериализатор ParsedProduct прямо из парсера (минуя БД).
+
+    Отдаёт оба формата цены: price (копейки) для отладки и price_rub (рубли)
+    для удобства чтения.
+    """
+    return {
+        "store_slug": p.store_slug,
+        "external_id": p.external_id,
+        "title": p.title,
+        "price": p.price,  # копейки — сырое значение из парсера
+        "price_rub": round(p.price / 100, 2),
+        "url": p.url,
+        "image_url": p.image_url,
+        "image_url_hd": p.image_url_hd,
+        "description": p.description,
+        "players": p.players,
+        "age_min": p.age_min,
+        "playtime": p.playtime,
+        "rules_url": p.rules_url,
+        "raw": p.raw,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Live Test — диагностический endpoint мимо кеша
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/debug/parse")
+async def debug_parse(
+    q: str = Query(..., min_length=1, description="Запрос для парсера"),
+    stores: str | None = Query(None, description="Фильтр по магазинам через запятую"),
+    limit: int = Query(5, ge=1, le=20),
+):
+    """Запустить парсеры мимо кеша и вернуть сырые ParsedProduct + метрики.
+
+    В отличие от /search этот endpoint:
+    - НЕ читает кеш
+    - НЕ сохраняет товары в products / price_observations
+    - НЕ пишет в request_log
+    - В parser_log пишет с is_test=1 — все аналитические запросы это исключают
+    """
+    target_slugs = (
+        [s.strip() for s in stores.split(",")] if stores else list(_service._parsers)
+    )
+
+    async def _run(slug: str):
+        parser = _service._parsers.get(slug)
+        if parser is None:
+            return slug, {"error": f"unknown store: {slug}", "products": [], "count": 0}
+        t0 = time.monotonic()
+        try:
+            products = await parser.search(q, limit=limit)
+            elapsed = int((time.monotonic() - t0) * 1000)
+            metrics = getattr(parser, "last_metrics", None)
+            # await, не create_task — диагностический endpoint, доли мс не важны,
+            # зато гарантия записи (важно для тестов и для отладки самих логов)
+            await _db.log_parser(
+                store_slug=slug, success=True, result_count=len(products),
+                duration_ms=elapsed, error_msg=None,
+                ts=datetime.now(timezone.utc).isoformat(),
+                search_ms=metrics.search_ms if metrics else None,
+                enrich_ms=metrics.enrich_ms if metrics else None,
+                http_requests=metrics.http_requests if metrics else None,
+                result_after_enrich=metrics.result_after_enrich if metrics else None,
+                is_test=True,
+            )
+            return slug, {
+                "products": [_parsed_product_to_dict_full(p) for p in products],
+                "count": len(products),
+                "duration_ms": elapsed,
+                "metrics": asdict(metrics) if metrics else None,
+                "error": None,
+            }
+        except Exception as e:
+            elapsed = int((time.monotonic() - t0) * 1000)
+            await _db.log_parser(
+                store_slug=slug, success=False, result_count=0,
+                duration_ms=elapsed, error_msg=str(e),
+                ts=datetime.now(timezone.utc).isoformat(),
+                is_test=True,
+            )
+            return slug, {
+                "products": [], "count": 0,
+                "duration_ms": elapsed,
+                "metrics": None, "error": str(e),
+            }
+
+    results = await asyncio.gather(*[_run(s) for s in target_slugs])
+    return {"query": q, "results": dict(results)}
