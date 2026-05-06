@@ -16,36 +16,50 @@
 
 ## HobbyGames (hobbygames.ru)
 
-> **Геоблок**: сайт возвращает заглушку с зарубежных IP. Проверка невозможна — реализация основана на типичной структуре OpenCart.
+Работает с любого IP. Геоблок снят.
 
-**Технология поиска**: `GET /search?query=<текст>` → HTML (OpenCart SSR)  
-**Технология детальной страницы**: `GET /<slug>/` → HTML + JSON-LD (`@type: Product`)
+**Технология поиска**: `GET /catalog/search?keyword=<текст>` → HTML со встроенным JSON-LD `ItemList`  
+**Технология детальной страницы**: `GET /<slug>/` → HTML + JSON-LD `Product`
 
-### Страница поиска (`/search?query=...`)
+### Страница поиска (`/catalog/search?keyword=...`)
+
+Данные берутся из **JSON-LD `ItemList`** — HTML-парсинг не нужен.  
+Числовой `external_id` — из атрибута `data-product_id` карточек `.product-card`.
 
 | Поле | Источник | Статус |
 |------|----------|--------|
-| Название | `<a title="...">` или `<h4 class="name">` | ✅ |
-| URL товара | `href` ссылки | ✅ |
-| External ID | slug из URL | ✅ |
-| Цена | `<span class="price">` | ✅ |
-| Изображение (thumbnail) | `<img data-src="...">` | ✅ |
+| Название | JSON-LD `"name"` | ✅ |
+| URL товара | JSON-LD `"url"` | ✅ |
+| External ID | `<div data-product_id="...">` → fallback: slug из URL | ✅ |
+| Цена | JSON-LD `offers.price` (в рублях) | ✅ |
+| Изображение (thumbnail) | JSON-LD `"image"` + базовый URL кеша | ✅ |
+| Описание (краткое) | JSON-LD `"description"` | ✅ |
+| Наличие | JSON-LD `offers.availability` (`InStock`) | 📦 `raw["availability"]` |
 
 ### Страница товара (`/<slug>/`)
 
 | Поле | Источник | Статус |
 |------|----------|--------|
-| Изображение HD | JSON-LD `"image"` → fallback `og:image` | ✅ |
-| Описание | JSON-LD `"description"` → fallback `og:description` | ✅ |
-| Кол-во игроков | JSON-LD `additionalProperty` name≈"игроков" | ✅ |
-| Минимальный возраст | JSON-LD `additionalProperty` name≈"возраст" | ✅ |
-| Время партии | JSON-LD `additionalProperty` name≈"время" | ✅ |
-| Правила PDF | `<a href="...pdf">` | ✅ |
-| Галерея | `"https://hobbygames.ru/image/..."` из JS | 📦 |
-| Итого JSON-LD полей | зависит от темы магазина | 📦 |
-| Отзывы / рейтинг | на странице есть, в JSON-LD нет | ❌ |
+| Изображение HD | `og:image` — полный абсолютный URL | ✅ |
+| Описание | JSON-LD Product `"description"` | ✅ |
+| Категория | JSON-LD Product `"category"` | 📦 `raw["category"]` |
+| SKU | JSON-LD Product `"sku"` | 📦 `raw["sku"]` |
+| Правила PDF | `<a href="/download/rules/...pdf">` | ✅ |
+| Галерея | `"https://hobbygames.ru/image/..."` из страницы | 📦 `raw["gallery"]` |
+| Кол-во игроков | нет в структурированных данных | ❌ |
+| Возраст | нет в структурированных данных | ❌ |
+| Время партии | нет в структурированных данных | ❌ |
+| Рейтинг / отзывы | на странице есть, не в JSON-LD | ❌ |
 | Состав | нет структурированных данных | ❌ |
-| Теги / механики | нет в OpenCart по умолчанию | ❌ |
+
+**Реальные данные (Каркассон):**
+```
+external_id="72557" (числовой data-product_id)
+price=1990 руб. | in_stock=True
+rules_url="https://hobbygames.ru/download/rules/Carcassonne2019_Rules.pdf"
+image_url_hd="https://hobbygames.ru/image/data/HobbyWorld/Karkasson/2022/..."
+raw["category"]="Семейные игры" | raw["sku"]="UT-00018963"
+```
 
 ---
 
