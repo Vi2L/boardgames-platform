@@ -320,7 +320,7 @@ const data = await res.json();
       "age_min": 8,
       "playtime": "30-45 мин.",
       "rules_url": "https://media.lavkaigr.ru/uploads/Carcassonne2019_Rules.pdf",
-      "fetched_at": "2026-05-06T18:47:58.722698+00:00",
+      "fetched_at": "2026-05-06T19:36:12.232581+00:00",
       "extra": {
         "category": "family",
         "complexity": "3 мин",
@@ -332,7 +332,24 @@ const data = await res.json();
         ],
         "gallery": [
           "https://media.lavkaigr.ru/cache/63/d1/63d1940c2a20241e0845b845c718e18a.png",
-          "https://media.lavkaigr.ru/cache/65/f5/65f58aceb28a79f70e29539904266a57.png"
+          "https://media.lavkaigr.ru/cache/65/f5/65f58aceb28a79f70e29539904266a57.png",
+          "https://media.lavkaigr.ru/cache/38/76/38761ccca5be8e37733dcac607221af9.png",
+          "https://media.lavkaigr.ru/cache/5a/8a/5a8a50e299016a496d4c40beb6d409ba.png",
+          "https://media.lavkaigr.ru/cache/f2/0c/f20c3ed821e9800460324fa98e44098e.png",
+          "https://media.lavkaigr.ru/cache/d2/a9/d2a957a8ed643d5cc8e268a5784aa229.png",
+          "https://media.lavkaigr.ru/cache/f1/57/f1570ac217817d950f07f66a9d93895c.png",
+          "https://media.lavkaigr.ru/cache/19/47/1947d8401c5951de86bdba639efdf82c.png",
+          "https://media.lavkaigr.ru/cache/ec/e5/ece54d872eb2a8d94e043ed635418679.png",
+          "https://media.lavkaigr.ru/cache/db/4c/db4c71b1f22106a20bc8b476fd7bc233.png",
+          "https://media.lavkaigr.ru/cache/cb/cb/cbcb019f3d32cdef66c99a7958b83aa1.png",
+          "https://media.lavkaigr.ru/cache/b5/2c/b52c8f11914127788434e0e63f5d7e87.png",
+          "https://media.lavkaigr.ru/cache/cf/1f/cf1f60d09f8da2a0dbcc9ca92b7a4d00.png",
+          "https://media.lavkaigr.ru/cache/b1/85/b18557c1a1680b1ddeef541cc7c1163d.png",
+          "https://media.lavkaigr.ru/cache/d8/8a/d88aa866b58fa9dd09f2e6e7f6f6085c.png",
+          "https://media.lavkaigr.ru/cache/94/b8/94b82f790d76e8452906731e35f1fa87.png",
+          "https://media.lavkaigr.ru/cache/6e/2b/6e2b5a89b4fbb37a54e04e6bd0e36679.png",
+          "https://media.lavkaigr.ru/cache/e4/0b/e40bd920646d04bc92e05980fec07266.png",
+          "https://media.lavkaigr.ru/cache/d4/b0/d4b03a54e747193b3f51decde5b907ab.png"
         ],
         "composition": [
           "Каркассон (2019)",
@@ -346,6 +363,12 @@ const data = await res.json();
   ]
 }
 ```
+
+> **Лавка Игр-специфика:**
+> - `extra.tags` — игровые механики (есть не у всех игр)
+> - `extra.category` — slug категории из URL (`"family"`, `"strategicheskie"`, `"abstraktnye"` и т.д.)
+> - `extra.rules` — массив объектов `{url, name}` с именованными PDF
+> - `extra.gallery` — 19 thumbnail-изображений (~480px), все одного товара
 
 ### `/search?q=Каркассон&stores=gaga&limit=1`
 
