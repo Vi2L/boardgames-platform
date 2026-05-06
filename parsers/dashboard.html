@@ -19,7 +19,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    margin-bottom: 28px;
+    margin-bottom: 18px;
+    flex-wrap: wrap;
+    gap: 12px;
   }
 
   header h1 { font-size: 1.25rem; font-weight: 600; color: #f8fafc; }
@@ -43,12 +45,39 @@
   }
   button#refresh:hover { background: #273344; color: #e2e8f0; }
 
+  /* ---- Tabs nav ---- */
+  nav.tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid #334155;
+    margin-bottom: 24px;
+    overflow-x: auto;
+  }
+
+  nav.tabs button {
+    background: transparent;
+    border: none;
+    color: #64748b;
+    padding: 10px 16px;
+    font-size: 0.85rem;
+    font-weight: 500;
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: color .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  nav.tabs button:hover { color: #cbd5e1; }
+  nav.tabs button.active {
+    color: #f8fafc;
+    border-bottom-color: #3b82f6;
+  }
+
   /* ---- Cards ---- */
   .cards {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     gap: 14px;
-    margin-bottom: 28px;
+    margin-bottom: 24px;
   }
 
   .card {
@@ -80,7 +109,7 @@
   }
 
   /* ---- Section ---- */
-  section {
+  section.panel {
     background: #1e293b;
     border: 1px solid #334155;
     border-radius: 10px;
@@ -88,7 +117,7 @@
     overflow: hidden;
   }
 
-  section h2 {
+  section.panel h2 {
     font-size: 0.85rem;
     font-weight: 600;
     color: #94a3b8;
@@ -98,7 +127,7 @@
     letter-spacing: .05em;
   }
 
-  /* ---- Store table ---- */
+  /* ---- Tables ---- */
   table {
     width: 100%;
     border-collapse: collapse;
@@ -167,7 +196,7 @@
   .error-slug { color: #94a3b8; font-weight: 500; }
   .error-msg { color: #ef4444; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
-  .empty { padding: 24px 20px; color: #475569; font-size: 0.85rem; }
+  .empty { padding: 24px 20px; color: #475569; font-size: 0.85rem; text-align: center; }
 
   .spinner {
     display: inline-block;
@@ -181,6 +210,10 @@
   }
 
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ---- Tab panels ---- */
+  [data-tab-panel] { display: none; }
+  [data-tab-panel].active { display: block; }
 </style>
 </head>
 <body>
@@ -189,43 +222,98 @@
   <h1>⬡ Board Game Parser &mdash; Monitor</h1>
   <div class="meta">
     <span id="updated">—</span>
-    <button id="refresh" onclick="load()">⟳ Обновить</button>
+    <button id="refresh">⟳ Обновить</button>
   </div>
 </header>
 
-<!-- Карточки сводки -->
-<div class="cards" id="cards">
-  <div class="card"><div class="card-label">Запросов / 24ч</div><div class="card-value" id="c-total">—</div></div>
-  <div class="card"><div class="card-label">Cache hit rate</div><div class="card-value" id="c-cache">—</div><div class="card-sub" id="c-cache-sub"></div></div>
-  <div class="card"><div class="card-label">Ср. время ответа</div><div class="card-value" id="c-avg">—</div></div>
-  <div class="card"><div class="card-label">Ошибок парсеров</div><div class="card-value" id="c-errors">—</div></div>
-</div>
+<nav class="tabs" id="tabs-nav">
+  <button data-tab="overview">Обзор</button>
+  <button data-tab="parsers">Парсеры</button>
+  <button data-tab="queries">Запросы</button>
+  <button data-tab="errors">Ошибки</button>
+  <button data-tab="database">База данных</button>
+  <button data-tab="livetest">Live Test</button>
+</nav>
 
-<!-- Здоровье парсеров -->
-<section>
-  <h2>Здоровье парсеров (24ч)</h2>
-  <table>
-    <thead><tr>
-      <th>Магазин</th>
-      <th>Статус</th>
-      <th>Успешно</th>
-      <th>Ср. время</th>
-      <th>Последний успех</th>
-      <th>Последняя ошибка</th>
-    </tr></thead>
-    <tbody id="store-tbody"><tr><td colspan="6" class="empty">Загрузка…</td></tr></tbody>
-  </table>
+<!-- =================================================================
+     ОБЗОР
+================================================================= -->
+<section data-tab-panel="overview">
+  <div class="cards" id="cards">
+    <div class="card"><div class="card-label">Запросов / 24ч</div><div class="card-value" id="c-total">—</div></div>
+    <div class="card"><div class="card-label">Cache hit rate</div><div class="card-value" id="c-cache">—</div><div class="card-sub" id="c-cache-sub"></div></div>
+    <div class="card"><div class="card-label">Ср. время ответа</div><div class="card-value" id="c-avg">—</div></div>
+    <div class="card"><div class="card-label">Ошибок парсеров</div><div class="card-value" id="c-errors">—</div></div>
+  </div>
+
+  <section class="panel">
+    <h2>Здоровье парсеров (24ч)</h2>
+    <table>
+      <thead><tr>
+        <th>Магазин</th>
+        <th>Статус</th>
+        <th>Успешно</th>
+        <th>Ср. время</th>
+        <th>Последний успех</th>
+        <th>Последняя ошибка</th>
+      </tr></thead>
+      <tbody id="store-tbody"><tr><td colspan="6" class="empty">Загрузка…</td></tr></tbody>
+    </table>
+  </section>
 </section>
 
-<!-- Последние ошибки -->
-<section>
-  <h2>Последние ошибки</h2>
-  <ul class="error-list" id="error-list">
-    <li class="error-item"><span class="error-ts" colspan="3">Загрузка…</span></li>
-  </ul>
+<!-- =================================================================
+     ПАРСЕРЫ — заглушка для этапов 5-7
+================================================================= -->
+<section data-tab-panel="parsers">
+  <section class="panel"><h2>Парсеры — детальная аналитика</h2>
+    <p class="empty">Heatmap покрытия полей, breakdown search/enrich, snapshots — будут добавлены на следующих этапах.</p>
+  </section>
+</section>
+
+<!-- =================================================================
+     ЗАПРОСЫ — заглушка для этапа 3
+================================================================= -->
+<section data-tab-panel="queries">
+  <section class="panel"><h2>Запросы и аналитика</h2>
+    <p class="empty">Топ запросов, latency percentiles, графики — будут добавлены на следующем этапе.</p>
+  </section>
+</section>
+
+<!-- =================================================================
+     ОШИБКИ — расширенная версия
+================================================================= -->
+<section data-tab-panel="errors">
+  <section class="panel">
+    <h2>Последние ошибки парсеров</h2>
+    <ul class="error-list" id="error-list">
+      <li class="error-item"><span class="error-ts">Загрузка…</span></li>
+    </ul>
+  </section>
+</section>
+
+<!-- =================================================================
+     БАЗА ДАННЫХ — заглушка для этапа 4
+================================================================= -->
+<section data-tab-panel="database">
+  <section class="panel"><h2>База данных</h2>
+    <p class="empty">Размер БД, инвентарь магазинов, обозреватель товаров — будут добавлены на следующем этапе.</p>
+  </section>
+</section>
+
+<!-- =================================================================
+     LIVE TEST — заглушка для этапа 8
+================================================================= -->
+<section data-tab-panel="livetest">
+  <section class="panel"><h2>Live Test (отладка парсеров)</h2>
+    <p class="empty">Форма запуска парсеров мимо кеша — будет добавлена на следующем этапе.</p>
+  </section>
 </section>
 
 <script>
+// ============================================================
+// Утилиты форматирования
+// ============================================================
 const fmtMs = ms => ms == null ? '—' : ms < 1000 ? `${ms} мс` : `${(ms/1000).toFixed(1)} с`;
 const fmtTs = iso => iso ? new Date(iso).toLocaleTimeString('ru', {hour:'2-digit', minute:'2-digit', second:'2-digit'}) : '—';
 const fmtDate = iso => iso ? new Date(iso).toLocaleString('ru', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'}) : '—';
@@ -243,16 +331,19 @@ function badgeClass(rate) {
   return 'badge-red';
 }
 
-async function load() {
-  document.getElementById('updated').innerHTML = 'Загрузка… <span class="spinner"></span>';
+// Граф ошибок и плейсхолдер для безопасных fetch'ей
+const safe = (promise, fallback) => promise.then(r => r.ok ? r.json() : fallback).catch(() => fallback);
 
-  const [stats, stores, errors] = await Promise.all([
-    fetch('/api/stats').then(r => r.json()).catch(() => null),
-    fetch('/api/stats/stores').then(r => r.json()).catch(() => []),
-    fetch('/api/stats/errors').then(r => r.json()).catch(() => []),
+// ============================================================
+// Refresh-функции по табам
+// ============================================================
+
+async function refreshOverview() {
+  const [stats, stores] = await Promise.all([
+    safe(fetch('/api/stats'), null),
+    safe(fetch('/api/stats/stores'), []),
   ]);
 
-  // Карточки
   if (stats) {
     document.getElementById('c-total').textContent = stats.total_requests;
     document.getElementById('c-cache').textContent = stats.cache_hit_rate + '%';
@@ -262,15 +353,13 @@ async function load() {
     document.getElementById('c-errors').textContent = stats.total_errors;
   }
 
-  // Таблица парсеров
   const tbody = document.getElementById('store-tbody');
   if (!stores.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="empty">Нет данных за 24 часа</td></tr>';
   } else {
     tbody.innerHTML = stores.map(s => {
       const rate = s.success_rate_24h;
-      const dc = dotClass(rate);
-      const bc = badgeClass(rate);
+      const dc = dotClass(rate), bc = badgeClass(rate);
       const lastErr = s.last_error ? `${fmtDate(s.last_error.ts)}: ${s.last_error.msg || ''}` : '—';
       return `
         <tr>
@@ -283,8 +372,10 @@ async function load() {
         </tr>`;
     }).join('');
   }
+}
 
-  // Список ошибок
+async function refreshErrors() {
+  const errors = await safe(fetch('/api/stats/errors?limit=50'), []);
   const list = document.getElementById('error-list');
   if (!errors.length) {
     list.innerHTML = '<li class="empty">Ошибок нет 🎉</li>';
@@ -296,12 +387,69 @@ async function load() {
         <span class="error-msg" title="${e.error || ''}">${e.error || '—'}</span>
       </li>`).join('');
   }
-
-  document.getElementById('updated').textContent = 'Обновлено: ' + fmtTs(new Date().toISOString());
 }
 
-load();
-setInterval(load, 30_000);
+// Заглушки для не-реализованных табов (заполняются на этапах 3-8)
+async function refreshQueries() {}
+async function refreshParsers() {}
+async function refreshDatabase() {}
+async function refreshLiveTest() {}
+
+// ============================================================
+// Tab router (hash-based)
+// ============================================================
+const tabs = {
+  overview: { refresh: refreshOverview },
+  parsers:  { refresh: refreshParsers  },
+  queries:  { refresh: refreshQueries  },
+  errors:   { refresh: refreshErrors   },
+  database: { refresh: refreshDatabase },
+  livetest: { refresh: refreshLiveTest },
+};
+
+let currentTab = 'overview';
+let pollInterval = null;
+const POLL_MS = 30_000;
+
+async function activateTab(name) {
+  if (!(name in tabs)) name = 'overview';
+  currentTab = name;
+
+  document.querySelectorAll('[data-tab]').forEach(b =>
+    b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('[data-tab-panel]').forEach(p =>
+    p.classList.toggle('active', p.dataset.tabPanel === name));
+
+  history.replaceState(null, '', `#tab=${name}`);
+
+  // Polling: один interval, обновляющий активный таб
+  if (pollInterval) clearInterval(pollInterval);
+  await refreshActive();
+  pollInterval = setInterval(refreshActive, POLL_MS);
+}
+
+async function refreshActive() {
+  document.getElementById('updated').innerHTML = 'Загрузка… <span class="spinner"></span>';
+  try {
+    await tabs[currentTab].refresh();
+  } finally {
+    document.getElementById('updated').textContent = 'Обновлено: ' + fmtTs(new Date().toISOString());
+  }
+}
+
+// Обработчики кликов
+document.getElementById('tabs-nav').addEventListener('click', e => {
+  if (e.target.matches('[data-tab]')) activateTab(e.target.dataset.tab);
+});
+document.getElementById('refresh').addEventListener('click', refreshActive);
+window.addEventListener('hashchange', () => {
+  const m = location.hash.match(/tab=([^&]+)/);
+  if (m && m[1] !== currentTab) activateTab(m[1]);
+});
+
+// Инициализация: читаем таб из hash
+const initialTab = (location.hash.match(/tab=([^&]+)/) || [, 'overview'])[1];
+activateTab(initialTab);
 </script>
 </body>
 </html>
