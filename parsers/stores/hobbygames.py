@@ -115,17 +115,23 @@ class HobbyGamesParser(StoreParser):
         if m:
             extra["image_url_hd"] = m.group(1)
 
-        # Правила PDF
+        # Правила PDF — несколько файлов могут присутствовать (основные + соло и т.д.)
+        # Предпочитаем файл без "solo" в имени как основной
         rules = list(dict.fromkeys(
             re.findall(r'href="(/download/rules/[^"]+\.pdf)"', page, re.I)
         ))
         if rules:
-            extra["rules_url"] = STORE.base_url + rules[0]
+            primary = next((r for r in rules if "solo" not in r.lower()), rules[0])
+            extra["rules_url"] = STORE.base_url + primary
             raw["rules"] = [STORE.base_url + r for r in rules]
 
-        # Галерея (дополнительные изображения товара)
+        # Галерея — только изображения самого товара.
+        # Путь продуктовых картинок всегда содержит /data/<Производитель>/<Название>/
+        # и НЕ содержит -new/, /manufacturer/, /common_avatars/, /video/, /menu/, /footer/
+        _SKIP = ("-new/", "/manufacturer/", "/common_avatars/", "/video/", "/menu/", "/footer/")
         gallery = list(dict.fromkeys(
-            re.findall(r'"(https://hobbygames\.ru/image/[^"]+)"', page)
+            url for url in re.findall(r'"(https://hobbygames\.ru/image/[^"]+\.(?:jpg|jpeg|png|webp))"', page)
+            if not any(s in url for s in _SKIP)
         ))
         if gallery:
             raw["gallery"] = gallery

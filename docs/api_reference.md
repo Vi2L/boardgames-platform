@@ -219,13 +219,15 @@ const data = await res.json();
 
 | Ключ | Тип | Магазины | Описание |
 |------|-----|----------|----------|
-| `gallery` | string[] | все | Список URL изображений (от 0 до 19 штук). Лавка — thumbnail-кеш, GaGa — fullsize |
+| `gallery` | string[] | все | Список URL изображений. Лавка — thumbnail-кеш (~19 шт.), GaGa — fullsize (~8 шт.), HobbyGames — все размеры одного фото + обложки дополнений (~38 URL) |
+| `availability` | boolean | hobbygames | `true` — товар в наличии |
+| `sku` | string | hobbygames | Артикул, e.g. `"UT-00018963"` |
 | `tags` | string[] | lavkaigr | Игровые механики, e.g. `["выкладывание плиток"]` |
-| `category` | string | lavkaigr | Slug категории из URL, e.g. `"family"`, `"strategicheskie"` |
+| `category` | string | hobbygames, lavkaigr | HobbyGames: `"Семейные игры"`. Лавка: slug из URL `"family"` |
 | `language` | string | lavkaigr | Язык игры, e.g. `"Русский"` |
-| `complexity` | string | все | Сложность: `"правила простые"` (GaGa) или время освоения `"3 мин"` (Лавка) |
-| `rules` | array | все | Все PDF правил. Лавка: `[{"url": "...", "name": "..."}]`. GaGa: `["url1", "url2"]` |
-| `composition` | string[] / string | все | Состав игры. Лавка: массив строк. GaGa: одна строка с `•` как разделителем |
+| `complexity` | string | lavkaigr, gaga | GaGa: `"правила простые"`. Лавка: время освоения `"3 мин"` |
+| `rules` | array | все | Все PDF правил. Лавка: `[{"url": "...", "name": "..."}]`. GaGa и HobbyGames: `["url1", "url2"]` |
+| `composition` | string[] / string | lavkaigr, gaga | Состав игры. Лавка: массив строк. GaGa: одна строка с `•` как разделителем |
 | `rating` | string | gaga | Рейтинг из 5, e.g. `"4.8"` |
 | `review_count` | string | gaga | Количество отзывов, e.g. `"12"` |
 | `ranking` | string | gaga | Место в рейтинге сайта, e.g. `"2 место"` |
@@ -387,6 +389,56 @@ const data = await res.json();
   ]
 }
 ```
+
+### `/search?q=Каркассон&stores=hobbygames&limit=1`
+
+```json
+{
+  "source": "network",
+  "errors": {},
+  "products": [
+    {
+      "id": 4,
+      "store_slug": "hobbygames",
+      "title": "Каркассон",
+      "price_rub": 1990.0,
+      "url": "https://hobbygames.ru/karkasson",
+      "image_url": "https://hobbygames.ru/image/cache/hobbygames_beta/data/HobbyWorld/Karkasson/2022/carcassonne_2022_00.jpg",
+      "image_url_hd": "https://hobbygames.ru/image/data/HobbyWorld/Karkasson/2022/carcassonne_2022_00.jpg",
+      "description": "Легенда в новом виде",
+      "players": null,
+      "age_min": null,
+      "playtime": null,
+      "rules_url": "https://hobbygames.ru/download/rules/Carcassonne2019_Rules.pdf",
+      "fetched_at": "2026-05-06T19:18:49.679538+00:00",
+      "extra": {
+        "availability": true,
+        "category": "Семейные игры",
+        "sku": "UT-00018963",
+        "rules": [
+          "https://hobbygames.ru/download/rules/Karkasson_solo_web.pdf",
+          "https://hobbygames.ru/download/rules/Carcassonne2019_Rules.pdf"
+        ],
+        "gallery": [
+          "https://hobbygames.ru/image/data/HobbyWorld/Karkasson/2022/carcassonne_2022_00.jpg",
+          "https://hobbygames.ru/image/cache/hobbygames_beta/data/HobbyWorld/Karkasson/2022/carcassonne_2022_00-1980x1980-wm.webp",
+          "https://hobbygames.ru/image/cache/hobbygames_beta/data/HobbyWorld/Karkasson/2022/HG/Karkasson_2022_01-1980x1980-wm.webp",
+          "https://hobbygames.ru/image/cache/hobbygames_beta/data/HobbyWorld/Karkasson/2022/HG/Karkasson_2022_02-1980x1980-wm.webp",
+          "https://hobbygames.ru/image/cache/hobbygames_beta/data/HobbyWorld/Karkasson/2022/HG/Karkasson_2022_03-1980x1980-wm.webp"
+        ]
+      }
+    }
+  ]
+}
+```
+
+> **HobbyGames-специфика:**
+> - `players`, `age_min`, `playtime` — всегда `null` (данные не предоставляет)
+> - `extra.availability` — `true` если товар в наличии
+> - `extra.sku` — артикул товара (e.g. `"UT-00018963"`)
+> - `extra.gallery` — содержит одно фото в нескольких размерах (`-100x100`, `-480x480`, `-1980x1980-wm`) плюс обложки дополнений к игре; всего 30–40 URL
+
+---
 
 ### `/history/1`
 
