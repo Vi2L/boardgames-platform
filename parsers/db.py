@@ -410,6 +410,213 @@ class PriceDatabase:
         ]
 
     # ------------------------------------------------------------------
+    # Аналитика — расширенные метрики
+    # ------------------------------------------------------------------
+
+    async def get_top_queries(self, hours: int = 168, limit: int = 20) -> list[dict]:
+        """Топ запросов за период с метриками cache hit rate и avg latency.
+
+        Полезно для понимания, какие игры пользователи ищут чаще всего и насколько
+        эффективно работает кеш для популярных запросов.
+        """
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    query,
+                    COUNT(*)                                                AS count,
+                    SUM(CASE WHEN source='cache' THEN 1 ELSE 0 END)         AS cache_hits,
+                    AVG(duration_ms)                                        AS avg_ms,
+                    SUM(error_count)                                        AS errors,
+                    MAX(ts)                                                 AS last_seen
+                FROM request_log
+                WHERE ts >= ?
+                GROUP BY query
+                ORDER BY count DESC, last_seen DESC
+                LIMIT ?
+                """,
+                (cutoff, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {
+                "query": r["query"],
+                "count": r["count"],
+                "cache_hits": r["cache_hits"] or 0,
+                "cache_hit_rate": round((r["cache_hits"] or 0) / r["count"] * 100, 1) if r["count"] else 0,
+                "avg_ms": round(r["avg_ms"]) if r["avg_ms"] else None,
+                "errors": r["errors"] or 0,
+                "last_seen": r["last_seen"],
+            }
+            for r in rows
+        ]
+
+    async def get_latency_percentiles(self, hours: int = 24) -> dict:
+        """p50/p95/p99 latency запросов /search.
+
+        SQLite не имеет встроенного PERCENTILE_CONT, поэтому вытаскиваем упорядоченный
+        массив duration_ms и считаем индексы в Python — для разумных N (десятки тысяч)
+        это быстрее, чем CTE-трюки с ROW_NUMBER().
+        """
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            async with db.execute(
+                """
+                SELECT duration_ms FROM request_log
+                WHERE ts >= ? AND duration_ms IS NOT NULL
+                ORDER BY duration_ms
+                """,
+                (cutoff,),
+            ) as cur:
+                rows = await cur.fetchall()
+
+        durations = [r[0] for r in rows]
+        n = len(durations)
+        if n == 0:
+            return {"period_hours": hours, "count": 0, "p50": None, "p95": None,
+                    "p99": None, "max": None, "avg": None}
+
+        # nearest-rank метод: индекс i для перцентиля p — ceil(p * n) - 1
+        def _percentile(p: float) -> int:
+            idx = max(0, min(n - 1, int(p * n) - 1 if int(p * n) > 0 else 0))
+            return durations[idx]
+
+        return {
+            "period_hours": hours,
+            "count": n,
+            "p50": _percentile(0.50),
+            "p95": _percentile(0.95),
+            "p99": _percentile(0.99),
+            "max": durations[-1],
+            "avg": round(sum(durations) / n),
+        }
+
+    async def get_requests_timeline(self, hours: int = 24, bucket: str = "hour") -> list[dict]:
+        """Распределение запросов по времени с разбивкой по source.
+
+        bucket: 'hour' (по часам, формат YYYY-MM-DDTHH:00:00) или 'day' (YYYY-MM-DD).
+        """
+        if bucket == "day":
+            fmt = "%Y-%m-%d"
+        elif bucket == "hour":
+            fmt = "%Y-%m-%dT%H:00:00"
+        else:
+            raise ValueError(f"unsupported bucket: {bucket}")
+
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                f"""
+                SELECT
+                    strftime('{fmt}', ts) AS ts_bucket,
+                    COUNT(*)              AS total,
+                    SUM(CASE WHEN source='cache'         THEN 1 ELSE 0 END) AS cache,
+                    SUM(CASE WHEN source='network'       THEN 1 ELSE 0 END) AS network,
+                    SUM(CASE WHEN source='partial-cache' THEN 1 ELSE 0 END) AS partial,
+                    SUM(error_count)      AS errors,
+                    AVG(duration_ms)      AS avg_ms
+                FROM request_log
+                WHERE ts >= ?
+                GROUP BY ts_bucket
+                ORDER BY ts_bucket
+                """,
+                (cutoff,),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {
+                "ts": r["ts_bucket"],
+                "total": r["total"],
+                "cache": r["cache"] or 0,
+                "network": r["network"] or 0,
+                "partial": r["partial"] or 0,
+                "errors": r["errors"] or 0,
+                "avg_ms": round(r["avg_ms"]) if r["avg_ms"] else None,
+            }
+            for r in rows
+        ]
+
+    async def get_cache_rate_timeline(self, hours: int = 168, bucket: str = "hour") -> list[dict]:
+        """Динамика cache hit rate во времени — показывает, насколько эффективен кеш.
+
+        Возвращает [{ts, cache_hit_rate, total}], удобно строить line chart.
+        """
+        timeline = await self.get_requests_timeline(hours, bucket)
+        return [
+            {
+                "ts": p["ts"],
+                "total": p["total"],
+                "cache_hit_rate": round(p["cache"] / p["total"] * 100, 1) if p["total"] else 0,
+            }
+            for p in timeline
+        ]
+
+    async def get_store_distribution(self, hours: int = 24) -> list[dict]:
+        """Распределение вызовов парсеров по магазинам — для pie/bar chart."""
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT
+                    store_slug,
+                    COUNT(*)              AS calls,
+                    SUM(success)          AS successes,
+                    AVG(result_count)     AS avg_results,
+                    AVG(CASE WHEN success=1 THEN duration_ms END) AS avg_ms
+                FROM parser_log
+                WHERE ts >= ?
+                GROUP BY store_slug
+                ORDER BY calls DESC
+                """,
+                (cutoff,),
+            ) as cur:
+                rows = await cur.fetchall()
+
+        rows_data = [dict(r) for r in rows]
+        total_calls = sum(r["calls"] for r in rows_data) or 1
+        return [
+            {
+                "store_slug": r["store_slug"],
+                "calls": r["calls"],
+                "successes": r["successes"] or 0,
+                "success_rate": round((r["successes"] or 0) / r["calls"] * 100, 1) if r["calls"] else 0,
+                "avg_results": round(r["avg_results"], 2) if r["avg_results"] is not None else 0,
+                "avg_ms": round(r["avg_ms"]) if r["avg_ms"] else None,
+                "share_pct": round(r["calls"] / total_calls * 100, 1),
+            }
+            for r in rows_data
+        ]
+
+    async def get_empty_responses(self, hours: int = 24, limit: int = 50) -> list[dict]:
+        """Успешные вызовы парсеров с пустым результатом — потенциально 'тихие' сбои.
+
+        Парсер не упал, но и не вернул товаров: возможно, изменилась структура страницы
+        или сменился URL поиска без явной ошибки.
+        """
+        cutoff = (_utcnow() - timedelta(hours=hours)).isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                """
+                SELECT store_slug, duration_ms, ts
+                FROM parser_log
+                WHERE ts >= ? AND success=1 AND result_count=0
+                ORDER BY ts DESC
+                LIMIT ?
+                """,
+                (cutoff, limit),
+            ) as cur:
+                rows = await cur.fetchall()
+        return [
+            {"store_slug": r["store_slug"], "duration_ms": r["duration_ms"], "ts": r["ts"]}
+            for r in rows
+        ]
+
+    # ------------------------------------------------------------------
     # История цен
     # ------------------------------------------------------------------
 

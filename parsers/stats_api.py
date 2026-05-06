@@ -40,3 +40,47 @@ async def store_health():
 async def recent_errors(limit: int = 20):
     """Последние N ошибок парсеров."""
     return await _db.get_recent_errors(limit=limit)
+
+
+# ---------------------------------------------------------------------------
+# Расширенная аналитика
+# ---------------------------------------------------------------------------
+
+
+@router.get("/api/stats/top-queries")
+async def top_queries(hours: int = 168, limit: int = 20):
+    """Самые популярные поисковые запросы за период."""
+    return await _db.get_top_queries(hours=hours, limit=limit)
+
+
+@router.get("/api/stats/latency")
+async def latency_percentiles(hours: int = 24):
+    """Перцентили latency (/search): p50, p95, p99, max, avg."""
+    return await _db.get_latency_percentiles(hours=hours)
+
+
+@router.get("/api/stats/timeline")
+async def requests_timeline(hours: int = 24, bucket: str = "hour"):
+    """Распределение запросов по времени с разбивкой по source.
+
+    bucket: 'hour' или 'day'.
+    """
+    return await _db.get_requests_timeline(hours=hours, bucket=bucket)
+
+
+@router.get("/api/stats/cache-timeline")
+async def cache_rate_timeline(hours: int = 168, bucket: str = "hour"):
+    """Динамика cache hit rate во времени."""
+    return await _db.get_cache_rate_timeline(hours=hours, bucket=bucket)
+
+
+@router.get("/api/stats/store-distribution")
+async def store_distribution(hours: int = 24):
+    """Распределение нагрузки парсеров по магазинам — для pie/bar chart."""
+    return await _db.get_store_distribution(hours=hours)
+
+
+@router.get("/api/stats/empty-responses")
+async def empty_responses(hours: int = 24, limit: int = 50):
+    """Успешные вызовы парсеров, вернувшие 0 товаров — 'тихие' сбои."""
+    return await _db.get_empty_responses(hours=hours, limit=limit)
