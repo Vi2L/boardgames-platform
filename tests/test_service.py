@@ -158,46 +158,98 @@ class TestPriceService(unittest.IsolatedAsyncioTestCase):
 
 
 # ---------------------------------------------------------------------------
-# Тесты парсера HobbyGames (поисковая страница, без сети)
+# Тесты парсера HobbyGames (JSON-LD ItemList, без сети)
 # ---------------------------------------------------------------------------
 
 class TestHobbyGamesParser(unittest.TestCase):
-    """Тесты _SearchPageParser HobbyGames на статичном HTML."""
+    """Тесты _parse_search_page HobbyGames на статичном HTML с JSON-LD."""
 
     def _make_html(self, products: list[dict]) -> str:
+        """Генерирует страницу поиска с JSON-LD ItemList и product-card карточками."""
+        items_json = [
+            {
+                "@type": "Product",
+                "name": p["title"],
+                "image": f"data/img/{p['slug']}.jpg",
+                "description": p.get("description", ""),
+                "url": f"https://hobbygames.ru/{p['slug']}",
+                "offers": {
+                    "@type": "Offer",
+                    "url": f"https://hobbygames.ru/{p['slug']}",
+                    "price": p["price_rub"],
+                    "priceCurrency": "RUB",
+                    "availability": "https://schema.org/InStock",
+                },
+            }
+            for p in products
+        ]
+        import json as _json
+        ld = _json.dumps({"@type": "ItemList", "itemListElement": items_json})
+
         cards = "".join(f"""
-        <div class="product-card">
-            <a href="{p['url']}" title="{p['title']}">
-                <img src="{p.get('image_url', '/image/cache/test.jpg')}">
-            </a>
-            <h4 class="name"><a href="{p['url']}">{p['title']}</a></h4>
-            <span class="price">{p['price_str']}</span>
+        <div class="product-card  " data-product_id="{p['product_id']}"
+             data-price="{p['price_rub']}">
+            <a href="/{p['slug']}"></a>
         </div>
         """ for p in products)
-        return f"<html><body>{cards}</body></html>"
+
+        return f"""
+        <html><body>
+        <script type="application/ld+json">{ld}</script>
+        {cards}
+        </body></html>
+        """
 
     def test_parses_products(self) -> None:
-        from parsers.stores.hobbygames import _SearchPageParser
+        from parsers.stores.hobbygames import _parse_search_page
 
-        parser = _SearchPageParser()
-        parser.feed(self._make_html([
-            {"url": "/karkassone", "title": "Каркассон", "price_str": "1 490 ₽"},
-            {"url": "/catan",      "title": "Катан",      "price_str": "2 990 ₽"},
-        ]))
+        html = self._make_html([
+            {"slug": "karkassone", "title": "Каркассон", "price_rub": 1990,
+             "product_id": "72557", "description": "Классика"},
+            {"slug": "catan",      "title": "Катан",      "price_rub": 2990,
+             "product_id": "12345", "description": ""},
+        ])
+        products = _parse_search_page(html, limit=10)
 
-        self.assertEqual(len(parser.products), 2)
-        self.assertEqual(parser.products[0].title, "Каркассон")
-        self.assertEqual(parser.products[0].price, 149000)
-        self.assertEqual(parser.products[1].price, 299000)
+        self.assertEqual(len(products), 2)
+        self.assertEqual(products[0].title, "Каркассон")
+        self.assertEqual(products[0].external_id, "72557")  # числовой ID
+        self.assertEqual(products[0].price, 199000)          # рубли → копейки
+        self.assertEqual(products[0].description, "Классика")
+        self.assertTrue(products[0].url.startswith("https://hobbygames.ru/"))
+        self.assertIsNotNone(products[0].image_url)
 
-    def test_skips_cards_without_price(self) -> None:
-        from parsers.stores.hobbygames import _SearchPageParser
+    def test_price_in_kopecks(self) -> None:
+        from parsers.stores.hobbygames import _parse_search_page
 
-        parser = _SearchPageParser()
-        parser.feed(self._make_html([
-            {"url": "/no-price", "title": "Без цены", "price_str": ""},
-        ]))
-        self.assertEqual(len(parser.products), 0)
+        html = self._make_html([
+            {"slug": "catan", "title": "Катан", "price_rub": 3490, "product_id": "1"},
+        ])
+        products = _parse_search_page(html, limit=10)
+        self.assertEqual(products[0].price, 349000)
+
+    def test_slug_fallback_when_no_card(self) -> None:
+        """Если product-card нет, external_id = slug из URL."""
+        from parsers.stores.hobbygames import _parse_search_page
+        import json as _json
+
+        ld = _json.dumps({"@type": "ItemList", "itemListElement": [{
+            "@type": "Product",
+            "name": "Игра", "image": "", "description": "",
+            "url": "https://hobbygames.ru/some-game",
+            "offers": {"price": 1000, "availability": "https://schema.org/InStock"},
+        }]})
+        html = f'<html><body><script type="application/ld+json">{ld}</script></body></html>'
+        products = _parse_search_page(html, limit=10)
+
+        self.assertEqual(len(products), 1)
+        self.assertEqual(products[0].external_id, "some-game")
+
+    def test_empty_itemlist_returns_empty(self) -> None:
+        from parsers.stores.hobbygames import _parse_search_page
+
+        html = "<html><body><p>Ничего не найдено</p></body></html>"
+        self.assertEqual(_parse_search_page(html, limit=10), [])
 
 
 class TestHobbyGamesEnrich(unittest.IsolatedAsyncioTestCase):
@@ -205,19 +257,19 @@ class TestHobbyGamesEnrich(unittest.IsolatedAsyncioTestCase):
 
     _DETAIL_HTML = (
         '<html><head>'
-        '<meta property="og:image" content="https://hobbygames.ru/image/hd/kark.jpg">'
-        '<meta property="og:description" content="Классика евростратегий">'
+        '<meta property="og:image" content="https://hobbygames.ru/image/data/kark.jpg">'
         '<script type="application/ld+json">'
-        '{"@type":"Product","name":"Каркассон",'
-        '"description":"Проверенная временем классика",'
-        '"image":"https://hobbygames.ru/image/full/kark.jpg",'
-        '"additionalProperty":['
-        '{"name":"Количество игроков","value":"2-5"},'
-        '{"name":"Возраст","value":"от 8 лет"},'
-        '{"name":"Время партии","value":"30-45 мин"}'
-        ']}</script>'
+        '[{"@type":"Product","name":"Каркассон",'
+        '"description":"Легенда в новом виде",'
+        '"sku":"UT-00018963","category":"Семейные игры",'
+        '"image":"data/kark.jpg",'
+        '"offers":{"@type":"Offer","price":"1990","priceCurrency":"RUB",'
+        '"availability":"https://schema.org/InStock"}'
+        '}]'
+        '</script>'
         '</head><body>'
-        '<a href="/rules/karkassone_rules.pdf">Правила</a>'
+        '<a href="/download/rules/Carcassonne2019_Rules.pdf">Правила</a>'
+        '<a href="/download/rules/Karkasson_solo_web.pdf">Соло-режим</a>'
         '</body></html>'
     )
 
@@ -226,9 +278,9 @@ class TestHobbyGamesEnrich(unittest.IsolatedAsyncioTestCase):
 
         parser = HobbyGamesParser()
         product = ParsedProduct(
-            store_slug="hobbygames", external_id="karkassone",
+            store_slug="hobbygames", external_id="72557",
             title="Каркассон", price=199000,
-            url="https://hobbygames.ru/karkassone",
+            url="https://hobbygames.ru/karkasson",
         )
 
         class FakeResp:
@@ -241,13 +293,18 @@ class TestHobbyGamesEnrich(unittest.IsolatedAsyncioTestCase):
 
         extra = await parser._enrich(FakeClient(), product)
 
-        # JSON-LD имеет приоритет над og:image
-        self.assertEqual(extra.get("image_url_hd"), "https://hobbygames.ru/image/full/kark.jpg")
-        self.assertEqual(extra.get("description"), "Проверенная временем классика")
-        self.assertEqual(extra.get("players"), "2-5")
-        self.assertEqual(extra.get("age_min"), 8)
-        self.assertEqual(extra.get("playtime"), "30-45 мин")
+        # og:image — полный абсолютный URL
+        self.assertEqual(extra.get("image_url_hd"), "https://hobbygames.ru/image/data/kark.jpg")
+        # Описание из JSON-LD
+        self.assertEqual(extra.get("description"), "Легенда в новом виде")
+        # Категория и SKU в raw
+        raw = extra.get("raw", {})
+        self.assertEqual(raw.get("category"), "Семейные игры")
+        self.assertEqual(raw.get("sku"), "UT-00018963")
+        # PDF правила
         self.assertIn("rules_url", extra)
+        self.assertIn("Carcassonne2019_Rules", extra["rules_url"])
+        self.assertEqual(len(raw.get("rules", [])), 2)
 
 
 # ---------------------------------------------------------------------------

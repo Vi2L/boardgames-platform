@@ -1,39 +1,26 @@
 """Парсер HobbyGames (hobbygames.ru).
 
-Сайт — OpenCart + Vue.js SPA (кабинет/корзина). Страница поиска рендерится
-server-side и содержит карточки товаров в HTML. Работает с российского IP;
-с зарубежных адресов возвращает заглушку из-за геоблока.
+Сайт — собственная CMS + SSR. Без геоблока, работает с любого IP.
 
-Технология: HTTP + html.parser (stdlib).
+URL поиска: GET /catalog/search?keyword=<текст>
 
-Страница поиска (/search?query=<текст>):
-    <div class="product-card">     → карточка
-    <a href="/<slug>/" title="..."> → url, title
-    <span class="price">           → price
-    <img data-src="...">           → image_url (thumbnail)
+Страница поиска содержит JSON-LD ItemList со всеми найденными товарами —
+парсинг HTML не нужен. Числовой product_id берётся из атрибута
+data-product_id на карточках .product-card.
 
-Страница товара (/<slug>/) добавляет JSON-LD (Product + Offer):
-    "image"         → image_url_hd
-    "description"   → description
-    "offers.price"  → подтверждение цены
-    og:image        → image_url_hd (fallback если нет JSON-LD)
-
-Характеристики (если присутствуют в теме OpenCart):
-    itemprop="numberOfPlayers"  → players
-    itemprop="suggestedAge"     → age_min
-    Время партии                → playtime
-    Ссылка *.pdf                → rules_url
-    Дополнительные картинки     → raw["gallery"]
+Страница товара (/<slug>/) содержит JSON-LD Product с описанием,
+SKU и категорией. Правила — ссылки /download/rules/*.pdf.
+Характеристики (players, age, playtime) в структурированном виде
+не предоставляются.
 """
 
 from __future__ import annotations
 
 import asyncio
-import html as html_module
 import json
 import re
 from dataclasses import replace
-from html.parser import HTMLParser
+from urllib.parse import urljoin
 
 import httpx
 
@@ -46,7 +33,9 @@ STORE = StoreInfo(
     base_url="https://hobbygames.ru",
 )
 
-_SEARCH_URL = "https://hobbygames.ru/search"
+_SEARCH_URL = "https://hobbygames.ru/catalog/search"
+# Базовый URL для изображений (относительные пути из JSON-LD → абсолютные)
+_IMG_BASE = "https://hobbygames.ru/image/cache/hobbygames_beta/"
 
 _HEADERS = {
     "User-Agent": (
@@ -67,14 +56,14 @@ class HobbyGamesParser(StoreParser):
             self._client_kwargs["proxy"] = proxy
 
     async def search(self, query: str, limit: int = 10) -> list[ParsedProduct]:
-        params = {"query": query, "limit": limit}
+        params = {"keyword": query}
         async with httpx.AsyncClient(**self._client_kwargs) as client:
             resp = await client.get(_SEARCH_URL, params=params)
             resp.raise_for_status()
 
-            parser = _SearchPageParser()
-            parser.feed(resp.text)
-            basic = parser.products[:limit]
+            basic = _parse_search_page(resp.text, limit)
+            if not basic:
+                return []
 
             enriched = await asyncio.gather(
                 *[self._enrich(client, p) for p in basic],
@@ -104,66 +93,37 @@ class HobbyGamesParser(StoreParser):
         extra: dict = {}
         raw: dict = dict(product.raw)
 
-        # JSON-LD — основной источник данных (Product + Offer schema)
-        ld_blocks = re.findall(
-            r'<script type="application/ld\+json">(.*?)</script>', page, re.DOTALL
-        )
-        for block in ld_blocks:
+        # JSON-LD Product на странице товара
+        for block in re.findall(r'<script type="application/ld\+json">(.*?)</script>', page, re.DOTALL):
             try:
                 data = json.loads(block.strip())
-            except json.JSONDecodeError:
+                items = data if isinstance(data, list) else [data]
+                for item in items:
+                    if item.get("@type") != "Product":
+                        continue
+                    if item.get("description") and not extra.get("description"):
+                        extra["description"] = item["description"]
+                    if item.get("category"):
+                        raw["category"] = item["category"]
+                    if item.get("sku"):
+                        raw["sku"] = item["sku"]
+            except (json.JSONDecodeError, AttributeError):
                 continue
-            if data.get("@type") == "Product":
-                if not extra.get("description") and data.get("description"):
-                    extra["description"] = data["description"]
-                if not extra.get("image_url_hd") and data.get("image"):
-                    img = data["image"]
-                    extra["image_url_hd"] = img[0] if isinstance(img, list) else img
-                # Характеристики из additionalProperty
-                for prop in data.get("additionalProperty", []):
-                    name = prop.get("name", "")
-                    val = str(prop.get("value", "")).strip()
-                    if "игрок" in name.lower() or "players" in name.lower():
-                        extra["players"] = val
-                    elif "возраст" in name.lower() or "age" in name.lower():
-                        m = re.search(r"\d+", val)
-                        if m:
-                            extra["age_min"] = int(m.group(0))
-                    elif "время" in name.lower() or "playtime" in name.lower():
-                        extra["playtime"] = val
 
-        # Fallback: og:image если JSON-LD не дал картинку
-        if not extra.get("image_url_hd"):
-            m = re.search(r'property="og:image"\s+content="([^"]+)"', page)
-            if m:
-                extra["image_url_hd"] = m.group(1)
-
-        # Fallback: og:description
-        if not extra.get("description"):
-            m = re.search(r'property="og:description"\s+content="([^"]+)"', page)
-            if m:
-                extra["description"] = html_module.unescape(m.group(1))
-
-        # itemprop как дополнительный источник характеристик
-        if not extra.get("players"):
-            m = re.search(r'itemprop="numberOfPlayers"[^>]*content="([^"]+)"', page)
-            if m:
-                extra["players"] = m.group(1)
-        if not extra.get("age_min"):
-            m = re.search(r'itemprop="suggestedAge"[^>]*content="([^"]+)"', page)
-            if m:
-                digits = re.search(r"\d+", m.group(1))
-                if digits:
-                    extra["age_min"] = int(digits.group(0))
+        # HD-изображение из og:image (полный абсолютный URL)
+        m = re.search(r'property="og:image"\s+content="([^"]+)"', page)
+        if m:
+            extra["image_url_hd"] = m.group(1)
 
         # Правила PDF
-        rules = re.findall(r'href="([^"]*\.pdf[^"]*)"', page, re.I)
-        rules = [r for r in rules if "hobbygames" in r or r.startswith("/")]
+        rules = list(dict.fromkeys(
+            re.findall(r'href="(/download/rules/[^"]+\.pdf)"', page, re.I)
+        ))
         if rules:
-            extra["rules_url"] = rules[0] if rules[0].startswith("http") else STORE.base_url + rules[0]
-            raw["rules"] = rules
+            extra["rules_url"] = STORE.base_url + rules[0]
+            raw["rules"] = [STORE.base_url + r for r in rules]
 
-        # Галерея (дополнительные изображения)
+        # Галерея (дополнительные изображения товара)
         gallery = list(dict.fromkeys(
             re.findall(r'"(https://hobbygames\.ru/image/[^"]+)"', page)
         ))
@@ -175,117 +135,76 @@ class HobbyGamesParser(StoreParser):
 
 
 # ---------------------------------------------------------------------------
-# HTML-парсер страницы результатов поиска
+# Парсинг страницы поиска
 # ---------------------------------------------------------------------------
 
-class _SearchPageParser(HTMLParser):
-    """Извлекает карточки товаров из поисковой выдачи HobbyGames."""
+def _parse_search_page(html: str, limit: int) -> list[ParsedProduct]:
+    """Извлекает товары из JSON-LD ItemList и data-product_id из HTML."""
 
-    def __init__(self) -> None:
-        super().__init__()
-        self.products: list[ParsedProduct] = []
-        self._in_card = 0
-        self._current: dict | None = None
-        self._capture_title = False
-        self._capture_price = False
+    # 1. JSON-LD ItemList → основные данные
+    ld_blocks = re.findall(r'<script type="application/ld\+json">(.*?)</script>', html, re.DOTALL)
+    item_list: list[dict] = []
+    for block in ld_blocks:
+        try:
+            data = json.loads(block.strip())
+            if isinstance(data, dict) and data.get("@type") == "ItemList":
+                item_list = data.get("itemListElement", [])
+                break
+        except (json.JSONDecodeError, AttributeError):
+            continue
 
-    def handle_starttag(self, tag: str, attrs: list[tuple]) -> None:
-        a = dict(attrs)
-        cls = a.get("class", "")
+    if not item_list:
+        return []
 
-        if tag == "div" and _match_class(cls, ("product-card", "item-card", "goods-card")):
-            self._current = {"url": "", "title": "", "price": 0, "image_url": None}
-            self._in_card = 1
-            return
+    # 2. data-product_id из HTML-карточек → сопоставляем по slug URL
+    # Формат: <div class="product-card ..." data-product_id="72557" ...>
+    #   <a href="/karkasson" ...>
+    # Строим словарь slug → product_id
+    slug_to_id: dict[str, str] = {}
+    for m in re.finditer(
+        r'<div[^>]+class="product-card[^"]*"[^>]+data-product_id="(\d+)"[^>]*>.*?href="(/[^"?#]+)"',
+        html, re.DOTALL
+    ):
+        product_id, href = m.group(1), m.group(2)
+        slug = href.strip("/").split("/")[-1]
+        slug_to_id[slug] = product_id
 
-        if self._current is None:
-            return
+    # 3. Собираем ParsedProduct
+    products: list[ParsedProduct] = []
+    for item in item_list[:limit]:
+        if item.get("@type") != "Product":
+            continue
 
-        if tag == "div":
-            self._in_card += 1
+        url = item.get("url", "")
+        if not url:
+            continue
 
-        if tag == "a" and a.get("href") and not self._current["url"]:
-            href = a["href"]
-            if _is_product_link(href):
-                self._current["url"] = href
-                if a.get("title"):
-                    self._current["title"] = html_module.unescape(a["title"])
+        offers = item.get("offers", {})
+        price_rub = offers.get("price", 0)
+        try:
+            price = int(float(price_rub)) * 100  # рубли → копейки
+        except (ValueError, TypeError):
+            continue
 
-        if tag == "img" and not self._current["image_url"]:
-            src = a.get("data-src") or a.get("src", "")
-            if src and ("hobbygames" in src or src.startswith("/image")):
-                self._current["image_url"] = src
+        slug = url.rstrip("/").split("/")[-1]
+        external_id = slug_to_id.get(slug, slug)  # числовой ID или slug как fallback
 
-        if tag in ("h2", "h3", "h4") and _match_class(cls, ("product-name", "item-name", "title", "name")):
-            self._capture_title = True
+        # Изображение: относительный путь → абсолютный кеш-URL
+        image_rel = item.get("image", "")
+        image_url = (_IMG_BASE + image_rel) if image_rel and not image_rel.startswith("http") else image_rel or None
 
-        if tag == "span" and _match_class(cls, ("price", "product-price", "item-price", "cost")):
-            self._capture_price = True
+        availability = offers.get("availability", "")
+        in_stock = "InStock" in availability
 
-    def handle_endtag(self, tag: str) -> None:
-        if self._current is None:
-            return
+        products.append(ParsedProduct(
+            store_slug=STORE.slug,
+            external_id=external_id,
+            title=item.get("name", ""),
+            price=price,
+            url=url if url.startswith("http") else STORE.base_url + url,
+            image_url=image_url,
+            description=item.get("description"),
+            raw={"availability": in_stock},
+        ))
 
-        if tag in ("h2", "h3", "h4"):
-            self._capture_title = False
-        if tag == "span":
-            self._capture_price = False
-
-        if tag == "div":
-            self._in_card -= 1
-            if self._in_card <= 0:
-                c = self._current
-                if c and c["url"] and c["price"] > 0:
-                    product_id = _extract_id(c["url"])
-                    self.products.append(ParsedProduct(
-                        store_slug=STORE.slug,
-                        external_id=product_id,
-                        title=c["title"] or product_id,
-                        price=c["price"],
-                        url=_abs(c["url"]),
-                        image_url=_abs(c["image_url"]),
-                    ))
-                self._current = None
-                self._in_card = 0
-
-    def handle_data(self, data: str) -> None:
-        if self._current is None:
-            return
-        text = data.strip()
-        if not text:
-            return
-        if self._capture_title and not self._current["title"]:
-            self._current["title"] = text
-        if self._capture_price:
-            price = _parse_price(text)
-            if price > 0:
-                self._current["price"] = price
-
-
-# ---------------------------------------------------------------------------
-# Утилиты
-# ---------------------------------------------------------------------------
-
-def _match_class(cls: str, keywords: tuple[str, ...]) -> bool:
-    cls_lower = cls.lower()
-    return any(kw in cls_lower for kw in keywords)
-
-
-def _is_product_link(href: str) -> bool:
-    skip = ("/search", "/catalog", "/page", "#", "javascript", "mailto")
-    return href.startswith("/") and not any(href.startswith(s) for s in skip)
-
-
-def _parse_price(text: str) -> int:
-    digits = re.sub(r"[^\d]", "", text)
-    return int(digits) * 100 if digits else 0
-
-
-def _extract_id(url: str) -> str:
-    return url.strip("/").split("/")[-1] or url
-
-
-def _abs(url: str | None) -> str | None:
-    if not url:
-        return None
-    return url if url.startswith("http") else STORE.base_url + url
+    return products
