@@ -88,6 +88,28 @@ class ParsersClient:
             for p in resp.json()
         ]
 
+    # ── Stats (проксируется как есть из parsers stats_api) ──────────────
+
+    async def get_summary_stats(self, hours: int = 24) -> dict:
+        """GET /api/stats?hours=N → сводка."""
+        resp = await self._client.get("/api/stats", params={"hours": hours})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_store_stats(self) -> list[dict]:
+        """GET /api/stats/stores → список словарей здоровья парсеров."""
+        resp = await self._client.get("/api/stats/stores")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_recent_errors(self, limit: int = 20) -> list[dict]:
+        """GET /api/stats/errors?limit=N → последние ошибки."""
+        resp = await self._client.get("/api/stats/errors", params={"limit": limit})
+        resp.raise_for_status()
+        return resp.json()
+
+    # ── Batch history ────────────────────────────────────────────────────
+
     async def get_history_batch(
         self, product_ids: list[int],
     ) -> dict[int, list[PricePointOut]]:

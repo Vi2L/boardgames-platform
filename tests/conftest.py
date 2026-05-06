@@ -19,7 +19,9 @@ from typing import Any
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import app.db_local as db_local_module
 import app.deps as deps_module
+from app.db_local import PortalDB
 from app.main import app
 from app.parsers_client import ParsersSearchResponse
 from app.schemas import PricePointOut, ProductOut, StoreOut
@@ -93,13 +95,30 @@ def fake_client() -> FakeParsersClient:
 
 
 @pytest.fixture
-def patched_app(fake_client: FakeParsersClient, monkeypatch: pytest.MonkeyPatch) -> Any:
-    """Патчит модульный синглтон `app.deps._client` на fake_client.
+async def portal_db(tmp_path: Any) -> AsyncIterator[PortalDB]:
+    """Изолированная PortalDB на tmp_path. Каждый тест получает свежую БД."""
+    db = PortalDB(tmp_path / "portal.sqlite")
+    await db.init()
+    try:
+        yield db
+    finally:
+        await db.close()
 
-    Возвращает само ASGI-приложение — клиент создаётся в тесте, чтобы
-    можно было использовать stream() и обычный get() в одном тесте.
+
+@pytest.fixture
+async def patched_app(
+    fake_client: FakeParsersClient,
+    portal_db: PortalDB,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Any:
+    """Патчит модульные синглтоны: parsers-клиент и PortalDB.
+
+    Тесты не запускают lifespan, поэтому singletoneы пустые — именно их
+    мы и подменяем на тестовые. Возвращает само ASGI-приложение — клиент
+    создаётся в http_client фикстуре.
     """
     monkeypatch.setattr(deps_module, "_client", fake_client)
+    monkeypatch.setattr(db_local_module, "_db", portal_db)
     return app
 
 

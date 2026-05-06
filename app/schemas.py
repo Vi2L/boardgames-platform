@@ -64,3 +64,33 @@ class PriceDeltaOut(BaseModel):
     delta_pct: float | None = None      # положительная — рост, отрицательная — падение
     days_between: float | None = None
 
+
+# ── DatabasePage схемы (фаза 3) ─────────────────────────────────────────────
+
+class ProductsPage(BaseModel):
+    """Пагинированный ответ для /api/db/products."""
+    items: list[ProductOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class SearchLogOut(BaseModel):
+    """Запись из local_searches: запрос, прошедший через портал."""
+    id: int
+    query: str
+    stores: str | None
+    source: str | None
+    total_ms: int | None
+    products_count: int
+    error_count: int
+    errors_json: str
+    created_at: str
+
+
+class SearchesPage(BaseModel):
+    items: list[SearchLogOut]
+    total: int
+    page: int
+    page_size: int
+

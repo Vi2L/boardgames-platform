@@ -4,21 +4,50 @@
 - Один HTTP-запрос к parsers /search (не per-parser)
 - SSE-события: store-start → api-request → api-response → store-done × N → results
 - store-start/store-done сохраняются для UI-совместимости (badges)
+- После завершения результаты пишутся в локальную PortalDB
+  (для DatabasePage и ProductPage с deep-link)
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import AsyncGenerator
 
 from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 
+from app.db_local import get_portal_db
 from app.deps import get_parsers_client
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(tags=["search"])
+
+
+async def _log_to_portal_db(
+    *, query: str, stores: list[str] | None, source: str | None,
+    total_ms: int | None, products: list, error_count: int,
+    errors: dict[str, str] | None = None,
+) -> None:
+    """Сохраняет результат search в локальной БД портала.
+
+    Любая ошибка (БД не инициализирована, диск переполнен, миграция
+    застряла) — не должна валить SSE. Только пишем в лог и идём дальше.
+    """
+    try:
+        db = get_portal_db()
+        if products:
+            await db.upsert_products(products)
+        await db.log_search(
+            query=query, stores=stores, source=source, total_ms=total_ms,
+            products_count=len(products), error_count=error_count,
+            errors=errors,
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("failed to log search to portal db")
 
 
 async def _sse(event: str, data: dict) -> str:
@@ -99,6 +128,13 @@ async def _run_search(
             "total_ms": elapsed_ms,
         }))
 
+        # Сохраняем в локальную БД портала (для DatabasePage и ProductPage)
+        await _log_to_portal_db(
+            query=q, stores=store_slugs, source=result.source,
+            total_ms=elapsed_ms, products=result.products,
+            error_count=len(result.errors), errors=result.errors,
+        )
+
     except Exception as exc:
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
@@ -112,6 +148,14 @@ async def _run_search(
             "error": str(exc),
             "elapsed_ms": elapsed_ms,
         }))
+
+        # Логируем неудачную попытку отдельно
+        await _log_to_portal_db(
+            query=q, stores=store_slugs, source=None,
+            total_ms=elapsed_ms, products=[],
+            error_count=len(active_stores) or 1,
+            errors={"_": str(exc)},
+        )
 
     await queue.put(None)
 
