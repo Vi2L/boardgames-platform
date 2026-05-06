@@ -29,7 +29,7 @@ from app.schemas import ProductOut
 # Все миграции хранятся в одном модуле — простой список SQL,
 # применяемый по порядку. Версионирование через PRAGMA user_version.
 _MIGRATIONS: list[str] = [
-    # v1: базовые таблицы
+    # v1: базовые таблицы (фаза 3)
     """
     CREATE TABLE IF NOT EXISTS local_products (
         id               INTEGER PRIMARY KEY,
@@ -67,6 +67,67 @@ _MIGRATIONS: list[str] = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_local_searches_ts ON local_searches(created_at DESC);",
+    # v2: snapshots, test_suites, suite_runs, favorites (фаза 4)
+    """
+    CREATE TABLE IF NOT EXISTS snapshots (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT,
+        query           TEXT NOT NULL,
+        stores          TEXT,
+        limit_n         INTEGER NOT NULL,
+        refresh         INTEGER NOT NULL,
+        source          TEXT,
+        total_ms        INTEGER,
+        error_count     INTEGER NOT NULL DEFAULT 0,
+        errors_json     TEXT NOT NULL DEFAULT '{}',
+        products_json   TEXT NOT NULL,
+        summary_json    TEXT NOT NULL DEFAULT '{}',
+        created_at      TEXT NOT NULL
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_snapshots_query ON snapshots(query, created_at DESC);",
+    """
+    CREATE TABLE IF NOT EXISTS test_suites (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        name            TEXT NOT NULL UNIQUE,
+        description     TEXT,
+        queries_json    TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL
+    );
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS suite_runs (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        suite_id        INTEGER NOT NULL,
+        started_at      TEXT NOT NULL,
+        finished_at     TEXT,
+        summary_json    TEXT
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_suite_runs ON suite_runs(suite_id, started_at DESC);",
+    """
+    CREATE TABLE IF NOT EXISTS suite_run_items (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        run_id          INTEGER NOT NULL,
+        query           TEXT NOT NULL,
+        snapshot_id     INTEGER,
+        ms              INTEGER,
+        status          TEXT,
+        error           TEXT
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_suite_run_items ON suite_run_items(run_id);",
+    """
+    CREATE TABLE IF NOT EXISTS favorites (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        query           TEXT NOT NULL,
+        stores          TEXT,
+        limit_n         INTEGER,
+        refresh         INTEGER NOT NULL DEFAULT 0,
+        created_at      TEXT NOT NULL
+    );
+    """,
 ]
 
 
@@ -320,6 +381,285 @@ class PortalDB:
             "page_size": page_size,
         }
 
+    # ── Snapshots (фаза 4) ─────────────────────────────────────────────────
+
+    async def create_snapshot(
+        self, *,
+        name: str | None,
+        query: str,
+        stores: list[str] | None,
+        limit_n: int,
+        refresh: bool,
+        source: str | None,
+        total_ms: int | None,
+        error_count: int,
+        errors: dict[str, str] | None,
+        products: list[ProductOut],
+        summary: dict[str, Any] | None = None,
+    ) -> int:
+        cur = await self.conn.execute(
+            """
+            INSERT INTO snapshots (
+                name, query, stores, limit_n, refresh, source, total_ms,
+                error_count, errors_json, products_json, summary_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                name, query,
+                ",".join(stores) if stores else None,
+                limit_n, 1 if refresh else 0,
+                source, total_ms,
+                error_count,
+                json.dumps(errors or {}, ensure_ascii=False),
+                json.dumps([p.model_dump() for p in products], ensure_ascii=False),
+                json.dumps(summary or {}, ensure_ascii=False),
+                _utc_now_iso(),
+            ),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid or 0)
+
+    async def get_snapshot(self, snapshot_id: int) -> dict[str, Any] | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM snapshots WHERE id = ?", (snapshot_id,),
+        )
+        row = await cur.fetchone()
+        return _row_to_snapshot(row) if row else None
+
+    async def list_snapshots(
+        self, *, query: str | None = None, page: int = 1, page_size: int = 50,
+    ) -> dict[str, Any]:
+        where_sql, params = "", []
+        if query:
+            where_sql = "WHERE query LIKE ?"
+            params.append(f"%{query}%")
+
+        cur = await self.conn.execute(
+            f"SELECT COUNT(*) FROM snapshots {where_sql}", params,
+        )
+        row = await cur.fetchone()
+        total = int(row[0]) if row else 0
+
+        page = max(1, page)
+        page_size = max(1, min(page_size, 200))
+        offset = (page - 1) * page_size
+
+        cur = await self.conn.execute(
+            f"""
+            SELECT id, name, query, stores, limit_n, refresh, source,
+                   total_ms, error_count, summary_json, created_at
+            FROM snapshots
+            {where_sql}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ? OFFSET ?
+            """,
+            (*params, page_size, offset),
+        )
+        rows = await cur.fetchall()
+
+        return {
+            "items": [
+                {
+                    "id": r["id"], "name": r["name"], "query": r["query"],
+                    "stores": r["stores"], "limit_n": r["limit_n"],
+                    "refresh": bool(r["refresh"]),
+                    "source": r["source"], "total_ms": r["total_ms"],
+                    "error_count": r["error_count"],
+                    "summary": json.loads(r["summary_json"] or "{}"),
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ],
+            "total": total, "page": page, "page_size": page_size,
+        }
+
+    async def delete_snapshot(self, snapshot_id: int) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM snapshots WHERE id = ?", (snapshot_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    # ── Test suites ────────────────────────────────────────────────────────
+
+    async def create_suite(
+        self, *, name: str, description: str | None, queries: list[dict[str, Any]],
+    ) -> int:
+        now = _utc_now_iso()
+        cur = await self.conn.execute(
+            """
+            INSERT INTO test_suites (name, description, queries_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (name, description, json.dumps(queries, ensure_ascii=False), now, now),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid or 0)
+
+    async def update_suite(
+        self, suite_id: int, *, name: str | None = None,
+        description: str | None = None, queries: list[dict[str, Any]] | None = None,
+    ) -> bool:
+        sets, params = [], []
+        if name is not None:
+            sets.append("name = ?"); params.append(name)
+        if description is not None:
+            sets.append("description = ?"); params.append(description)
+        if queries is not None:
+            sets.append("queries_json = ?"); params.append(json.dumps(queries, ensure_ascii=False))
+        if not sets:
+            return False
+        sets.append("updated_at = ?"); params.append(_utc_now_iso())
+        params.append(suite_id)
+        cur = await self.conn.execute(
+            f"UPDATE test_suites SET {', '.join(sets)} WHERE id = ?", params,
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    async def get_suite(self, suite_id: int) -> dict[str, Any] | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM test_suites WHERE id = ?", (suite_id,),
+        )
+        row = await cur.fetchone()
+        return _row_to_suite(row) if row else None
+
+    async def list_suites(self) -> list[dict[str, Any]]:
+        cur = await self.conn.execute(
+            "SELECT * FROM test_suites ORDER BY name ASC",
+        )
+        rows = await cur.fetchall()
+        return [_row_to_suite(r) for r in rows]
+
+    async def delete_suite(self, suite_id: int) -> bool:
+        await self.conn.execute(
+            "DELETE FROM suite_run_items WHERE run_id IN (SELECT id FROM suite_runs WHERE suite_id = ?)",
+            (suite_id,),
+        )
+        await self.conn.execute("DELETE FROM suite_runs WHERE suite_id = ?", (suite_id,))
+        cur = await self.conn.execute("DELETE FROM test_suites WHERE id = ?", (suite_id,))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    # ── Suite runs ─────────────────────────────────────────────────────────
+
+    async def create_suite_run(self, suite_id: int) -> int:
+        cur = await self.conn.execute(
+            "INSERT INTO suite_runs (suite_id, started_at) VALUES (?, ?)",
+            (suite_id, _utc_now_iso()),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid or 0)
+
+    async def add_suite_run_item(
+        self, *, run_id: int, query: str, snapshot_id: int | None,
+        ms: int | None, status: str, error: str | None = None,
+    ) -> int:
+        cur = await self.conn.execute(
+            """
+            INSERT INTO suite_run_items (run_id, query, snapshot_id, ms, status, error)
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (run_id, query, snapshot_id, ms, status, error),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid or 0)
+
+    async def finalize_suite_run(self, run_id: int, summary: dict[str, Any]) -> None:
+        await self.conn.execute(
+            "UPDATE suite_runs SET finished_at = ?, summary_json = ? WHERE id = ?",
+            (_utc_now_iso(), json.dumps(summary, ensure_ascii=False), run_id),
+        )
+        await self.conn.commit()
+
+    async def list_suite_runs(self, suite_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        cur = await self.conn.execute(
+            """
+            SELECT id, suite_id, started_at, finished_at, summary_json
+            FROM suite_runs
+            WHERE suite_id = ?
+            ORDER BY started_at DESC, id DESC
+            LIMIT ?
+            """,
+            (suite_id, limit),
+        )
+        rows = await cur.fetchall()
+        return [
+            {
+                "id": r["id"], "suite_id": r["suite_id"],
+                "started_at": r["started_at"], "finished_at": r["finished_at"],
+                "summary": json.loads(r["summary_json"] or "{}"),
+            }
+            for r in rows
+        ]
+
+    async def get_suite_run(self, run_id: int) -> dict[str, Any] | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM suite_runs WHERE id = ?", (run_id,),
+        )
+        run = await cur.fetchone()
+        if not run:
+            return None
+        cur = await self.conn.execute(
+            "SELECT * FROM suite_run_items WHERE run_id = ? ORDER BY id ASC", (run_id,),
+        )
+        items = await cur.fetchall()
+        return {
+            "id": run["id"], "suite_id": run["suite_id"],
+            "started_at": run["started_at"], "finished_at": run["finished_at"],
+            "summary": json.loads(run["summary_json"] or "{}"),
+            "items": [
+                {
+                    "id": i["id"], "query": i["query"],
+                    "snapshot_id": i["snapshot_id"], "ms": i["ms"],
+                    "status": i["status"], "error": i["error"],
+                }
+                for i in items
+            ],
+        }
+
+    # ── Favorites ──────────────────────────────────────────────────────────
+
+    async def create_favorite(
+        self, *, query: str, stores: list[str] | None,
+        limit_n: int | None, refresh: bool,
+    ) -> int:
+        cur = await self.conn.execute(
+            """
+            INSERT INTO favorites (query, stores, limit_n, refresh, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                query,
+                ",".join(stores) if stores else None,
+                limit_n, 1 if refresh else 0,
+                _utc_now_iso(),
+            ),
+        )
+        await self.conn.commit()
+        return int(cur.lastrowid or 0)
+
+    async def list_favorites(self) -> list[dict[str, Any]]:
+        cur = await self.conn.execute(
+            "SELECT * FROM favorites ORDER BY created_at DESC, id DESC",
+        )
+        rows = await cur.fetchall()
+        return [
+            {
+                "id": r["id"], "query": r["query"], "stores": r["stores"],
+                "limit_n": r["limit_n"], "refresh": bool(r["refresh"]),
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ]
+
+    async def delete_favorite(self, favorite_id: int) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM favorites WHERE id = ?", (favorite_id,),
+        )
+        await self.conn.commit()
+        return cur.rowcount > 0
+
 
 def _row_to_product(row: aiosqlite.Row | None) -> ProductOut:
     """Маппинг row → ProductOut. extra_json парсится обратно в dict."""
@@ -344,6 +684,36 @@ def _row_to_product(row: aiosqlite.Row | None) -> ProductOut:
         fetched_at=row["fetched_at"],
         extra=extra,
     )
+
+
+def _row_to_snapshot(row: aiosqlite.Row) -> dict[str, Any]:
+    """Полный snapshot с восстановлением products из products_json."""
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "query": row["query"],
+        "stores": row["stores"],
+        "limit_n": row["limit_n"],
+        "refresh": bool(row["refresh"]),
+        "source": row["source"],
+        "total_ms": row["total_ms"],
+        "error_count": row["error_count"],
+        "errors": json.loads(row["errors_json"] or "{}"),
+        "products": json.loads(row["products_json"] or "[]"),
+        "summary": json.loads(row["summary_json"] or "{}"),
+        "created_at": row["created_at"],
+    }
+
+
+def _row_to_suite(row: aiosqlite.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "name": row["name"],
+        "description": row["description"],
+        "queries": json.loads(row["queries_json"] or "[]"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
 
 
 # ── Singleton ──────────────────────────────────────────────────────────────

@@ -94,3 +94,96 @@ class SearchesPage(BaseModel):
     page: int
     page_size: int
 
+
+# ── Snapshots / Suites / Favorites (фаза 4) ─────────────────────────────────
+
+class SnapshotCreate(BaseModel):
+    """POST /api/snapshots — параметры сохраняемого прогона."""
+    name: str | None = None
+    query: str
+    stores: list[str] | None = None
+    limit: int = 10
+    refresh: bool = False
+
+
+class SnapshotMeta(BaseModel):
+    """Краткая запись для списка."""
+    id: int
+    name: str | None
+    query: str
+    stores: str | None
+    limit_n: int
+    refresh: bool
+    source: str | None
+    total_ms: int | None
+    error_count: int
+    summary: dict
+    created_at: str
+
+
+class SnapshotsPage(BaseModel):
+    items: list[SnapshotMeta]
+    total: int
+    page: int
+    page_size: int
+
+
+class FavoriteIn(BaseModel):
+    query: str
+    stores: list[str] | None = None
+    limit: int | None = None
+    refresh: bool = False
+
+
+class FavoriteOut(BaseModel):
+    id: int
+    query: str
+    stores: str | None
+    limit_n: int | None
+    refresh: bool
+    created_at: str
+
+
+class SuiteQuery(BaseModel):
+    """Один пункт test-сьюта — параметры одного прогона search."""
+    q: str
+    stores: list[str] | None = None
+    limit: int | None = None
+    refresh: bool = False
+
+
+class SuiteIn(BaseModel):
+    name: str
+    description: str | None = None
+    queries: list[SuiteQuery]
+
+
+class SuiteOut(BaseModel):
+    id: int
+    name: str
+    description: str | None
+    queries: list[SuiteQuery]
+    created_at: str
+    updated_at: str
+
+
+class SuiteRunMeta(BaseModel):
+    id: int
+    suite_id: int
+    started_at: str
+    finished_at: str | None
+    summary: dict
+
+
+class SuiteRunItem(BaseModel):
+    id: int
+    query: str
+    snapshot_id: int | None
+    ms: int | None
+    status: str
+    error: str | None
+
+
+class SuiteRunDetail(SuiteRunMeta):
+    items: list[SuiteRunItem]
+
