@@ -45,9 +45,10 @@ app.add_middleware(
 
 ```json
 [
-  { "slug": "hobbygames", "name": "HobbyGames",  "base_url": "https://hobbygames.ru"      },
-  { "slug": "lavkaigr",   "name": "Лавка Игр",   "base_url": "https://www.lavkaigr.ru"   },
-  { "slug": "gaga",       "name": "GaGa.ru",      "base_url": "https://gaga.ru"           }
+  { "slug": "hobbygames",  "name": "HobbyGames",   "base_url": "https://hobbygames.ru"       },
+  { "slug": "lavkaigr",    "name": "Лавка Игр",    "base_url": "https://www.lavkaigr.ru"    },
+  { "slug": "gaga",        "name": "GaGa.ru",       "base_url": "https://gaga.ru"            },
+  { "slug": "crowdgames",  "name": "Crowd Games",   "base_url": "https://www.crowdgames.ru"  }
 ]
 ```
 
@@ -243,6 +244,7 @@ const data = await res.json();
 |--------|----------|-------------|------------|
 | `lavkaigr` | Лавка Игр | Без ограничений | Доступен с любого IP |
 | `gaga` | GaGa.ru | Без ограничений | Доступен с любого IP |
+| `crowdgames` | Crowd Games | Без ограничений | Издатель; весь каталог (~167 игр) кешируется, поиск локальный; первый запрос ~10с |
 | `hobbygames` | HobbyGames | Без ограничений | Работает с любого IP |
 
 ---

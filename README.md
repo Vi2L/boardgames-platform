@@ -9,6 +9,7 @@
 | [HobbyGames](https://hobbygames.ru) | `hobbygames` | цена, фото, описание, правила PDF, наличие, категория |
 | [Лавка Игр](https://www.lavkaigr.ru) | `lavkaigr` | цена, фото, игроки, возраст, время, механики, галерея, правила PDF |
 | [GaGa.ru](https://gaga.ru) | `gaga` | цена, фото, игроки, возраст, время, рейтинг, галерея, правила PDF, размеры |
+| [Crowd Games](https://www.crowdgames.ru) | `crowdgames` | цена, фото, наличие; весь каталог издателя (~167 игр) |
 
 ## Быстрый старт
 
@@ -107,9 +108,10 @@ FastAPI /search /history /stores
 PriceService  — TTL-кеш per-store, asyncio.gather, graceful degradation
     ├─ PriceDatabase (aiosqlite) — stores / products / price_observations
     └─ StoreParser (ABC)
-           ├─ HobbyGamesParser  — JSON-LD ItemList
-           ├─ LavkaIgrParser    — HTML + og:meta
-           └─ GagaParser        — HTML cp1251 + card-features
+           ├─ HobbyGamesParser   — JSON-LD ItemList
+           ├─ LavkaIgrParser     — HTML + og:meta
+           ├─ GagaParser         — HTML cp1251 + card-features
+           └─ CrowdGamesParser   — каталог издателя, локальный поиск
 ```
 
 Каждый парсер: (1) страница поиска → базовые поля, (2) страница товара → обогащение (`players`, `age_min`, `playtime`, `rules_url`, `image_url_hd`, `gallery`, …).

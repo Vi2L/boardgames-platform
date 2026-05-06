@@ -52,7 +52,8 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
     └─ StoreParser (base.py)  ← абстрактный класс
            ├─ HobbyGamesParser  (stores/hobbygames.py)  — работает без ограничений
            ├─ LavkaIgrParser    (stores/lavkaigr.py)    — работает без ограничений
-           └─ GagaParser        (stores/gaga.py)        — cp1251, работает без ограничений
+           ├─ GagaParser        (stores/gaga.py)        — cp1251, работает без ограничений
+           └─ CrowdGamesParser  (stores/crowdgames.py)  — каталог издателя, локальный поиск
 ```
 
 **Ключевые модули:**
@@ -81,6 +82,7 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
 ## Подводные камни
 
 - **HobbyGames**: работает с любого IP. URL поиска — `/catalog/search?keyword=`, данные в JSON-LD `ItemList` (не HTML). `players`/`age_min`/`playtime` недоступны в структурированном виде.
+- **CrowdGames**: издатель (не магазин). Весь каталог `/collection/igry-crowd-games` (~167 игр, 8+ страниц). Поиск локальный: обходим все страницы через `data-collection-infinity`, фильтруем по запросу в памяти. Кеш TTL спасает от повторных обходов. `players`/`age_min`/`playtime` недоступны.
 - **cp1251 (GaGa)**: gaga.ru возвращает тело в cp1251. httpx декодирует автоматически по `Content-Type`. Поисковый запрос нужно кодировать в cp1251 перед percent-encoding: `quote(query.encode('cp1251'))`.
 - **SQLite `lower()`**: не поддерживает Unicode → используем `normalized_title` (Python `.lower()`).
 - **Цены в копейках**: `ParsedProduct.price` и `ProductRecord.price` — всегда копейки. `/search` конвертирует в рубли (`price_rub`), `/history` отдаёт сырые копейки (`price`).
