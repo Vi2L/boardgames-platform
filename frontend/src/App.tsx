@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, NavLink } from 'react-router-dom'
+import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
 import { Search, Cpu, Database, FlaskConical, PanelLeftClose, PanelLeft } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
@@ -9,6 +9,7 @@ import { ProductPage } from './pages/ProductPage'
 import { TestingPage } from './pages/TestingPage'
 import { DiffView } from './components/testing/DiffView'
 import { HealthBadge } from './components/shared/HealthBadge'
+import { CommandPalette } from './components/shared/CommandPalette'
 
 const NAV = [
   { to: '/', label: 'Поиск', icon: Search },
@@ -36,10 +37,35 @@ function readInitialCollapsed(): boolean {
 
 export default function App() {
   const [collapsed, setCollapsed] = useState(readInitialCollapsed)
+  const navigate = useNavigate()
 
   useEffect(() => {
     window.localStorage.setItem(STORAGE_KEY, collapsed ? '1' : '0')
   }, [collapsed])
+
+  // Глобальный hotkey Cmd+/ — фокус инпута поиска. Если не на главной,
+  // сначала переходим, затем фокус через двойной микротик.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === '/') {
+        e.preventDefault()
+        const focus = () => {
+          const el = document.getElementById('search-q-input') as HTMLInputElement | null
+          el?.focus()
+          el?.select()
+        }
+        if (window.location.pathname !== '/') {
+          navigate('/')
+          // даём роутеру отрисовать страницу и форму
+          setTimeout(focus, 50)
+        } else {
+          focus()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [navigate])
 
   return (
     <div className="flex h-screen bg-gray-950 overflow-hidden">
@@ -110,6 +136,9 @@ export default function App() {
           <Route path="/testing/diff" element={<DiffView />} />
         </Routes>
       </main>
+
+      {/* Глобальная Cmd+K палитра — слушает hotkey изнутри */}
+      <CommandPalette />
     </div>
   )
 }

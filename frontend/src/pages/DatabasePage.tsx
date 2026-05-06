@@ -11,6 +11,7 @@ import {
 } from '../lib/api'
 import { getStoreBadgeColor, getStoreLabel, STORE_LABELS } from '../lib/stores'
 import { PriceHistogram } from '../components/database/PriceHistogram'
+import { SkeletonList } from '../components/shared/Skeleton'
 import type { ProductOut, StoreHealthEntry } from '../types/api'
 
 type Tab = 'products' | 'stores' | 'searches'
@@ -154,7 +155,7 @@ function ProductsTab() {
         <div className="text-sm text-red-400 py-8 text-center">Ошибка загрузки</div>
       )}
       {!isError && isLoading && (
-        <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>
+        <SkeletonList rows={5} />
       )}
       {!isError && !isLoading && items.length === 0 && (
         <div className="text-sm text-gray-500 py-12 text-center">

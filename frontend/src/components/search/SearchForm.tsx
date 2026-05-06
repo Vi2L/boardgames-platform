@@ -33,10 +33,11 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
           <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
           <input
             ref={inputRef}
+            id="search-q-input"
             type="text"
             value={query}
             onChange={e => setQuery(e.target.value)}
-            placeholder="Название игры..."
+            placeholder="Название игры…  (Cmd+/)"
             className="w-full pl-9 pr-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30"
             disabled={isSearching}
             autoFocus

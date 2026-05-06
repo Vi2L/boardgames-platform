@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { toast } from 'sonner'
 
 /**
  * Имена SSE-событий, на которые подписан фронт.
@@ -101,6 +102,9 @@ export function useSSE(
 
         if (retries >= MAX_RETRIES) {
           setConnectionState('error')
+          toast.error('Соединение с сервером потеряно', {
+            description: 'После 3 попыток переподключения сдаёмся.',
+          })
           onErrorRef.current?.(e)
           return
         }

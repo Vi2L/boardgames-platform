@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { persist, createJSONStorage } from 'zustand/middleware'
+import { toast } from 'sonner'
 import type { ApiLog, ProductOut, StoreProgress } from '../types/api'
 
 let logId = 0
@@ -29,7 +31,15 @@ interface SearchStore {
   reset: () => void
 }
 
-export const useSearchStore = create<SearchStore>((set, get) => ({
+/**
+ * Zustand-стор поиска с частичной персистентностью в localStorage.
+ *
+ * Сохраняем только параметры формы (selectedStores/refresh/limit), не
+ * результаты — иначе при reload пользователь увидел бы прошлые товары
+ * до нового запроса. Query тоже не персистим: если он отражён в URL
+ * (deep-link, фаза 5.2), URL — единственный источник правды.
+ */
+export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
   query: '',
   selectedStores: [],
   refresh: false,
@@ -142,6 +152,10 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
           }
 
         case 'api-error':
+          // Тост, чтобы пользователь увидел ошибку даже не глядя на API Log.
+          toast.error('parsers API недоступен', {
+            description: d.error as string,
+          })
           return {
             apiLogs: [...s.apiLogs, {
               id: ++logId,
@@ -172,5 +186,14 @@ export const useSearchStore = create<SearchStore>((set, get) => ({
   reset: () => set({
     isSearching: false, sseUrl: null,
     storeProgress: {}, apiLogs: [], results: [], totalMs: null, source: null,
+  }),
+}), {
+  name: 'search:form',
+  storage: createJSONStorage(() => localStorage),
+  // Только пользовательские настройки формы; рантайм-состояние не персистим.
+  partialize: (s) => ({
+    selectedStores: s.selectedStores,
+    refresh: s.refresh,
+    limit: s.limit,
   }),
 }))

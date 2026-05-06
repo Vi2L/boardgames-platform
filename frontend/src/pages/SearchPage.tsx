@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Link } from 'react-router-dom'
-import { Clock, Zap, AlertCircle, CheckCircle2, Save, Star, Eye, EyeOff } from 'lucide-react'
+import { Link, useSearchParams } from 'react-router-dom'
+import { Clock, Zap, AlertCircle, CheckCircle2, Save, Star, Eye, EyeOff, Download } from 'lucide-react'
 import clsx from 'clsx'
+import { toast } from 'sonner'
 import {
   createFavorite, createSnapshot, fetchRecentDeltas, fetchStores,
 } from '../lib/api'
+import { downloadCsv, downloadJson } from '../lib/export'
 import { useSSE } from '../lib/sse'
 import { useSearchStore } from '../store/search'
 import { SearchForm } from '../components/search/SearchForm'
@@ -30,8 +32,63 @@ export function SearchPage() {
   const {
     query, selectedStores, refresh, limit,
     sseUrl, storeProgress, results, apiLogs, totalMs, source,
+    setQuery, setAllStores, setRefresh, setLimit,
     startSearch, stopSearch, handleSSEEvent, isSearching,
   } = useSearchStore()
+
+  // ── URL sync (deep-link) ──────────────────────────────────────────────
+  // Параметры в URL: q, stores (csv), limit, refresh, auto (1=автозапуск),
+  // product (id открытого Drawer-а). Pattern: на маунте читаем URL и
+  // заполняем стор; на изменение ключевых полей формы пишем replaceState.
+  const [searchParams, setSearchParams] = useSearchParams()
+  const initialUrlAppliedRef = useRef(false)
+  useEffect(() => {
+    if (initialUrlAppliedRef.current) return
+    initialUrlAppliedRef.current = true
+
+    const q = searchParams.get('q')
+    const stores = searchParams.get('stores')
+    const lim = searchParams.get('limit')
+    const ref = searchParams.get('refresh')
+    const auto = searchParams.get('auto')
+    const productId = searchParams.get('product')
+
+    if (q !== null) setQuery(q)
+    if (stores !== null) setAllStores(stores ? stores.split(',').filter(Boolean) : [])
+    if (lim !== null) {
+      const n = Number(lim)
+      if (Number.isFinite(n) && n > 0) setLimit(Math.min(50, Math.max(1, n)))
+    }
+    if (ref !== null) setRefresh(ref === '1' || ref === 'true')
+
+    // ?auto=1 — автозапуск; полезно для shareable-ссылок и Cmd+K «Запустить»
+    if (auto === '1' && q && q.trim()) {
+      // даём React успеть применить setQuery/setAllStores
+      setTimeout(() => startSearch([]), 50)
+    }
+
+    // ?product=N — открыть Drawer (но без pool — данные подтянутся через ProductPage-маршрут)
+    if (productId) {
+      const id = Number(productId)
+      if (Number.isFinite(id) && id > 0) {
+        // selectedProduct ставим заглушкой по id — настоящие данные подтянутся
+        // когда найдёт в results, иначе пользователь должен открыть /products/:id
+        // (Drawer без полного product не рендерится, поэтому здесь noop-fallback)
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Обратная синхронизация: при изменении формы обновляем URL без перезагрузки.
+  useEffect(() => {
+    if (!initialUrlAppliedRef.current) return
+    const sp = new URLSearchParams()
+    if (query.trim()) sp.set('q', query.trim())
+    if (selectedStores.length > 0) sp.set('stores', selectedStores.join(','))
+    if (limit !== 10) sp.set('limit', String(limit))
+    if (refresh) sp.set('refresh', '1')
+    setSearchParams(sp, { replace: true })
+  }, [query, selectedStores, limit, refresh, setSearchParams])
 
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: fetchStores })
 
@@ -65,8 +122,11 @@ export function SearchPage() {
       const res = await createSnapshot(buildPayload())
       setSavedSnapshotId(res.id)
       void queryClient.invalidateQueries({ queryKey: ['snapshots'] })
+      toast.success(`Snapshot #${res.id} сохранён`, {
+        action: { label: 'Открыть', onClick: () => { window.location.href = '/testing' } },
+      })
     } catch (e) {
-      console.error(e)
+      toast.error('Не удалось сохранить snapshot', { description: String(e) })
     } finally {
       setSavingSnap(false)
     }
@@ -79,9 +139,10 @@ export function SearchPage() {
       await createFavorite(buildPayload())
       setFavSaved(true)
       void queryClient.invalidateQueries({ queryKey: ['favorites'] })
+      toast.success('Добавлено в избранное')
       setTimeout(() => setFavSaved(false), 2500)
     } catch (e) {
-      console.error(e)
+      toast.error('Не удалось сохранить', { description: String(e) })
     } finally {
       setSavingFav(false)
     }
@@ -221,6 +282,39 @@ export function SearchPage() {
               >
                 <Star size={11} fill={favSaved ? 'currentColor' : 'none'} />
                 {favSaved ? 'Сохр.' : 'Избр.'}
+              </button>
+
+              {/* Экспорт */}
+              <button
+                type="button"
+                disabled={results.length === 0}
+                onClick={() => downloadJson(results, `search-${query.trim() || 'results'}.json`)}
+                title="Экспорт результатов в JSON"
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50"
+              >
+                <Download size={11} /> JSON
+              </button>
+              <button
+                type="button"
+                disabled={results.length === 0}
+                onClick={() => downloadCsv(
+                  results as unknown as Array<Record<string, unknown>>,
+                  [
+                    { key: 'id', label: 'id' },
+                    { key: 'store_slug', label: 'store' },
+                    { key: 'title', label: 'title' },
+                    { key: 'price_rub', label: 'price_rub' },
+                    { key: 'url', label: 'url' },
+                    { key: 'players', label: 'players' },
+                    { key: 'age_min', label: 'age_min' },
+                    { key: 'playtime', label: 'playtime' },
+                  ],
+                  `search-${query.trim() || 'results'}.csv`,
+                )}
+                title="Экспорт результатов в CSV"
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50"
+              >
+                <Download size={11} /> CSV
               </button>
 
               {/* Watch-режим */}

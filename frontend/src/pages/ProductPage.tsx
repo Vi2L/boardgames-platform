@@ -3,6 +3,7 @@ import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink, Loader2, Share2, Check } from 'lucide-react'
 import clsx from 'clsx'
+import { toast } from 'sonner'
 import { fetchDbProduct } from '../lib/api'
 import { getStoreBadgeColor, getStoreLabel } from '../lib/stores'
 import { ProductDetail } from '../components/shared/ProductDetail'
@@ -33,6 +34,7 @@ export function ProductPage() {
   const handleShare = () => {
     void navigator.clipboard.writeText(window.location.href).then(() => {
       setCopied(true)
+      toast.success('Ссылка скопирована')
       setTimeout(() => setCopied(false), 2000)
     })
   }
