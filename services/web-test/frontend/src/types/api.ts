@@ -292,6 +292,53 @@ export interface FavoriteOut {
   created_at: string
 }
 
+// ── Debug / Live Test ────────────────────────────────────────────────────
+
+/**
+ * Сырой продукт из debug-парсера. В отличие от ProductOut:
+ * - нет id (товар не записан в БД);
+ * - есть price в копейках для отладки разбора;
+ * - external_id строковый (магазинный id, не наш PK).
+ */
+export interface DebugProduct {
+  store_slug: string
+  external_id: string | number
+  title: string
+  price: number          // копейки — сырое значение из парсера
+  price_rub: number
+  url: string
+  image_url: string | null
+  image_url_hd: string | null
+  description: string | null
+  players: string | null
+  age_min: number | null
+  playtime: string | null
+  rules_url: string | null
+  raw: Record<string, unknown>
+}
+
+/** Метрики ParserMetrics (asdict) — структура зависит от parsers, держим открытой. */
+export interface DebugMetrics {
+  search_ms?: number | null
+  enrich_ms?: number | null
+  http_requests?: number | null
+  result_after_enrich?: number | null
+  [k: string]: unknown
+}
+
+export interface DebugStoreResult {
+  products: DebugProduct[]
+  count: number
+  duration_ms: number
+  metrics: DebugMetrics | null
+  error: string | null
+}
+
+export interface DebugParseResponse {
+  query: string
+  results: Record<string, DebugStoreResult>
+}
+
 /** Маркер недоступности parsers — приходит вместо реального ответа. */
 export interface UnavailableMarker {
   _unavailable: true

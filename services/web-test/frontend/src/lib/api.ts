@@ -1,4 +1,5 @@
 import type {
+  DebugParseResponse,
   DiffResult, FavoriteOut,
   HealthOut, ParserStatsOut, PriceDeltaOut, PricePointOut,
   ProductDetailOut, ProductsPage, SearchesPage,
@@ -71,6 +72,15 @@ export const fetchStatsStores = () =>
 
 export const fetchStatsErrors = (limit = 20) =>
   fetch(`${BASE}/stats/errors?limit=${limit}`).then(r => json<unknown[]>(r))
+
+// ── Debug / Live Test ──────────────────────────────────────────────────
+
+export const debugParse = (params: { q: string; stores?: string[]; limit?: number }) => {
+  const sp = new URLSearchParams({ q: params.q })
+  if (params.stores && params.stores.length > 0) sp.set('stores', params.stores.join(','))
+  if (params.limit) sp.set('limit', String(params.limit))
+  return fetch(`${BASE}/debug/parse?${sp}`).then(r => json<DebugParseResponse>(r))
+}
 
 // ── Snapshots / Suites / Favorites ─────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
-import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft } from 'lucide-react'
+import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
@@ -8,6 +8,7 @@ import { DatabasePage } from './pages/DatabasePage'
 import { ProductPage } from './pages/ProductPage'
 import { TestingPage } from './pages/TestingPage'
 import { CatalogPage } from './pages/CatalogPage'
+import { DebugPage } from './pages/DebugPage'
 import { DiffView } from './components/testing/DiffView'
 import { HealthBadge } from './components/shared/HealthBadge'
 import { CommandPalette } from './components/shared/CommandPalette'
@@ -15,6 +16,7 @@ import { CommandPalette } from './components/shared/CommandPalette'
 const NAV = [
   { to: '/', label: 'Поиск', icon: Search },
   { to: '/parsers', label: 'Парсеры', icon: Cpu },
+  { to: '/debug', label: 'Debug', icon: Bug },
   { to: '/database', label: 'БД', icon: Database },
   { to: '/catalog', label: 'Каталог', icon: Library },
   { to: '/testing', label: 'Тесты', icon: FlaskConical },
@@ -132,6 +134,7 @@ export default function App() {
         <Routes>
           <Route path="/" element={<SearchPage />} />
           <Route path="/parsers" element={<ParsersPage />} />
+          <Route path="/debug" element={<DebugPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/catalog" element={<CatalogPage />} />
           <Route path="/products/:id" element={<ProductPage />} />

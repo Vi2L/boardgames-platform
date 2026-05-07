@@ -114,6 +114,33 @@ class ParsersClient:
             for p in resp.json()
         ]
 
+    # ── Debug (диагностические endpoint'ы parsers) ──────────────────────
+
+    async def debug_parse(
+        self,
+        q: str,
+        stores: list[str] | None = None,
+        limit: int = 5,
+    ) -> dict:
+        """GET /api/debug/parse → парсеры мимо кеша, сырые ParsedProduct + метрики.
+
+        В отличие от search() этот endpoint:
+        - не читает кеш и не пишет в products / request_log;
+        - в parser_log помечает is_test=1, не искажая production-метрики.
+
+        Ответ — сырая структура от parsers, не маппится в ProductOut, потому
+        что ParsedProduct не имеет id (товар не записан в БД) и хранит price в
+        копейках. UI должен уметь рендерить такие карточки отдельно от ProductOut.
+        """
+        params: dict[str, Any] = {"q": q, "limit": limit}
+        if stores:
+            params["stores"] = ",".join(stores)
+        resp = await self._client.get("/api/debug/parse", params=params)
+        if resp.is_error:
+            detail = _extract_detail(resp) or f"HTTP {resp.status_code}"
+            raise ParsersServiceError(resp.status_code, detail, query=q)
+        return resp.json()
+
     # ── Stats (проксируется как есть из parsers stats_api) ──────────────
 
     async def get_summary_stats(self, hours: int = 24) -> dict:
