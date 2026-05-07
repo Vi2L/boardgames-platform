@@ -84,6 +84,42 @@ async def reject_offer(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+# ── Imports (BGG / Tesera) ─────────────────────────────────────────────────
+
+
+@router.post("/import/bgg")
+async def import_bgg(
+    body: dict,  # {bgg_id?: int, ids?: int[], wait?: bool} — wait игнорируем
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Запуск async-импорта BGG. Возвращает ImportJob — затем polling /jobs/{id}."""
+    try:
+        return await client.import_bgg(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/import/tesera")
+async def import_tesera(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.import_tesera(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/import/jobs/{job_id}")
+async def get_import_job(
+    job_id: int, client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.get_import_job(job_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 # ── Aliases CRUD ───────────────────────────────────────────────────────────
 
 

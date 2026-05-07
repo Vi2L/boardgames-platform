@@ -21,11 +21,14 @@ import {
   type CatalogOffer,
 } from '../lib/catalog'
 import { GameDetailDrawer } from '../components/catalog/GameDetailDrawer'
+import { ImportWizard } from '../components/catalog/ImportWizard'
+import { Download } from 'lucide-react'
 
 type Tab = 'catalog' | 'matching'
 
 export function CatalogPage() {
   const [tab, setTab] = useState<Tab>('catalog')
+  const [showImport, setShowImport] = useState(false)
   const health = useQuery({
     queryKey: ['catalog', 'health'],
     queryFn: fetchCatalogHealth,
@@ -37,12 +40,22 @@ export function CatalogPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-gray-100">Каталог настольных игр</h1>
-        <div className="text-xs text-gray-400">
-          catalog: {health.isError ? <span className="text-red-400">недоступен</span> :
-            health.data ? <span className="text-emerald-400">{health.data.status}</span> :
-            <span>...</span>}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowImport(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded"
+          >
+            <Download size={12} /> Импорт BGG / Tesera
+          </button>
+          <div className="text-xs text-gray-400">
+            catalog: {health.isError ? <span className="text-red-400">недоступен</span> :
+              health.data ? <span className="text-emerald-400">{health.data.status}</span> :
+              <span>...</span>}
+          </div>
         </div>
       </div>
+      {showImport && <ImportWizard onClose={() => setShowImport(false)} />}
 
       <div className="flex gap-2 border-b border-gray-800">
         {(['catalog', 'matching'] as Tab[]).map(t => (

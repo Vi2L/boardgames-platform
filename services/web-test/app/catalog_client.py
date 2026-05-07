@@ -79,6 +79,23 @@ class CatalogClient:
         resp = await self._client.post(f"/matching/{offer_id}/reject")
         return _ok_or_raise(resp)
 
+    # ── Imports (BGG / Tesera) ──────────────────────────────────────────
+
+    async def import_bgg(self, payload: dict) -> dict[str, Any]:
+        """POST /import/bgg → запустить async-импорт. Возвращает ImportJob."""
+        resp = await self._client.post("/import/bgg", json=payload)
+        return _ok_or_raise(resp)
+
+    async def import_tesera(self, payload: dict) -> dict[str, Any]:
+        """POST /import/tesera → запустить async-импорт. Возвращает ImportJob."""
+        resp = await self._client.post("/import/tesera", json=payload)
+        return _ok_or_raise(resp)
+
+    async def get_import_job(self, job_id: int) -> dict[str, Any]:
+        """GET /import/jobs/{id} → polling статуса (pending/running/done/failed)."""
+        resp = await self._client.get(f"/import/jobs/{job_id}")
+        return _ok_or_raise(resp)
+
     # ── Aliases CRUD ────────────────────────────────────────────────────
 
     async def add_alias(self, game_id: int, payload: dict) -> dict[str, Any]:

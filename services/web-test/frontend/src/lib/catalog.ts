@@ -140,6 +140,44 @@ export const rejectOffer = (offerId: number) =>
   fetch(`${BASE}/matching/${offerId}/reject`, { method: 'POST' })
     .then(r => json<CatalogOffer>(r))
 
+// ── Imports (BGG / Tesera) ──────────────────────────────────────────
+
+export type ImportJobStatus = 'pending' | 'running' | 'done' | 'failed'
+
+export type ImportJobResult = {
+  imported?: Array<{ bgg_id?: number; tesera_id?: number; item?: string|number; game_id: number; title: string }>
+  errors?: Array<{ bgg_id?: number; item?: string|number; error: string }>
+} | null
+
+export type ImportJob = {
+  id: number
+  type: 'bgg' | 'tesera'
+  status: ImportJobStatus
+  payload: Record<string, unknown>
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+  result: ImportJobResult
+  created_at: string
+}
+
+export const importBgg = (payload: { bgg_id?: number; ids?: number[] }) =>
+  fetch(`${BASE}/import/bgg`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<ImportJob>(r))
+
+export const importTesera = (payload: { alias?: string; tesera_id?: number; items?: (string|number)[] }) =>
+  fetch(`${BASE}/import/tesera`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<ImportJob>(r))
+
+export const fetchImportJob = (id: number) =>
+  fetch(`${BASE}/import/jobs/${id}`).then(r => json<ImportJob>(r))
+
 // ── Aliases CRUD ──────────────────────────────────────────────────────
 
 export type AliasInput = {
