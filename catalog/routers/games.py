@@ -47,10 +47,17 @@ async def list_games(
     stmt = select(Game)
 
     if q:
-        # Используем оператор `%` — он включает GIN-индекс ix_games_title_norm_trgm.
-        # similarity_threshold по умолчанию 0.3, для коротких запросов опускаем.
+        # Fuzzy-search по двум источникам: canonical title и game_aliases.
+        # Это критично для ru-запросов: title в games хранится на исходном
+        # языке (часто en), русские локализации сидят в game_aliases (source=
+        # 'wikidata' / 'manual'). Оба условия используют GIN pg_trgm индексы.
         stmt = stmt.where(
-            text("title_norm % lower(immutable_unaccent(:q))").bindparams(q=q)
+            text(
+                "(title_norm % lower(immutable_unaccent(:q)) "
+                " OR EXISTS (SELECT 1 FROM game_aliases ga "
+                "  WHERE ga.game_id = games.id "
+                "    AND ga.alias_norm % lower(immutable_unaccent(:q))))"
+            ).bindparams(q=q)
         )
     if designer:
         # ANY(:val) = ANY(designers) — включает GIN-индекс по array, если он есть.
