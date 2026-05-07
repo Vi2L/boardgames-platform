@@ -133,6 +133,10 @@ class FavoriteIn(BaseModel):
     stores: list[str] | None = None
     limit: int | None = None
     refresh: bool = False
+    # Доп. UI-настройки (фильтр out-of-stock, конфиг лояльности).
+    # Хранятся opaque-JSON-ом в одной колонке БД, чтобы не плодить миграций.
+    show_out_of_stock: bool | None = None
+    loyalty: dict | None = None
 
 
 class FavoriteOut(BaseModel):
@@ -142,6 +146,8 @@ class FavoriteOut(BaseModel):
     limit_n: int | None
     refresh: bool
     created_at: str
+    show_out_of_stock: bool | None = None
+    loyalty: dict | None = None
 
 
 class SuiteQuery(BaseModel):

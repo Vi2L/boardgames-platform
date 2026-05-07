@@ -9,7 +9,10 @@ import {
 } from '../lib/api'
 import { downloadCsv, downloadJson } from '../lib/export'
 import { useSSE } from '../lib/sse'
+import { isInStock } from '../lib/offer'
+import { applyLoyalty } from '../lib/loyalty'
 import { useSearchStore } from '../store/search'
+import { useLoyaltyStore } from '../store/loyalty'
 import { SearchForm } from '../components/search/SearchForm'
 import { StoreProgressBadge } from '../components/search/StoreProgressBadge'
 import { ResultsTable } from '../components/search/ResultsTable'
@@ -30,9 +33,9 @@ export function SearchPage() {
   const queryClient = useQueryClient()
 
   const {
-    query, selectedStores, refresh, limit,
+    query, selectedStores, refresh, limit, showOutOfStock,
     sseUrl, storeProgress, results, apiLogs, totalMs, source,
-    setQuery, setAllStores, setRefresh, setLimit,
+    setQuery, setAllStores, setRefresh, setLimit, setShowOutOfStock,
     startSearch, stopSearch, handleSSEEvent, isSearching,
   } = useSearchStore()
 
@@ -57,7 +60,7 @@ export function SearchPage() {
     if (stores !== null) setAllStores(stores ? stores.split(',').filter(Boolean) : [])
     if (lim !== null) {
       const n = Number(lim)
-      if (Number.isFinite(n) && n > 0) setLimit(Math.min(50, Math.max(1, n)))
+      if (Number.isFinite(n) && n > 0) setLimit(Math.min(500, Math.max(1, n)))
     }
     if (ref !== null) setRefresh(ref === '1' || ref === 'true')
 
@@ -85,17 +88,36 @@ export function SearchPage() {
     const sp = new URLSearchParams()
     if (query.trim()) sp.set('q', query.trim())
     if (selectedStores.length > 0) sp.set('stores', selectedStores.join(','))
-    if (limit !== 10) sp.set('limit', String(limit))
+    if (limit !== 100) sp.set('limit', String(limit))
     if (refresh) sp.set('refresh', '1')
     setSearchParams(sp, { replace: true })
   }, [query, selectedStores, limit, refresh, setSearchParams])
 
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: fetchStores })
 
+  // Видимые результаты — после фильтра «Показать товары не в наличии».
+  // Скрытыми считаем те, у которых магазин явно отдал признак отсутствия
+  // (HobbyGames availability=false, CrowdGames in_stock=false). Магазины
+  // без признака (Лавка, GaGa) всегда показаны.
+  const visibleResults = useMemo(
+    () => showOutOfStock ? results : results.filter(isInStock),
+    [results, showOutOfStock],
+  )
+  const hiddenCount = results.length - visibleResults.length
+
+  // Скидки лояльности — пересчитываются из конфига и видимых результатов.
+  // Конфиг отдельным стором, чтобы persist не делил места с search:form.
+  const loyaltyCfg = useLoyaltyStore()
+  const adjusted = useMemo(
+    () => applyLoyalty(visibleResults, loyaltyCfg),
+    [visibleResults, loyaltyCfg],
+  )
+
   // Δ-цена: грузим пакетом для всех id из текущих результатов. Ключ —
   // сортированный список id, чтобы кэш переиспользовался между ре-рендерами
-  // и сбрасывался при новом поиске.
-  const productIds = useMemo(() => results.map(p => p.id).sort((a, b) => a - b), [results])
+  // и сбрасывался при новом поиске. Достаточно id видимых, чтобы не
+  // запрашивать историю для скрытых строк.
+  const productIds = useMemo(() => visibleResults.map(p => p.id).sort((a, b) => a - b), [visibleResults])
   const { data: deltasArray = [] } = useQuery({
     queryKey: ['recent-deltas', productIds.join(',')],
     queryFn: () => fetchRecentDeltas(productIds),
@@ -108,11 +130,23 @@ export function SearchPage() {
   )
 
   // Параметры для кнопок «Snapshot» и «В избранное» — берём напрямую из стора.
+  // Snapshot не нуждается в showOutOfStock/loyalty (это локальные пресеты UI),
+  // но Favorite — да: пользователь хочет восстановить весь сетап одной кнопкой.
   const buildPayload = () => ({
     query: query.trim(),
     stores: selectedStores.length > 0 ? selectedStores : undefined,
     limit,
     refresh,
+  })
+
+  const buildFavoritePayload = () => ({
+    ...buildPayload(),
+    show_out_of_stock: showOutOfStock,
+    loyalty: {
+      enabled: loyaltyCfg.enabled,
+      hobbygames: loyaltyCfg.hobbygames,
+      lavkaigr: loyaltyCfg.lavkaigr,
+    },
   })
 
   const handleSaveSnapshot = async () => {
@@ -136,7 +170,7 @@ export function SearchPage() {
     if (!query.trim()) return
     setSavingFav(true)
     try {
-      await createFavorite(buildPayload())
+      await createFavorite(buildFavoritePayload())
       setFavSaved(true)
       void queryClient.invalidateQueries({ queryKey: ['favorites'] })
       toast.success('Добавлено в избранное')
@@ -239,7 +273,7 @@ export function SearchPage() {
         <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
           <div className="flex items-center px-4 border-b border-gray-800 bg-gray-900/50 gap-2 flex-wrap">
             <button className={tabCls('results')} onClick={() => setTab('results')}>
-              Результаты{results.length > 0 && ` (${results.length})`}
+              Результаты{visibleResults.length > 0 && ` (${visibleResults.length}${hiddenCount > 0 ? `/${results.length}` : ''})`}
             </button>
             <button className={tabCls('api-log')} onClick={() => setTab('api-log')}>
               API Log{apiLogs.length > 0 && ` (${apiLogs.length})`}
@@ -339,11 +373,26 @@ export function SearchPage() {
 
           <div className="p-4">
             {tab === 'results' && (
-              <ResultsTable
-                products={results}
-                deltas={deltas}
-                onSelect={setSelectedProduct}
-              />
+              <>
+                {hiddenCount > 0 && (
+                  <div className="mb-3 text-xs text-gray-500 flex items-center gap-2">
+                    <span>Скрыто {hiddenCount} товаров не в наличии.</span>
+                    <button
+                      type="button"
+                      onClick={() => setShowOutOfStock(true)}
+                      className="text-violet-400 hover:text-violet-300 underline"
+                    >
+                      Показать
+                    </button>
+                  </div>
+                )}
+                <ResultsTable
+                  products={visibleResults}
+                  deltas={deltas}
+                  adjusted={adjusted}
+                  onSelect={setSelectedProduct}
+                />
+              </>
             )}
 
             {tab === 'api-log' && (
@@ -420,7 +469,7 @@ export function SearchPage() {
       {/* Drawer с деталями товара */}
       <ProductDrawer
         product={selectedProduct}
-        pool={results}
+        pool={visibleResults}
         onClose={() => setSelectedProduct(null)}
         onSelect={setSelectedProduct}
       />

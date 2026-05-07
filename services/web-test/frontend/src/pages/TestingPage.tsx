@@ -8,6 +8,7 @@ import {
   fetchFavorites, deleteFavorite,
 } from '../lib/api'
 import { useSearchStore } from '../store/search'
+import { useLoyaltyStore } from '../store/loyalty'
 import { SuiteRunner } from '../components/testing/SuiteRunner'
 import type { FavoriteOut, SnapshotMeta, SuiteOut, SuiteQuery } from '../types/api'
 
@@ -282,7 +283,8 @@ function SuiteEditor({ onCreated }: { onCreated: (s: SuiteOut) => void }) {
 function FavoritesTab() {
   const queryClient = useQueryClient()
   const { data: items = [], isLoading } = useQuery({ queryKey: ['favorites'], queryFn: fetchFavorites })
-  const { setQuery, setRefresh, setLimit, setAllStores } = useSearchStore()
+  const { setQuery, setRefresh, setLimit, setAllStores, setShowOutOfStock } = useSearchStore()
+  const { setEnabled: setLoyaltyEnabled, setHobby, setLavka } = useLoyaltyStore()
 
   const handleDelete = async (id: number) => {
     if (!confirm(`Удалить избранное #${id}?`)) return
@@ -295,6 +297,19 @@ function FavoritesTab() {
     if (f.stores) setAllStores(f.stores.split(',').map(s => s.trim()).filter(Boolean))
     setRefresh(f.refresh)
     if (f.limit_n != null) setLimit(f.limit_n)
+    if (typeof f.show_out_of_stock === 'boolean') setShowOutOfStock(f.show_out_of_stock)
+    // Распаковка loyalty preset. Опциональные поля: если в favorite их нет —
+    // не трогаем текущий стор (бэкаппчат пользовательский конфиг).
+    const ly = f.loyalty as undefined | {
+      enabled?: boolean
+      hobbygames?: { enabled?: boolean; bonuses?: 'unlim' | number }
+      lavkaigr?: { enabled?: boolean; percent?: number; vkDon?: boolean }
+    }
+    if (ly) {
+      if (typeof ly.enabled === 'boolean') setLoyaltyEnabled(ly.enabled)
+      if (ly.hobbygames) setHobby(ly.hobbygames)
+      if (ly.lavkaigr) setLavka(ly.lavkaigr)
+    }
   }
 
   if (isLoading) return <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>

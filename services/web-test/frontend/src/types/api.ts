@@ -36,8 +36,10 @@ export interface ProductExtra {
   dimensions?: string
   weight?: string
   sku?: string
-  availability?: boolean        // hobbygames
-  in_stock?: boolean            // crowdgames
+  availability?: boolean        // hobbygames: true = в наличии
+  in_stock?: boolean            // crowdgames: true = в наличии
+  on_sale?: boolean             // hobbygames: товар по акционной цене
+  original_price?: number       // hobbygames: оригинальная цена в копейках (если on_sale)
   [k: string]: unknown
 }
 
@@ -318,6 +320,8 @@ export interface FavoriteOut {
   limit_n: number | null
   refresh: boolean
   created_at: string
+  show_out_of_stock?: boolean | null
+  loyalty?: Record<string, unknown> | null
 }
 
 // ── Debug / Live Test ────────────────────────────────────────────────────

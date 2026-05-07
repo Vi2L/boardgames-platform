@@ -214,7 +214,7 @@ async def _stream(queue: asyncio.Queue) -> AsyncGenerator[str, None]:
 async def search(
     q: str = Query(..., min_length=1, description="Поисковый запрос"),
     stores: str | None = Query(None, description="Slug магазинов через запятую"),
-    limit: int = Query(10, ge=1, le=50, description="Лимит результатов на магазин"),
+    limit: int = Query(100, ge=1, le=500, description="Лимит результатов на магазин"),
     refresh: bool = Query(False, description="Игнорировать кеш и обновить"),
 ) -> StreamingResponse:
     """Запускает поиск через parsers API, стримит SSE-события.

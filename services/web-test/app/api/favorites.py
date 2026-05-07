@@ -16,9 +16,16 @@ async def create_favorite(
     payload: FavoriteIn,
     db: Annotated[PortalDB, Depends(get_portal_db)],
 ) -> FavoriteOut:
+    preset: dict | None = None
+    if payload.show_out_of_stock is not None or payload.loyalty is not None:
+        preset = {
+            "show_out_of_stock": payload.show_out_of_stock,
+            "loyalty": payload.loyalty,
+        }
     fid = await db.create_favorite(
         query=payload.query, stores=payload.stores,
         limit_n=payload.limit, refresh=payload.refresh,
+        preset=preset,
     )
     items = await db.list_favorites()
     item = next((f for f in items if f["id"] == fid), None)

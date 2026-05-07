@@ -10,6 +10,7 @@ interface SearchStore {
   selectedStores: string[]
   refresh: boolean
   limit: number
+  showOutOfStock: boolean
 
   isSearching: boolean
   sseUrl: string | null
@@ -25,6 +26,7 @@ interface SearchStore {
   clearStores: () => void
   setRefresh: (v: boolean) => void
   setLimit: (n: number) => void
+  setShowOutOfStock: (v: boolean) => void
   startSearch: (availableSlugs: string[]) => void
   stopSearch: () => void
   handleSSEEvent: (event: string, data: unknown) => void
@@ -43,7 +45,8 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
   query: '',
   selectedStores: [],
   refresh: false,
-  limit: 10,
+  limit: 100,
+  showOutOfStock: false,
   isSearching: false,
   sseUrl: null,
   storeProgress: {},
@@ -64,6 +67,7 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
   clearStores: () => set({ selectedStores: [] }),
   setRefresh: (v) => set({ refresh: v }),
   setLimit: (n) => set({ limit: n }),
+  setShowOutOfStock: (v) => set({ showOutOfStock: v }),
 
   startSearch: (availableSlugs) => {
     const { query, selectedStores, refresh, limit } = get()
@@ -197,10 +201,22 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
 }), {
   name: 'search:form',
   storage: createJSONStorage(() => localStorage),
+  // v2 (2026-05): дефолтный лимит вырос с 10 до 100. Старые сохранения с
+  // limit=10 поднимаем, чтобы юзер не зависал на устаревшем дефолте; явно
+  // выбранные значения > 10 уважаем.
+  version: 2,
+  migrate: (persisted: unknown, version: number) => {
+    const s = (persisted ?? {}) as { limit?: number; [k: string]: unknown }
+    if (version < 2 && (s.limit == null || s.limit === 10)) {
+      return { ...s, limit: 100 }
+    }
+    return s
+  },
   // Только пользовательские настройки формы; рантайм-состояние не персистим.
   partialize: (s) => ({
     selectedStores: s.selectedStores,
     refresh: s.refresh,
     limit: s.limit,
+    showOutOfStock: s.showOutOfStock,
   }),
 }))

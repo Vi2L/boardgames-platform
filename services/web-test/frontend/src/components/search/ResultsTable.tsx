@@ -6,11 +6,15 @@ import {
 import clsx from 'clsx'
 import type { PriceDeltaOut, ProductOut } from '../../types/api'
 import { getStoreBadgeColor, getStoreLabel } from '../../lib/stores'
+import type { AdjustedPrice } from '../../lib/loyalty'
+import { DiscountCell } from './DiscountCell'
 
 interface Props {
   products: ProductOut[]
   /** Δ-цены пакетом (id → PriceDeltaOut). Может быть пустым на первом рендере. */
   deltas?: Map<number, PriceDeltaOut>
+  /** Скидки лояльности (id → AdjustedPrice). Пустой Map = нет личных скидок. */
+  adjusted?: Map<number, AdjustedPrice>
   onSelect: (product: ProductOut) => void
 }
 
@@ -74,7 +78,12 @@ function formatPrice(rub: number): string {
  * Опциональные колонки/секции (Δ-цена, описание) на узких экранах прячутся,
  * чтобы карточка влезала в один ряд без переполнения.
  */
-export function ResultsTable({ products, deltas, onSelect }: Props) {
+/** Эффективная цена с учётом всех скидок лояльности. Для сортировки. */
+function effectivePrice(p: ProductOut, adjusted?: Map<number, AdjustedPrice>): number {
+  return adjusted?.get(p.id)?.finalRub ?? p.price_rub
+}
+
+export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
   // Дефолт — цена по возрастанию (сохраняем прежнее поведение). По клику на
   // тот же ключ — флипаем направление; на другой ключ — переключаем ключ и
   // сбрасываем dir в asc, чтобы интерфейс был предсказуем.
@@ -100,7 +109,7 @@ export function ResultsTable({ products, deltas, onSelect }: Props) {
   const sorted = [...products].sort((a, b) => {
     let cmp = 0
     if (sortKey === 'price') {
-      cmp = a.price_rub - b.price_rub
+      cmp = effectivePrice(a, adjusted) - effectivePrice(b, adjusted)
     } else if (sortKey === 'store') {
       cmp = getStoreLabel(a.store_slug).localeCompare(getStoreLabel(b.store_slug), 'ru-RU')
     } else if (sortKey === 'title') {
@@ -178,6 +187,7 @@ export function ResultsTable({ products, deltas, onSelect }: Props) {
               <SortableTh keyName="title" label="Название" />
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden lg:table-cell">Параметры</th>
               <SortableTh keyName="price" label="Цена" />
+              <th className="px-2 py-2.5 text-left text-xs text-gray-500 font-medium whitespace-nowrap" title="Скидки и личные программы лояльности">♢</th>
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden xl:table-cell whitespace-nowrap" title="Изменение цены между двумя последними точками истории">Δ</th>
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden lg:table-cell">Дата</th>
             </tr>
@@ -212,7 +222,10 @@ export function ResultsTable({ products, deltas, onSelect }: Props) {
                 </td>
                 <td className="px-3 py-2.5 hidden lg:table-cell">{renderParams(p)}</td>
                 <td className="px-3 py-2.5 whitespace-nowrap text-green-400 font-semibold">
-                  {formatPrice(p.price_rub)}
+                  {formatPrice(effectivePrice(p, adjusted))}
+                </td>
+                <td className="px-2 py-2.5 whitespace-nowrap">
+                  <DiscountCell p={p} adjusted={adjusted?.get(p.id)} />
                 </td>
                 <td className="px-3 py-2.5 hidden xl:table-cell">
                   <PriceDelta delta={deltas?.get(p.id)} />
@@ -282,10 +295,11 @@ export function ResultsTable({ products, deltas, onSelect }: Props) {
               </div>
               <div className="font-medium text-gray-200 line-clamp-2 mb-1">{p.title}</div>
               <div className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <div className="text-green-400 font-semibold whitespace-nowrap">
-                    {formatPrice(p.price_rub)}
+                    {formatPrice(effectivePrice(p, adjusted))}
                   </div>
+                  <DiscountCell p={p} adjusted={adjusted?.get(p.id)} />
                   <PriceDelta delta={deltas?.get(p.id)} />
                 </div>
                 {renderParams(p)}

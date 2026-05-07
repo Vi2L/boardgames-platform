@@ -389,7 +389,12 @@ export const fetchFavorites = () =>
   fetch(`${BASE}/favorites`).then(r => json<FavoriteOut[]>(r))
 
 export const createFavorite = (payload: {
-  query: string; stores?: string[]; limit?: number; refresh?: boolean
+  query: string
+  stores?: string[]
+  limit?: number
+  refresh?: boolean
+  show_out_of_stock?: boolean
+  loyalty?: Record<string, unknown>
 }) =>
   fetch(`${BASE}/favorites`, {
     method: 'POST',

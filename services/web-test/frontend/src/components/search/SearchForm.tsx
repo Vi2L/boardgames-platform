@@ -1,8 +1,9 @@
 import { useRef } from 'react'
-import { Search, RotateCcw, Square } from 'lucide-react'
+import { Search, RotateCcw, Square, PackageX } from 'lucide-react'
 import clsx from 'clsx'
 import type { StoreOut } from '../../types/api'
 import { useSearchStore } from '../../store/search'
+import { LoyaltyPanel } from './LoyaltyPanel'
 
 interface Props {
   stores: StoreOut[]
@@ -12,8 +13,8 @@ interface Props {
 
 export function SearchForm({ stores, onSearch, onStop }: Props) {
   const {
-    query, selectedStores, refresh, limit, isSearching,
-    setQuery, toggleStore, setAllStores, clearStores, setRefresh, setLimit,
+    query, selectedStores, refresh, limit, showOutOfStock, isSearching,
+    setQuery, toggleStore, setAllStores, clearStores, setRefresh, setLimit, setShowOutOfStock,
   } = useSearchStore()
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -96,7 +97,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
         </div>
       )}
 
-      <div className="flex items-center gap-5">
+      <div className="flex flex-wrap items-center gap-5">
         <label className="flex items-center gap-2 cursor-pointer select-none">
           <input
             type="checkbox"
@@ -108,18 +109,31 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
             <RotateCcw size={11} /> Принудительное обновление
           </span>
         </label>
+        <label className="flex items-center gap-2 cursor-pointer select-none" title="HobbyGames и CrowdGames отдают признак наличия; Лавка и GaGa — нет, их товары всегда видны">
+          <input
+            type="checkbox"
+            checked={showOutOfStock}
+            onChange={e => setShowOutOfStock(e.target.checked)}
+            className="accent-violet-500 w-3.5 h-3.5"
+          />
+          <span className="text-xs text-gray-400 flex items-center gap-1">
+            <PackageX size={11} /> Показать товары не в наличии
+          </span>
+        </label>
         <label className="flex items-center gap-2">
           <span className="text-xs text-gray-400">Лимит:</span>
           <input
             type="number"
             value={limit}
-            onChange={e => setLimit(Math.max(1, Math.min(50, Number(e.target.value))))}
+            onChange={e => setLimit(Math.max(1, Math.min(500, Number(e.target.value))))}
             min={1}
-            max={50}
+            max={500}
             className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-300 focus:outline-none focus:border-violet-500"
           />
         </label>
       </div>
+
+      <LoyaltyPanel />
     </form>
   )
 }

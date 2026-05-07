@@ -94,7 +94,7 @@ async def search(
     q: str = Query(..., min_length=1, description="Название игры"),
     refresh: bool = Query(False, description="Принудительно обновить кеш"),
     stores: str | None = Query(None, description="Фильтр по магазинам, через запятую: hobbygames,labirint"),
-    limit: int = Query(10, ge=1, le=50),
+    limit: int = Query(10, ge=1, le=500),
 ):
     """Найти игру по названию. Возвращает цены из кеша или свежие данные."""
     store_slugs = [s.strip() for s in stores.split(",")] if stores else None

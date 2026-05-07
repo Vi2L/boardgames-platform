@@ -143,6 +143,10 @@ _MIGRATIONS: list[str] = [
     );
     """,
     "CREATE INDEX IF NOT EXISTS idx_suite_baselines ON suite_baselines(suite_id);",
+    # v3 (2026-05): preset_json — JSON со «всеми остальными» UI-настройками
+    # favorite (showOutOfStock, конфиг лояльности). Через одну колонку,
+    # чтобы не плодить миграций при каждом расширении пресета.
+    "ALTER TABLE favorites ADD COLUMN preset_json TEXT;",
 ]
 
 
@@ -700,17 +704,19 @@ class PortalDB:
     async def create_favorite(
         self, *, query: str, stores: list[str] | None,
         limit_n: int | None, refresh: bool,
+        preset: dict | None = None,
     ) -> int:
         cur = await self.conn.execute(
             """
-            INSERT INTO favorites (query, stores, limit_n, refresh, created_at)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO favorites (query, stores, limit_n, refresh, created_at, preset_json)
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 query,
                 ",".join(stores) if stores else None,
                 limit_n, 1 if refresh else 0,
                 _utc_now_iso(),
+                json.dumps(preset, ensure_ascii=False) if preset else None,
             ),
         )
         await self.conn.commit()
@@ -721,14 +727,27 @@ class PortalDB:
             "SELECT * FROM favorites ORDER BY created_at DESC, id DESC",
         )
         rows = await cur.fetchall()
-        return [
-            {
+        out: list[dict[str, Any]] = []
+        for r in rows:
+            preset = None
+            # preset_json появилась в v3-миграции; у row aiosqlite нет .get()
+            try:
+                raw = r["preset_json"]
+            except (IndexError, KeyError):
+                raw = None
+            if raw:
+                try:
+                    preset = json.loads(raw)
+                except (json.JSONDecodeError, TypeError):
+                    preset = None
+            out.append({
                 "id": r["id"], "query": r["query"], "stores": r["stores"],
                 "limit_n": r["limit_n"], "refresh": bool(r["refresh"]),
                 "created_at": r["created_at"],
-            }
-            for r in rows
-        ]
+                "show_out_of_stock": (preset or {}).get("show_out_of_stock"),
+                "loyalty": (preset or {}).get("loyalty"),
+            })
+        return out
 
     async def delete_favorite(self, favorite_id: int) -> bool:
         cur = await self.conn.execute(
