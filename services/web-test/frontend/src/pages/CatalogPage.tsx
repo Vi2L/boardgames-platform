@@ -22,13 +22,15 @@ import {
 } from '../lib/catalog'
 import { GameDetailDrawer } from '../components/catalog/GameDetailDrawer'
 import { ImportWizard } from '../components/catalog/ImportWizard'
-import { Download } from 'lucide-react'
+import { GameEditor } from '../components/catalog/GameEditor'
+import { Download, Plus } from 'lucide-react'
 
 type Tab = 'catalog' | 'matching'
 
 export function CatalogPage() {
   const [tab, setTab] = useState<Tab>('catalog')
   const [showImport, setShowImport] = useState(false)
+  const [showCreate, setShowCreate] = useState(false)
   const health = useQuery({
     queryKey: ['catalog', 'health'],
     queryFn: fetchCatalogHealth,
@@ -41,6 +43,13 @@ export function CatalogPage() {
       <div className="flex items-center justify-between">
         <h1 className="text-xl font-semibold text-gray-100">Каталог настольных игр</h1>
         <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setShowCreate(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 text-white rounded"
+          >
+            <Plus size={12} /> Новая игра
+          </button>
           <button
             type="button"
             onClick={() => setShowImport(true)}
@@ -56,6 +65,7 @@ export function CatalogPage() {
         </div>
       </div>
       {showImport && <ImportWizard onClose={() => setShowImport(false)} />}
+      {showCreate && <GameEditor mode="create" onClose={() => setShowCreate(false)} />}
 
       <div className="flex gap-2 border-b border-gray-800">
         {(['catalog', 'matching'] as Tab[]).map(t => (

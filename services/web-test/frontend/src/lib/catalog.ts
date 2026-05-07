@@ -140,6 +140,44 @@ export const rejectOffer = (offerId: number) =>
   fetch(`${BASE}/matching/${offerId}/reject`, { method: 'POST' })
     .then(r => json<CatalogOffer>(r))
 
+// ── Game CRUD (manual) ─────────────────────────────────────────────
+
+export type GameCreatePayload = {
+  slug: string
+  title: string
+  year?: number | null
+  designers?: string[] | null
+  publishers?: string[] | null
+  players_min?: number | null
+  players_max?: number | null
+  age_min?: number | null
+  playtime_min?: number | null
+  playtime_max?: number | null
+  bgg_id?: number | null
+  tesera_id?: number | null
+  cover_url?: string | null
+  description?: string | null
+  source?: string
+}
+
+export type GamePatchPayload = Partial<Omit<GameCreatePayload, 'slug'>> & {
+  status?: string
+}
+
+export const createGame = (payload: GameCreatePayload) =>
+  fetch(`${BASE}/games`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<CatalogGame>(r))
+
+export const patchGame = (gameId: number, payload: GamePatchPayload) =>
+  fetch(`${BASE}/games/${gameId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<CatalogGame>(r))
+
 // ── Imports (BGG / Tesera) ──────────────────────────────────────────
 
 export type ImportJobStatus = 'pending' | 'running' | 'done' | 'failed'

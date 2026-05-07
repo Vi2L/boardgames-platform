@@ -79,6 +79,18 @@ class CatalogClient:
         resp = await self._client.post(f"/matching/{offer_id}/reject")
         return _ok_or_raise(resp)
 
+    # ── Game CRUD ───────────────────────────────────────────────────────
+
+    async def create_game(self, payload: dict) -> dict[str, Any]:
+        """POST /games → создать каноническую игру вручную."""
+        resp = await self._client.post("/games", json=payload)
+        return _ok_or_raise(resp)
+
+    async def patch_game(self, game_id: int, payload: dict) -> dict[str, Any]:
+        """PATCH /games/{id} → частичное обновление."""
+        resp = await self._client.patch(f"/games/{game_id}", json=payload)
+        return _ok_or_raise(resp)
+
     # ── Imports (BGG / Tesera) ──────────────────────────────────────────
 
     async def import_bgg(self, payload: dict) -> dict[str, Any]:

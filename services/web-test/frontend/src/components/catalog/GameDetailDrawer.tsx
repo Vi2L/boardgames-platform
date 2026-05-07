@@ -6,12 +6,14 @@
  * Drawer открывается справа поверх CatalogPage, не меняет URL — это
  * быстрый peek; для глубокой работы есть отдельная страница (TODO).
  */
+import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { X, Loader2, ExternalLink, Users, Clock, Calendar, Cake } from 'lucide-react'
+import { X, Loader2, ExternalLink, Users, Clock, Calendar, Cake, Pencil } from 'lucide-react'
 import { fetchCatalogGame } from '../../lib/catalog'
 import { AliasEditor } from './AliasEditor'
 import { BggCard } from './BggCard'
 import { WikidataCard } from './WikidataCard'
+import { GameEditor } from './GameEditor'
 
 interface Props {
   gameId: number
@@ -19,6 +21,7 @@ interface Props {
 }
 
 export function GameDetailDrawer({ gameId, onClose }: Props) {
+  const [editing, setEditing] = useState(false)
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['catalog', 'game-detail', gameId],
     queryFn: () => fetchCatalogGame(gameId),
@@ -36,10 +39,22 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
             </span>
             <span className="text-xs font-mono text-gray-500">#{gameId}</span>
           </div>
-          <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded">
-            <X size={16} />
-          </button>
+          <div className="flex items-center gap-1">
+            {data && (
+              <button onClick={() => setEditing(true)} title="Редактировать"
+                      className="p-1 text-gray-400 hover:text-violet-300 hover:bg-violet-950/40 rounded">
+                <Pencil size={14} />
+              </button>
+            )}
+            <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded">
+              <X size={16} />
+            </button>
+          </div>
         </div>
+
+        {editing && data && (
+          <GameEditor mode="edit" game={data} onClose={() => setEditing(false)} />
+        )}
 
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">

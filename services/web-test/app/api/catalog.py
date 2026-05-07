@@ -84,6 +84,36 @@ async def reject_offer(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+# ── Game CRUD (manual create / edit) ───────────────────────────────────────
+
+
+@router.post("/games")
+async def create_game(
+    body: dict,  # GameCreate-совместимый payload (slug + title обязательны)
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    if not isinstance(body.get("slug"), str) or not body["slug"].strip():
+        raise HTTPException(status_code=400, detail="slug required")
+    if not isinstance(body.get("title"), str) or not body["title"].strip():
+        raise HTTPException(status_code=400, detail="title required")
+    try:
+        return await client.create_game(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.patch("/games/{game_id}")
+async def patch_game(
+    game_id: int,
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.patch_game(game_id, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 # ── Imports (BGG / Tesera) ─────────────────────────────────────────────────
 
 
