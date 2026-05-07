@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Vite
+node_modules/
+**/dist/
+
+# Базы данных и сырые данные парсеров (никогда не коммитим)
+*.sqlite
+*.sqlite-journal
+*.db
+services/*/data/
+
+# Секреты — в индекс попадает только .env.example
+.env
+.env.local
+.env.*.local
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+
+# Локальные настройки Claude Code конкретного разработчика
+.claude/settings.local.json
