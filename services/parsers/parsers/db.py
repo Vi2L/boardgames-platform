@@ -304,6 +304,52 @@ class PriceDatabase:
             )
             await db.commit()
 
+    async def clear_cache(
+        self,
+        store_slug: str | None = None,
+        query: str | None = None,
+    ) -> dict:
+        """Удалить products + связанные price_observations.
+
+        Используется веб-порталом для отладки парсеров: «парсер починил —
+        прогон с холодного кеша». Без аргументов чистит всё (опасно — UI
+        обязан спрашивать подтверждение).
+
+        FK на price_observations нет ON DELETE CASCADE (SQLite по умолчанию
+        даже не включает foreign_keys), поэтому удаляем явно: сначала
+        observations, потом products.
+
+        Возвращает {"deleted_products": N, "deleted_observations": M} —
+        UI покажет, сколько вычистили.
+        """
+        clauses = []
+        params: list = []
+        if store_slug:
+            clauses.append("store_slug = ?")
+            params.append(store_slug)
+        if query:
+            clauses.append("normalized_title LIKE ?")
+            params.append(f"%{query.lower()}%")
+        where_sql = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                f"DELETE FROM price_observations "
+                f"WHERE product_id IN (SELECT id FROM products{where_sql})",
+                params,
+            )
+            obs_deleted = cur.rowcount
+            cur = await db.execute(f"DELETE FROM products{where_sql}", params)
+            prod_deleted = cur.rowcount
+            await db.commit()
+
+        return {
+            "deleted_products": prod_deleted,
+            "deleted_observations": obs_deleted,
+            "store": store_slug,
+            "query": query,
+        }
+
     async def log_parser(
         self,
         store_slug: str,

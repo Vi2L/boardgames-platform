@@ -1,9 +1,12 @@
 import { useState } from 'react'
-import { Play, Square, CheckCircle2, XCircle } from 'lucide-react'
+import { Play, Square, CheckCircle2, XCircle, Trash2, Loader2 } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import clsx from 'clsx'
 import type { HttpLog, ParserStatsOut } from '../../types/api'
 import { HttpLogEntry } from './HttpLogEntry'
 import { useSSE } from '../../lib/sse'
+import { invalidateParserCache } from '../../lib/api'
 import { getStoreBorderColor, getStoreDomain } from '../../lib/stores'
 
 interface Props {
@@ -81,6 +84,27 @@ export function ParserCard({ parser }: Props) {
     setIsRunning(false)
   }
 
+  const queryClient = useQueryClient()
+  const invalidate = useMutation({
+    // Без q — все products магазина. С q — только подмножество. Кнопка
+    // имеет два режима: «всё» если поле пустое, «по q» если что-то набрано.
+    mutationFn: () => invalidateParserCache({
+      store: parser.slug,
+      q: runQuery.trim() || undefined,
+    }),
+    onSuccess: (data) => {
+      toast.success(
+        runQuery.trim()
+          ? `Кеш ${parser.slug} по «${runQuery.trim()}» очищен (товаров: ${data.deleted_products})`
+          : `Кеш ${parser.slug} полностью очищен (товаров: ${data.deleted_products})`,
+      )
+      // Сбрасываем cache фронта, чтобы DB-страницы и stats обновились.
+      queryClient.invalidateQueries({ queryKey: ['db'] })
+      queryClient.invalidateQueries({ queryKey: ['stats'] })
+    },
+    onError: (e) => toast.error(`Не удалось очистить кеш: ${e}`),
+  })
+
   return (
     <div className={clsx('bg-gray-900 border rounded-lg p-4 space-y-3', getStoreBorderColor(parser.slug))}>
       {/* Header */}
@@ -95,9 +119,30 @@ export function ParserCard({ parser }: Props) {
           </div>
           <div className="text-xs text-gray-500 mt-0.5">{getStoreDomain(parser.slug, parser.base_url)}</div>
         </div>
-        <span className="text-xs font-mono text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded">
-          {parser.slug}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => {
+              if (!runQuery.trim() && !window.confirm(
+                `Сбросить ВСЕ товары ${parser.slug} из кеша? (${parser.name})\n\n` +
+                'Введи запрос в поле, чтобы очистить только его (по LIKE).',
+              )) return
+              invalidate.mutate()
+            }}
+            disabled={invalidate.isPending}
+            title={runQuery.trim()
+              ? `Сбросить кеш ${parser.slug} только для «${runQuery.trim()}»`
+              : `Сбросить весь кеш ${parser.slug} (с подтверждением)`}
+            className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/40 disabled:opacity-40"
+          >
+            {invalidate.isPending
+              ? <Loader2 size={12} className="animate-spin" />
+              : <Trash2 size={12} />}
+          </button>
+          <span className="text-xs font-mono text-gray-600 bg-gray-800 px-1.5 py-0.5 rounded">
+            {parser.slug}
+          </span>
+        </div>
       </div>
 
       {/* Run form */}

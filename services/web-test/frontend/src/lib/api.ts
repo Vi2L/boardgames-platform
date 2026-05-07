@@ -74,6 +74,26 @@ export const fetchStatsStores = () =>
 export const fetchStatsErrors = (limit = 20) =>
   fetch(`${BASE}/stats/errors?limit=${limit}`).then(r => json<unknown[]>(r))
 
+// ── Cache invalidation ──────────────────────────────────────────────────
+
+export interface CacheInvalidateResult {
+  deleted_products: number
+  deleted_observations: number
+  store: string | null
+  query: string | null
+}
+
+export const invalidateParserCache = (params: {
+  store?: string; q?: string; confirm?: boolean
+} = {}) => {
+  const sp = new URLSearchParams()
+  if (params.store) sp.set('store', params.store)
+  if (params.q) sp.set('q', params.q)
+  if (params.confirm) sp.set('confirm', 'true')
+  return fetch(`${BASE}/parsers/cache?${sp}`, { method: 'DELETE' })
+    .then(r => json<CacheInvalidateResult>(r))
+}
+
 // ── Debug / Live Test ──────────────────────────────────────────────────
 
 export const debugParse = (params: { q: string; stores?: string[]; limit?: number }) => {

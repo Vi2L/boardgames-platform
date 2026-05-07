@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.api.search import _run_search, _stream
 from app.deps import get_parsers_client
+from app.parsers_client import ParsersServiceError
 from app.schemas import ParserStatsOut
 
 router = APIRouter(prefix="/parsers", tags=["parsers"])
@@ -29,6 +30,24 @@ async def list_parsers() -> list[ParserStatsOut]:
         ]
     except Exception:
         return []
+
+
+@router.delete("/cache")
+async def invalidate_cache(
+    store: str | None = Query(None, description="Slug магазина"),
+    q: str | None = Query(None, description="Подстрока запроса"),
+    confirm: bool = Query(False, description="Wipe всё (требует true без store/q)"),
+) -> dict:
+    """Инвалидация кеша parsers.
+
+    Тонкий прокси на DELETE /api/cache parsers. Без store и q parsers
+    отвечает 400, если confirm не выставлен — мы пробрасываем это требование.
+    """
+    client = get_parsers_client()
+    try:
+        return await client.invalidate_cache(store=store, q=q, confirm=confirm)
+    except ParsersServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
 @router.get("/{slug}/run")

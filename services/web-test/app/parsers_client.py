@@ -116,6 +116,30 @@ class ParsersClient:
 
     # ── Debug (диагностические endpoint'ы parsers) ──────────────────────
 
+    async def invalidate_cache(
+        self,
+        store: str | None = None,
+        q: str | None = None,
+        confirm: bool = False,
+    ) -> dict:
+        """DELETE /api/cache → удалить cached products + observations.
+
+        Без store и q parsers требует confirm=true. Тут это поведение
+        просто пробрасывается — UI должен явно спросить пользователя.
+        """
+        params: dict[str, Any] = {}
+        if store:
+            params["store"] = store
+        if q:
+            params["q"] = q
+        if confirm:
+            params["confirm"] = "true"
+        resp = await self._client.request("DELETE", "/api/cache", params=params)
+        if resp.is_error:
+            detail = _extract_detail(resp) or f"HTTP {resp.status_code}"
+            raise ParsersServiceError(resp.status_code, detail)
+        return resp.json()
+
     async def debug_features(self) -> dict:
         """GET /api/debug/features → какие debug-возможности активны на parsers."""
         resp = await self._client.get("/api/debug/features")

@@ -117,6 +117,34 @@ async def price_history(product_id: int):
     return [{"price": p.price, "fetched_at": p.fetched_at.isoformat()} for p in points]
 
 
+@app.delete("/api/cache")
+async def clear_cache(
+    store: str | None = Query(None, description="Магазин (slug). Без — все магазины"),
+    q: str | None = Query(
+        None,
+        description="Подстрока запроса (LIKE %q%); без — все запросы",
+    ),
+    confirm: bool = Query(
+        False,
+        description="Обязательное подтверждение для wipe-all (без store и q)",
+    ),
+):
+    """Удалить кеш products + price_observations (для отладки парсеров).
+
+    Без store/q — wipe всей БД, требует confirm=true. С store или q —
+    точечная инвалидация.
+    """
+    if not store and not q and not confirm:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "wipe всей БД требует confirm=true. Иначе укажи store или q "
+                "для точечной инвалидации."
+            ),
+        )
+    return await _db.clear_cache(store_slug=store, query=q)
+
+
 # ---------------------------------------------------------------------------
 # Хелперы
 # ---------------------------------------------------------------------------
