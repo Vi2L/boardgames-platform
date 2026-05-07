@@ -115,8 +115,19 @@ services:
       PARSERS_API_URL: http://parsers:8001
       CATALOG_API_URL: http://catalog:8002
       CATALOG_API_KEY: ${CATALOG_API_KEY:-}
+      # PG* читает сам pg_dump (см. man) — используется в /api/catalog/backup.
+      # Тот же набор credentials, что у postgres-сервиса; никаких новых секретов.
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGUSER: ${POSTGRES_USER:-catalog}
+      PGPASSWORD: ${POSTGRES_PASSWORD:-catalog}
+      PGDATABASE: ${POSTGRES_DB:-catalog}
+      BACKUP_DIR: /backups
     volumes:
       - portal-data:/data
+      # Bind на host: дампы видно из Finder/IDE без `docker cp`. Папка в
+      # .gitignore (см. d3659a3). Создастся автоматически при `up`.
+      - ./.scratch/backups:/backups
     depends_on:
       - parsers
       - catalog

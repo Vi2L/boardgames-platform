@@ -17,9 +17,30 @@ RUN npm run build
 # =============================================================================
 # Stage 2: Python-бэкенд + собранный фронтенд
 # =============================================================================
-FROM python:3.12-slim
+FROM python:3.12-slim-bookworm
 
 WORKDIR /app
+
+# postgresql-client-16 нужен для pg_dump в /api/catalog/backup. Подключаемся
+# к контейнеру postgres напрямую по docker-сети `bg` — без docker socket
+# и без docker CLI.
+#
+# Версия клиента ДОЛЖНА совпадать с major-версией сервера (postgres:16-alpine
+# в docker-compose.yml). В debian bookworm дефолтный `postgresql-client`
+# равен 15 или 17, и pg_dump>=17 пишет формат `1.16`, который pg_restore 16
+# не читает («unsupported version in file header»). Поэтому ставим клиент
+# из официального PGDG-репозитория с pin'ом на 16.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+    && install -d /usr/share/postgresql-common/pgdg \
+    && curl --fail -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+        https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+    && echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main" \
+        > /etc/apt/sources.list.d/pgdg.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-16 \
+    && apt-get purge -y --auto-remove curl gnupg \
+    && rm -rf /var/lib/apt/lists/*
 
 # Все Python-зависимости имеют pre-built wheels (pydantic, fastapi, uvicorn,
 # aiosqlite, httpx, python-dotenv) — компилятор не нужен.
