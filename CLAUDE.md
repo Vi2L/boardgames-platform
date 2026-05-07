@@ -49,12 +49,86 @@ catalog/
 ├── api.py        # FastAPI app + /health
 ├── config.py     # pydantic-settings (env -> Settings)
 ├── db.py         # async engine, Base, get_session() FastAPI dep
-├── models.py     # ORM-модели (этап 2)
-├── routers/      # бизнес-эндпоинты (этап 3+)
-├── matching/     # pg_trgm-матчер (этап 5)
-├── importers/    # BGG / Tesera (этап 3-4)
-└── auth.py       # X-API-Key middleware (этап 7)
+├── models.py     # ORM-модели — canonical games + satellite tables
+├── schemas.py    # Pydantic v2 (GameOut, GameDetailOut с bgg/wikidata)
+├── wikidata.py   # WikidataClient + parser entity-payload
+├── routers/      # бизнес-эндпоинты
+├── matching/     # pg_trgm-матчер
+├── importers/    # BGG XML / Tesera JSON импортёры (через POST /import)
+├── scripts/      # CLI: import_bgg_ranks, import_wikidata, migrate_meta_*
+└── auth.py       # X-API-Key middleware
 ```
+
+## Satellite-схема (с миграции `0002_satellite_schema`)
+
+Каждый внешний источник живёт в своей таблице с «жёсткими» полями + `raw jsonb`
++ `fetched_at`. Связь с canonical `games` через `game_id`. Reference design —
+`~/Projects/board_game_db` (есть `GameWikidata`, `TsGame`, `DfGame` etc.).
+
+```
+games  (canonical, slim)
+  ├── game_aliases   (cross-source aliases для матчинга, +language, +verified)
+  ├── game_bgg       (1:1) — BGG: rank, scores, designers, mechanics, raw
+  ├── game_wikidata  (1:1) — labels/aliases/descriptions per language, entity_id
+  └── (FUTURE) game_tesera, game_dicefest
+```
+
+Источники в `game_aliases.source`:
+| value | language | verified | смысл |
+|---|---|---|---|
+| `manual` | NULL | true | оператор подтвердил вручную |
+| `auto-match` | NULL | false | pg_trgm matcher (≥0.6) |
+| `wikidata` | `'ru'`, `'en'`, ... | false | labels/aliases из Wikidata |
+| `bgg` | `'en'` | false | alternate names из BGG XML |
+| `tesera` (FUTURE) | `'ru'` | false | названия с tesera.ru |
+
+**Зачем jsonb колонки в satellite'ах**: GIN-индексы по часто-запрашиваемым ключам
+(`ix_game_wikidata_aliases_ru_gin` — для `aliases->'ru' ?` поиска). Остальное —
+для аудита и реэкстракции.
+
+## Обогащение catalog'а
+
+### CSV BGG ranks (массовый seed)
+
+```bash
+.venv/bin/python -m catalog.scripts.import_bgg_ranks /path/to/boardgames_ranks.csv
+```
+
+Заливает 176K записей в `games` + `game_bgg` за ~50 секунд. Идемпотентно
+(`ON CONFLICT (bgg_id) DO UPDATE`). Поля: rank, bayes_average, average,
+users_rated, is_expansion, subtype_ranks. Description/mechanics/designers
+остаются пустыми — для них нужен XML API через `POST /import/bgg`.
+
+### Wikidata (русские локализации + descriptions)
+
+```bash
+.venv/bin/python -m catalog.scripts.import_wikidata --only-rank-le 1000
+```
+
+Обходит топ-N игр по rank, обогащает `game_wikidata` (labels/aliases/
+descriptions per language) и пишет ru-локализации в `game_aliases` со
+`source='wikidata'`, `language='ru'`. 1 req/sec по best practice Wikidata,
+fully recoverable retry на 429/5xx. Топ-1000 — ~17 минут. Для полного прогона
+по 30K ranked-играм — ~8 часов под `nohup`.
+
+Алгоритм: SPARQL `VALUES`-batch (50 ID на запрос) → entity-API per Q-id →
+parse → upsert. Источник адаптирован из `~/Projects/board_game_db/app/wikidata.py`.
+
+### XML API BGG (точечное полное обогащение)
+
+```bash
+curl -X POST 'http://localhost:8012/import/bgg?wait=true' \
+  -H 'content-type: application/json' -d '{"bgg_id":822}'
+```
+
+Скачивает XML, заполняет `game_bgg` `description`/`designers`/`mechanics`/
+`categories`/`min_players` и т.д. По одной игре за вызов (rate-limit BGG).
+
+### Tesera — отложено
+
+Cloudflare блокирует tesera.ru / api.tesera.ru с большинства не-RU-IP.
+Когда появится прокси — добавим `game_tesera` (схема готова в плане
+`~/.claude/plans/woolly-wobbling-simon.md`) и `import_tesera_html.py`.
 
 ## Контракты с соседями
 
