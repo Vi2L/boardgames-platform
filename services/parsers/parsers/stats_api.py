@@ -166,6 +166,15 @@ async def db_price_distribution(store: str | None = None):
     return await _db.get_price_distribution(store_slug=store)
 
 
+@router.delete("/api/db/observations/{observation_id}")
+async def db_delete_observation(observation_id: int):
+    """Удалить одну ошибочную price-observation (мусорная цена и т.п.)."""
+    ok = await _db.delete_observation(observation_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Наблюдение не найдено")
+    return {"deleted": True, "id": observation_id}
+
+
 # ---------------------------------------------------------------------------
 # Debug — raw HTTP snapshots
 # ---------------------------------------------------------------------------

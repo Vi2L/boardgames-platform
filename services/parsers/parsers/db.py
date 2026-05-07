@@ -304,6 +304,20 @@ class PriceDatabase:
             )
             await db.commit()
 
+    async def delete_observation(self, observation_id: int) -> bool:
+        """Удалить одну ошибочную price-observation.
+
+        Используется при отладке нового парсера, когда он однажды сложил
+        мусор (например, цену с буквой) и испортил график. Hard-delete —
+        восстановить нельзя без повторного парсинга.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                "DELETE FROM price_observations WHERE id = ?", (observation_id,),
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
     async def clear_cache(
         self,
         store_slug: str | None = None,

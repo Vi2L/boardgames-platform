@@ -209,6 +209,16 @@ class ParsersClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def delete_parsers_observation(self, observation_id: int) -> bool:
+        """DELETE /api/db/observations/{id} → удалить одну точку истории."""
+        resp = await self._client.request(
+            "DELETE", f"/api/db/observations/{observation_id}",
+        )
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
     async def debug_fetch_url(
         self,
         url: str,

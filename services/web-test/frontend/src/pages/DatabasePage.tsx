@@ -13,10 +13,12 @@ import { getStoreBadgeColor, getStoreLabel, STORE_LABELS } from '../lib/stores'
 import { PriceHistogram } from '../components/database/PriceHistogram'
 import { InventoryTab } from '../components/database/parsers/InventoryTab'
 import { AnalyticsTab } from '../components/database/parsers/AnalyticsTab'
+import { ProductsBrowserTab } from '../components/database/parsers/ProductsBrowserTab'
 import { SkeletonList } from '../components/shared/Skeleton'
 import type { ProductOut, StoreHealthEntry } from '../types/api'
 
-type Tab = 'products' | 'stores' | 'searches' | 'parsers-inventory' | 'parsers-analytics'
+type Tab = 'products' | 'stores' | 'searches'
+        | 'parsers-inventory' | 'parsers-products' | 'parsers-analytics'
 
 const SORT_OPTIONS = [
   { value: 'fetched_desc', label: 'Свежие' },
@@ -50,6 +52,9 @@ export function DatabasePage() {
           <TabButton active={tab === 'parsers-inventory'} onClick={() => setTab('parsers-inventory')}>
             БД парсеров: inventory
           </TabButton>
+          <TabButton active={tab === 'parsers-products'} onClick={() => setTab('parsers-products')}>
+            БД парсеров: товары
+          </TabButton>
           <TabButton active={tab === 'parsers-analytics'} onClick={() => setTab('parsers-analytics')}>
             БД парсеров: аналитика
           </TabButton>
@@ -60,6 +65,7 @@ export function DatabasePage() {
           {tab === 'stores' && <StoresTab />}
           {tab === 'searches' && <SearchesTab />}
           {tab === 'parsers-inventory' && <InventoryTab />}
+          {tab === 'parsers-products' && <ProductsBrowserTab />}
           {tab === 'parsers-analytics' && <AnalyticsTab />}
         </div>
       </div>

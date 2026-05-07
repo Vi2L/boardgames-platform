@@ -166,6 +166,30 @@ export const fetchParsersLatency = (hours = 24) =>
 export const fetchParsersEmptyResponses = (hours = 24, limit = 50) =>
   fetch(`${BASE}/parsers-db/empty-responses?hours=${hours}&limit=${limit}`).then(r => json<ParsersEmptyResponse[]>(r))
 
+export type ParsersProductDetail = {
+  id: number
+  store_slug: string
+  external_id: string
+  title: string
+  url: string
+  observations: Array<{
+    id: number
+    price: number
+    fetched_at: string
+    raw_json?: string
+    [k: string]: unknown
+  }>
+  [k: string]: unknown
+}
+
+export const fetchParsersDbProduct = (id: number) =>
+  fetch(`${BASE}/parsers-db/products/${id}`).then(r => json<ParsersProductDetail>(r))
+
+export const deleteParsersObservation = async (id: number) => {
+  const r = await fetch(`${BASE}/parsers-db/observations/${id}`, { method: 'DELETE' })
+  if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
+}
+
 // ── Cache invalidation ──────────────────────────────────────────────────
 
 export interface CacheInvalidateResult {

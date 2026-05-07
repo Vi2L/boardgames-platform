@@ -101,3 +101,16 @@ async def price_distribution(
         return await client.get_price_distribution(store=store)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
+@router.delete("/observations/{observation_id}", status_code=204)
+async def delete_observation(
+    observation_id: int, client: ParsersClient = Depends(get_parsers_client),
+) -> None:
+    """Удалить одну price-observation — точечная чистка кривых записей."""
+    try:
+        ok = await client.delete_parsers_observation(observation_id)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+    if not ok:
+        raise HTTPException(status_code=404, detail="observation not found")
