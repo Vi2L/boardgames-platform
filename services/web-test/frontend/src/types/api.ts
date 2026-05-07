@@ -198,14 +198,18 @@ export interface SearchesPage {
   page_size: number
 }
 
-/** parsers /api/stats/stores — структура зависит от parsers, держим частично типизированной. */
+/** parsers /api/stats/stores — здоровье парсеров за последние 24ч. */
 export interface StoreHealthEntry {
-  slug?: string
-  name?: string
-  success_rate?: number
-  avg_ms?: number
-  last_error?: string | null
-  total?: number
+  store_slug: string
+  total_calls_24h: number
+  success_count_24h: number
+  /** Успешность в процентах (0..100), не fraction. */
+  success_rate_24h: number | null
+  /** Среднее время ответа в мс. */
+  avg_response_ms: number | null
+  last_seen: string | null
+  last_success: string | null
+  last_error: string | null
   [k: string]: unknown
 }
 

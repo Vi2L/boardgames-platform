@@ -14,7 +14,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  Loader2, Trash2, ChevronDown, ChevronRight, ExternalLink, Filter,
+  Loader2, Trash2, ChevronDown, ChevronRight, ExternalLink, Filter, Info, RefreshCw,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -29,6 +29,7 @@ export function ProductsBrowserTab() {
   const [store, setStore] = useState('')
   const [q, setQ] = useState('')
   const [openId, setOpenId] = useState<number | null>(null)
+  const queryClient = useQueryClient()
 
   const parsers = useQuery({ queryKey: ['parsers'], queryFn: fetchParsers })
   const list = useQuery({
@@ -41,13 +42,36 @@ export function ProductsBrowserTab() {
     placeholderData: (prev) => prev,
   })
 
+  const handleRefresh = () => {
+    void queryClient.invalidateQueries({ queryKey: ['parsers-db', 'products'] })
+  }
+
   return (
     <div className="space-y-3">
+      <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
+        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
+        <div className="flex-1">
+          <strong className="text-gray-300">Browser БД parsers с управлением observations.</strong>
+          {' '}Клик по строке раскрывает все точки истории цен товара. Удаление наблюдения нужно,
+          когда парсер записал кривую цену (например, со склейкой строк) — точечная чистка без сброса всей истории.
+          После удаления Inventory и аналитика обновятся автоматически.
+        </div>
+        <button
+          type="button"
+          onClick={handleRefresh}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200"
+          title="Перезагрузить список товаров"
+        >
+          <RefreshCw size={11} /> Обновить
+        </button>
+      </div>
+
       <div className="flex items-center gap-3 flex-wrap">
         <Filter size={12} className="text-gray-500" />
         <select
           value={store}
           onChange={e => setStore(e.target.value)}
+          title="Фильтр по магазину"
           className="px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-200"
         >
           <option value="">все магазины</option>
@@ -60,10 +84,11 @@ export function ProductsBrowserTab() {
           value={q}
           onChange={e => setQ(e.target.value)}
           placeholder="title (LIKE %x%)…"
+          title="SQL LIKE %text% по полю title"
           className="px-2 py-1 text-xs bg-gray-800 border border-gray-700 rounded text-gray-200 placeholder-gray-500 w-64"
         />
-        <span className="text-xs text-gray-500 ml-auto">
-          {list.data ? `${list.data.total.toLocaleString()} товаров (показано ${list.data.items.length})` : '...'}
+        <span className="text-xs text-gray-500 ml-auto" title="Всего товаров матчит фильтр / на текущей странице">
+          {list.data ? `${list.data.total.toLocaleString('ru-RU')} товаров (показано ${list.data.items.length})` : '...'}
         </span>
       </div>
 

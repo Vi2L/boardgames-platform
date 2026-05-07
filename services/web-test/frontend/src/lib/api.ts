@@ -86,23 +86,32 @@ export const fetchStatsErrors = (limit = 20) =>
 
 // ── Parsers DB explorer (F4.1) ──────────────────────────────────────────
 
+/**
+ * Источник правды для имён полей — `parsers/api.py` / `services/web-test/app/api/parsers_db.py`.
+ *
+ * `tables` — counts из всех таблиц БД parsers (stores/products/price_observations/
+ * request_log/parser_log). UI показывает product_count/observation_count из tables,
+ * чтобы не плодить миграций при добавлении новых таблиц.
+ */
 export type ParsersDbMeta = {
-  size_bytes: number
-  product_count: number
-  observation_count: number
+  db_size_bytes: number
+  db_size_mb: number
+  tables: Record<string, number>
   oldest_observation: string | null
   newest_observation: string | null
   [k: string]: unknown
 }
 
+/** parsers `/api/db/stores-inventory` — цены сразу в рублях. */
 export type ParsersStoreInventory = {
   store_slug: string
-  product_count: number
-  observation_count: number
-  min_price: number | null
-  avg_price: number | null
-  max_price: number | null
-  last_seen: string | null
+  products_count: number
+  observations_count: number
+  min_price_rub: number | null
+  mean_price_rub: number | null
+  max_price_rub: number | null
+  oldest_obs: string | null
+  newest_obs: string | null
   [k: string]: unknown
 }
 
@@ -127,8 +136,12 @@ export type ParsersDbProductsPage = {
 
 export type ParsersTopQuery = {
   query: string
-  hits: number
+  count: number
+  cache_hits: number
+  cache_hit_rate: number          // 0..100
   avg_ms: number | null
+  errors: number
+  last_seen: string | null
   [k: string]: unknown
 }
 
