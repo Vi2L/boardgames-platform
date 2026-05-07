@@ -25,6 +25,7 @@ games — отдельный процесс (PR-2).
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import random
 import re
@@ -34,7 +35,7 @@ from typing import Any
 
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -87,7 +88,15 @@ class DicefestGame:
     """Распарсенная карточка с dicefest.
 
     raw_html и raw отдаются «как есть» в staging — позволяет перепарсить
-    при изменении селекторов БЕЗ повторного запроса к сайту.
+    при изменении селекторов БЕЗ повторного запроса к сайту (re-parse-job).
+
+    title_ru/title_en: если в исходном <h2> есть разделитель `/`, поделили на
+    две части по правилу «кириллица слева → ru, латиница справа → en».
+    publisher: российский издатель (на dicefest всегда РФ-издатель).
+    release_status: машинный data-status code (`v-prodazhe`, `buduschie-predzakazy`...).
+    preorder_price: копейки (как принято в проекте).
+    external_links: [{kind, url, label, external_id?}] — BGG / Tesera /
+                    Nastolio / магазин-партнёр (распарсено из link-features).
     """
 
     slug: str
@@ -95,11 +104,11 @@ class DicefestGame:
     title_ru: str | None = None
     title_en: str | None = None
     publisher: str | None = None
-    release_year: int | None = None
-    release_month: int | None = None
-    release_status: str | None = None       # data-status code (machine-readable)
+    release_status: str | None = None
     description: str | None = None
     cover_url: str | None = None
+    preorder_price: int | None = None
+    external_links: list[dict[str, Any]] = field(default_factory=list)
     raw_html: str = ""
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -120,7 +129,7 @@ def parse_card_html(html: str, slug: str) -> DicefestGame:
     raw: dict[str, Any] = {}
 
     # ── title: первый text node в <h2>, остальное — UI lazy-load ──
-    title_ru: str | None = None
+    raw_title: str | None = None
     h2 = soup.find("h2")
     if h2:
         # find first NavigableString child (без recursing)
@@ -128,10 +137,11 @@ def parse_card_html(html: str, slug: str) -> DicefestGame:
             if isinstance(child, str):
                 t = child.strip()
                 if t:
-                    title_ru = t
+                    raw_title = t
                     break
+    title_ru, title_en = _split_title_ru_en(raw_title)
 
-    # ── description pairs (Издательство, Статус игры, Предзаказ, Старт продаж) ──
+    # ── description pairs (Издательство, Статус игры, Предзаказ, Старт продаж, Цена) ──
     pairs: dict[str, dict[str, str | None]] = {}
     for title_p in soup.find_all("p", class_="game-popup-description__title"):
         # Сосед — следующий <p> с классом game-popup-description__text.
@@ -147,36 +157,36 @@ def parse_card_html(html: str, slug: str) -> DicefestGame:
     publisher = pairs.get("Издательство", {}).get("value") or None
     release_status_text = pairs.get("Статус игры", {}).get("value") or None
     release_status_code = pairs.get("Статус игры", {}).get("data_status") or None
-    # Стратегия выбора даты: "Старт продаж" — финальная (релиз). Если она
-    # известна — берём её. Иначе fallback на "Предзаказ" (он наступает раньше,
-    # но даёт хоть какой-то ориентир по году).
+    # release_year/_month УБРАНЫ из колонок (миграция 0005): они описывают
+    # русский релиз, а не оригинал — путают при матчинге с games.year.
+    # Исходный текст («2 половина 2026», «декабрь 2025») остаётся в raw для аудита.
     sales_text = pairs.get("Старт продаж", {}).get("value") or None
     preorder_text = pairs.get("Предзаказ", {}).get("value") or None
-    sales_y, sales_m = _parse_release_date(sales_text)
-    if sales_y is not None:
-        release_year, release_month = sales_y, sales_m
-        release_text = sales_text
-    else:
-        release_year, release_month = _parse_release_date(preorder_text)
-        release_text = preorder_text or sales_text
+    release_text = sales_text or preorder_text
+
+    # ── preorder_price из «Цена на предзаказе: 1990 руб» ──
+    preorder_price = _extract_preorder_price(pairs)
 
     # ── features (players / clock / link) ──
+    # features (players/clock в raw[] для аналитики, link → external_links отдельно).
     features: dict[str, str] = {}
     for icon_div in soup.find_all("div", class_=re.compile(r"game-popup-feature__icon--")):
-        # Тип feature берём из суффикса класса --{kind}
         kind = None
         for cls in icon_div.get("class", []):
             if cls.startswith("game-popup-feature__icon--"):
                 kind = cls.removeprefix("game-popup-feature__icon--")
                 break
-        if not kind:
-            continue
-        # Текст — соседний div game-popup-feature__text, ищем в общем родителе.
+        if not kind or kind == "link":
+            continue   # link-features обрабатываются ниже как external_links
         parent = icon_div.parent or soup
-        text_div = parent.find("div", class_="game-popup-feature__text")
-        if text_div:
-            features[kind] = text_div.get_text(separator=" ", strip=True)
+        # text может быть в <div> или <a>, в зависимости от того, link это или нет.
+        text_el = parent.find(class_="game-popup-feature__text")
+        if text_el:
+            features[kind] = text_el.get_text(separator=" ", strip=True)
     raw["features"] = features
+
+    # external_links: BGG / Tesera / Nastolio / магазины-партнёры
+    external_links = _extract_external_links(soup)
 
     # ── cover: первый /upload/iblock/ из background-image url(...) ──
     cover_url: str | None = None
@@ -207,20 +217,147 @@ def parse_card_html(html: str, slug: str) -> DicefestGame:
         slug=slug,
         page_url=page_url,
         title_ru=title_ru,
-        title_en=None,  # на текущей вёрстке dicefest не нашли отдельного title_en
+        title_en=title_en,
         publisher=publisher,
-        release_year=release_year,
-        release_month=release_month,
         release_status=release_status_code or release_status_text,
         description=description,
         cover_url=cover_url,
+        preorder_price=preorder_price,
+        external_links=external_links,
         raw_html=html,
         raw={
             **raw,
-            "release_text": release_text,
+            "raw_title": raw_title,                 # сырой <h2>-текст (до split_title)
+            "release_text": release_text,           # «декабрь 2025» / «2 половина 2026»
             "release_status_text": release_status_text,
         },
     )
+
+
+_CYR_RE = re.compile(r"[А-Яа-яЁё]")
+
+
+def _split_title_ru_en(raw_title: str | None) -> tuple[str | None, str | None]:
+    """Разделить «RU / EN» на (title_ru, title_en).
+
+    На dicefest часто встречается формат «Дикое приключение / A Wild Venture»,
+    «20 костей / 20 strong», «Adventure Games: Экспедиция Азкана/ Expedition Azcana»
+    (без пробела). Разделяем по `/`, определяем какая часть русская по
+    наличию кириллицы. Если `/` нет — title_ru = весь текст, title_en = None.
+    Если обе части кириллические или обе латинские — оставляем только title_ru
+    с полным текстом (без разделения), title_en = None.
+    """
+    if not raw_title:
+        return None, None
+    if "/" not in raw_title:
+        return raw_title, None
+    # split на 2 части по первому `/` — поддерживает `A: B/ C` (без пробела).
+    left, _, right = raw_title.partition("/")
+    left, right = left.strip(), right.strip()
+    if not left or not right:
+        return raw_title, None
+    left_cyr = bool(_CYR_RE.search(left))
+    right_cyr = bool(_CYR_RE.search(right))
+    if left_cyr and not right_cyr:
+        return left, right
+    if right_cyr and not left_cyr:
+        return right, left
+    # Обе части кириллические или обе латинские — слайдинг как RU/EN
+    # не очевиден; не разделяем.
+    return raw_title, None
+
+
+_LINK_HOST_KIND = {
+    "boardgamegeek.com": "bgg",
+    "www.boardgamegeek.com": "bgg",
+    "tesera.ru": "tesera",
+    "www.tesera.ru": "tesera",
+    "nastolio.ru": "nastolio",
+    "www.nastolio.ru": "nastolio",
+    "nastolio.com": "nastolio",
+}
+_BGG_ID_RE = re.compile(r"/boardgame(?:expansion|accessory)?/(\d+)")
+_TESERA_ALIAS_RE = re.compile(r"/game/([^/?#]+)")
+
+
+def _classify_link(url: str) -> tuple[str, str | None]:
+    """По URL определить (kind, external_id_or_alias).
+
+    BGG: /boardgame/447174/... → ('bgg', '447174')
+    Tesera: /game/pandemic/    → ('tesera', 'pandemic')
+    Nastolio: → ('nastolio', None)
+    Магазины (gaga-games / hobbygames / mosigra / crowdgames / ...) → ('shop', None)
+    """
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(url).hostname or "").lower()
+    except ValueError:
+        return "other", None
+    kind = _LINK_HOST_KIND.get(host)
+    external_id: str | None = None
+    if kind == "bgg":
+        m = _BGG_ID_RE.search(url)
+        if m:
+            external_id = m.group(1)
+    elif kind == "tesera":
+        m = _TESERA_ALIAS_RE.search(url)
+        if m:
+            external_id = m.group(1)
+    if kind:
+        return kind, external_id
+    # Не из известных каталогов — это магазин-партнёр.
+    return "shop", None
+
+
+def _extract_external_links(soup) -> list[dict[str, Any]]:
+    """Собрать все link-features со страницы.
+
+    На карточке link-feature выглядит так:
+        <div class="game-popup-feature">
+          <div class="game-popup-feature__icon game-popup-feature__icon--link"></div>
+          <a class="game-popup-feature__text" href="..."> ... текст ... </a>
+        </div>
+    """
+    links: list[dict[str, Any]] = []
+    seen_urls: set[str] = set()
+    for a in soup.find_all("a", class_="game-popup-feature__text"):
+        url = (a.get("href") or "").strip()
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        label = a.get_text(separator=" ", strip=True)
+        kind, external_id = _classify_link(url)
+        entry: dict[str, Any] = {"kind": kind, "url": url, "label": label}
+        if external_id:
+            entry["external_id"] = external_id
+        links.append(entry)
+    return links
+
+
+_PRICE_NUM_RE = re.compile(r"(\d[\d\s]*)")  # «1 990», «1990», «1990,00»
+
+
+def _extract_preorder_price(
+    pairs: dict[str, dict[str, str | None]],
+) -> int | None:
+    """«Цена на предзаказе: 1990 руб» → 199000 (копейки).
+
+    Поддерживает формы «1 990 руб», «1990₽», «1990 рублей», «1990,00 руб».
+    Возвращает None, если pair отсутствует или не удалось распарсить число.
+    """
+    raw_text = (pairs.get("Цена на предзаказе", {}) or {}).get("value") or None
+    if not raw_text:
+        return None
+    cleaned = raw_text.replace(",", ".").replace("\xa0", " ")
+    m = _PRICE_NUM_RE.search(cleaned)
+    if not m:
+        return None
+    digits = re.sub(r"\s+", "", m.group(1))
+    if not digits.isdigit():
+        return None
+    rubles = int(digits)
+    return rubles * 100
 
 
 def _parse_release_date(text: str | None) -> tuple[int | None, int | None]:
@@ -369,11 +506,11 @@ async def upsert_dicefest_raw(
             title_ru=game.title_ru,
             title_en=game.title_en,
             publisher=game.publisher,
-            release_year=game.release_year,
-            release_month=game.release_month,
             release_status=game.release_status,
             description=game.description,
             cover_url=game.cover_url,
+            preorder_price=game.preorder_price,
+            external_links=game.external_links,
             raw_html=game.raw_html,
             raw=game.raw,
             source_listing=source_listing,
@@ -387,11 +524,11 @@ async def upsert_dicefest_raw(
             "title_ru": stmt.excluded.title_ru,
             "title_en": stmt.excluded.title_en,
             "publisher": stmt.excluded.publisher,
-            "release_year": stmt.excluded.release_year,
-            "release_month": stmt.excluded.release_month,
             "release_status": stmt.excluded.release_status,
             "description": stmt.excluded.description,
             "cover_url": stmt.excluded.cover_url,
+            "preorder_price": stmt.excluded.preorder_price,
+            "external_links": stmt.excluded.external_links,
             "raw_html": stmt.excluded.raw_html,
             "raw": stmt.excluded.raw,
             "source_listing": stmt.excluded.source_listing,
@@ -529,6 +666,125 @@ async def _run_dicefest_import_job(job_id: int, payload: dict[str, Any]) -> None
                 job.finished_at = datetime.now(timezone.utc)
                 job.error = f"{type(e).__name__}: {e}"
                 job.result = {"imported": imported, "errors": errors}
+                await session.commit()
+            buf.log(f"FATAL: {type(e).__name__}: {e}")
+        finally:
+            await buf.flush()
+
+
+async def _run_dicefest_reparse_job(job_id: int, payload: dict[str, Any]) -> None:
+    """Re-parse уже скачанных карточек БЕЗ повторных HTTP-запросов.
+
+    Идёт по dicefest_raw_games WHERE raw_html IS NOT NULL, для каждой
+    запускает parse_card_html(raw_html, slug) и обновляет извлекаемые поля
+    (title_ru/title_en/publisher/release_status/description/cover_url/
+    preorder_price/external_links/raw).
+
+    НЕ трогает status/promoted_*/fetched_at/raw_html/source_listing — это
+    операторские/исторические данные. fetched_at остаётся ради аудита
+    «когда мы реально ходили к dicefest».
+
+    Используется после изменения парсера (миграция 0005 + новые helper'ы),
+    чтобы обновить уже накопленные ~907 записей без повторного скачивания.
+    """
+    started = datetime.now(timezone.utc)
+    updated: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+
+    engine = get_engine()
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with SessionFactory() as session:
+        job = await session.get(ImportJob, job_id)
+        if job is None:
+            logger.error("dicefest reparse job %d not found", job_id)
+            return
+        job.status = "running"
+        job.started_at = started
+        await session.commit()
+
+        buf = LogBuffer(session, job_id=job_id)
+        try:
+            buf.set_progress(phase="collecting", current=0, total=0)
+            buf.log("Re-parse: считываем raw_html из staging…")
+            await buf.flush()
+
+            rows = (
+                await session.execute(
+                    select(DicefestRawGame.id, DicefestRawGame.slug, DicefestRawGame.raw_html)
+                    .where(DicefestRawGame.raw_html.is_not(None))
+                    .order_by(DicefestRawGame.id)
+                )
+            ).all()
+            total = len(rows)
+            buf.set_progress(phase="parsing", current=0, total=total)
+            buf.log(f"Re-parse: {total} записей с raw_html — погнали.")
+            await buf.flush()
+
+            for i, row in enumerate(rows):
+                rid, slug, html = row.id, row.slug, row.raw_html
+                buf.set_progress(current=i, current_title=slug)
+                try:
+                    game = parse_card_html(html, slug)
+                    await session.execute(
+                        text(
+                            """
+                            UPDATE dicefest_raw_games SET
+                              title_ru = :title_ru,
+                              title_en = :title_en,
+                              publisher = :publisher,
+                              release_status = :release_status,
+                              description = :description,
+                              cover_url = :cover_url,
+                              preorder_price = :preorder_price,
+                              external_links = CAST(:external_links AS jsonb),
+                              raw = CAST(:raw AS jsonb)
+                            WHERE id = :id
+                            """
+                        ).bindparams(
+                            id=rid,
+                            title_ru=game.title_ru,
+                            title_en=game.title_en,
+                            publisher=game.publisher,
+                            release_status=game.release_status,
+                            description=game.description,
+                            cover_url=game.cover_url,
+                            preorder_price=game.preorder_price,
+                            external_links=json.dumps(game.external_links),
+                            raw=json.dumps(game.raw),
+                        )
+                    )
+                    title = (game.title_ru or "")[:80]
+                    buf.log(f"[{i + 1}/{total}] {slug} — ok ({title})")
+                    updated.append({"slug": slug, "title_ru": game.title_ru})
+                except Exception as e:  # noqa: BLE001
+                    msg = f"{type(e).__name__}: {e}"
+                    buf.log(f"[{i + 1}/{total}] {slug} — ERROR: {msg}")
+                    errors.append({"slug": slug, "error": msg})
+                await buf.maybe_flush()
+
+            buf.set_progress(phase="done", current=total, current_title=None)
+
+            job = await session.get(ImportJob, job_id)
+            assert job is not None
+            job.status = "done"
+            job.finished_at = datetime.now(timezone.utc)
+            job.result = {
+                "imported": updated,
+                "errors": errors,
+                "total_slugs": total,
+                "skipped_fresh": 0,
+            }
+            await session.commit()
+            buf.log(f"Готово. Обновлено {len(updated)}, ошибок {len(errors)}.")
+        except Exception as e:  # noqa: BLE001
+            logger.exception("dicefest reparse job %d failed", job_id)
+            job = await session.get(ImportJob, job_id)
+            if job is not None:
+                job.status = "failed"
+                job.finished_at = datetime.now(timezone.utc)
+                job.error = f"{type(e).__name__}: {e}"
+                job.result = {"imported": updated, "errors": errors}
                 await session.commit()
             buf.log(f"FATAL: {type(e).__name__}: {e}")
         finally:

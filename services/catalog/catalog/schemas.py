@@ -291,18 +291,32 @@ class DicefestImportRequest(BaseModel):
     only_year: int | None = None
 
 
+class ExternalLink(BaseModel):
+    """Ссылка на внешний сайт из карточки dicefest.
+
+    kind — машинный тип источника (`bgg`, `tesera`, `nastolio`, `shop`, `other`).
+    external_id — извлечённый ID/slug в URL (например, BGG `447174`), если
+    смогли распознать. Полезно для будущего матчинга canonical Game.
+    """
+
+    kind: str
+    url: str
+    label: str
+    external_id: str | None = None
+
+
 class DicefestRawGameOut(_ORMBase):
     id: int
     slug: str
     page_url: str
     title_ru: str | None = None
     title_en: str | None = None
-    publisher: str | None = None
-    release_year: int | None = None
-    release_month: int | None = None
+    publisher: str | None = None        # «Издатель в РФ» — UI label
     release_status: str | None = None
     description: str | None = None
     cover_url: str | None = None
+    preorder_price: int | None = None   # копейки
+    external_links: list[ExternalLink] = []
     raw: dict[str, Any]
     source_listing: str | None = None
     fetched_at: datetime

@@ -142,7 +142,14 @@ async def test_promote_link_creates_alias_and_satellite(session: AsyncSession) -
     g = await _mk_game(session, slug="myth", title="Mythologies")
     raw = await _mk_raw(
         session, slug="mythologies", title_ru="Mythologies",
-        publisher="4GAMES", release_year=2026, release_month=5,
+        title_en="Mythologies", publisher="4GAMES",
+        preorder_price=290000,                # 2900 руб
+        external_links=[
+            {"kind": "bgg", "url": "https://boardgamegeek.com/boardgame/447570/mythologies",
+             "label": "Перейти на BGG", "external_id": "447570"},
+            {"kind": "shop", "url": "https://4games.shop/mythologies/",
+             "label": "На страницу предзаказа"},
+        ],
     )
 
     result = await promo.promote(
@@ -161,11 +168,14 @@ async def test_promote_link_creates_alias_and_satellite(session: AsyncSession) -
     assert alias.verified is True
     assert alias.alias == "Mythologies"
 
-    # satellite в game_dicefest
+    # satellite в game_dicefest — копируются publisher + новые поля PR-4
     sat = await session.get(GameDicefest, result["satellite_id"])
     assert sat is not None
     assert sat.publisher == "4GAMES"
-    assert sat.release_year == 2026
+    assert sat.preorder_price == 290000
+    # external_links перенесены целиком (BGG + shop)
+    sat_kinds = sorted(link["kind"] for link in sat.external_links)
+    assert sat_kinds == ["bgg", "shop"]
 
     # raw статус
     raw_after = await session.get(DicefestRawGame, raw.id)
@@ -186,7 +196,7 @@ async def test_promote_link_creates_alias_and_satellite(session: AsyncSession) -
 async def test_promote_create_creates_new_game(session: AsyncSession) -> None:
     raw = await _mk_raw(
         session, slug="newgame", title_ru="Новая Игра",
-        publisher="4GAMES", release_year=2026,
+        publisher="4GAMES",
     )
     result = await promo.promote(
         session, raw.id, action="create",
@@ -196,7 +206,9 @@ async def test_promote_create_creates_new_game(session: AsyncSession) -> None:
     assert g is not None
     assert g.slug == "dicefest-newgame"
     assert g.title == "Новая Игра"
-    assert g.year == 2026
+    # year НЕ выставляется при action='create' (PR-4): release_year убран,
+    # т.к. соответствовал РФ-релизу. year заполнят последующие импортёры.
+    assert g.year is None
     assert g.source == "dicefest"
 
     sat = await session.get(GameDicefest, result["satellite_id"])

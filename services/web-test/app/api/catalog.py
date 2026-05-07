@@ -212,6 +212,17 @@ async def import_dicefest(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.post("/import/dicefest/reparse")
+async def import_dicefest_reparse(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Re-parse сохранённого raw_html (PR-4): без HTTP к dicefest.ru."""
+    try:
+        return await client.import_dicefest_reparse()
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 # ── Promotion (PR-2/PR-3) ──────────────────────────────────────────────────
 
 

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
-  importBgg, importTesera, importDicefest, fetchImportJob,
+  importBgg, importTesera, importDicefest, importDicefestReparse, fetchImportJob,
   type ImportJob, type ImportJobStatus,
 } from '../../lib/catalog'
 
@@ -67,6 +67,15 @@ export function ImportWizard({ onClose }: Props) {
     },
     onSuccess: (job) => { setJobId(job.id); toast.success(`Job #${job.id} запущен`) },
     onError: (e) => toast.error(`Не удалось запустить: ${e}`),
+  })
+
+  // Отдельная мутация для re-parse (PR-4): не делает HTTP к dicefest.ru,
+  // только перепарсивает уже сохранённый raw_html. Полезно после изменения
+  // парсера — обновляет извлекаемые поля без повторного скачивания.
+  const reparse = useMutation({
+    mutationFn: () => importDicefestReparse(),
+    onSuccess: (job) => { setJobId(job.id); toast.success(`Re-parse #${job.id} запущен`) },
+    onError: (e) => toast.error(`Не удалось запустить re-parse: ${e}`),
   })
 
   // Polling: refetchInterval, но останавливаем когда status final.
@@ -185,13 +194,35 @@ export function ImportWizard({ onClose }: Props) {
               <button
                 type="button"
                 onClick={() => start.mutate()}
-                disabled={start.isPending}
+                disabled={start.isPending || reparse.isPending}
                 className="w-full px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
               >
                 {start.isPending
                   ? <><Loader2 size={13} className="animate-spin" /> Создаю задачу…</>
                   : <><Download size={13} /> Запустить парсер dicefest</>}
               </button>
+
+              {/* Re-parse существующих raw_html — без HTTP к dicefest.ru.
+                  Полезно после изменения парсера (новые поля / правка
+                  селекторов): обновляем поля для всех уже сохранённых
+                  карточек за минуты, не перекачивая. */}
+              <div className="pt-2 border-t border-gray-800">
+                <div className="text-xs text-gray-500 mb-2">
+                  Если парсер был обновлён, можно перепарсить уже сохранённые
+                  карточки <b>без повторных запросов</b> к dicefest.ru — берём
+                  raw_html из staging.
+                </div>
+                <button
+                  type="button"
+                  onClick={() => reparse.mutate()}
+                  disabled={start.isPending || reparse.isPending}
+                  className="w-full px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-gray-200"
+                >
+                  {reparse.isPending
+                    ? <><Loader2 size={13} className="animate-spin" /> Запускаю re-parse…</>
+                    : <>↻ Re-parse уже скачанных</>}
+                </button>
+              </div>
             </>
           )}
 

@@ -22,9 +22,27 @@ import clsx from 'clsx'
 import {
   fetchPromotionQueue, fetchPromotionCandidates,
   applyPromotion, revertPromotion, fetchPromotionLog,
-  type DicefestRawGame, type PromotionCandidate,
+  type DicefestRawGame, type ExternalLink, type PromotionCandidate,
   type PromotionLogEntry,
 } from '../../lib/catalog'
+
+// Цены везде в проекте хранятся в копейках. Форматируем в рубли с разделителем.
+function formatRub(kopecks: number): string {
+  const rub = Math.round(kopecks / 100)
+  return rub.toLocaleString('ru-RU') + ' ₽'
+}
+
+const LINK_BADGE: Record<ExternalLink['kind'], string> = {
+  bgg:      'bg-orange-900/50 text-orange-300 border border-orange-900/40',
+  tesera:   'bg-blue-900/50 text-blue-300 border border-blue-900/40',
+  nastolio: 'bg-emerald-900/50 text-emerald-300 border border-emerald-900/40',
+  shop:     'bg-violet-900/50 text-violet-300 border border-violet-900/40',
+  other:    'bg-gray-800 text-gray-300 border border-gray-700',
+}
+
+const LINK_LABEL: Record<ExternalLink['kind'], string> = {
+  bgg: 'BGG', tesera: 'Tesera', nastolio: 'Nastolio', shop: 'Магазин', other: 'Ссылка',
+}
 
 type StatusFilter = DicefestRawGame['status']
 type Tab = 'queue' | 'log'
@@ -137,8 +155,10 @@ function PromotionQueue({
               <th className="px-3 py-2">id</th>
               <th className="px-3 py-2">slug</th>
               <th className="px-3 py-2">title_ru</th>
-              <th className="px-3 py-2">publisher</th>
-              <th className="px-3 py-2">year</th>
+              <th className="px-3 py-2">title_en</th>
+              <th className="px-3 py-2">Издатель в РФ</th>
+              <th className="px-3 py-2">цена ₽</th>
+              <th className="px-3 py-2">links</th>
               <th className="px-3 py-2">status</th>
             </tr>
           </thead>
@@ -150,20 +170,25 @@ function PromotionQueue({
                 onClick={() => onOpenRaw(r.id)}
               >
                 <td className="px-3 py-2 font-mono text-xs text-gray-500">{r.id}</td>
-                <td className="px-3 py-2 font-mono text-xs text-gray-400 truncate max-w-[200px]">
+                <td className="px-3 py-2 font-mono text-xs text-gray-400 truncate max-w-[160px]">
                   {r.slug}
                 </td>
                 <td className="px-3 py-2 text-gray-100">{r.title_ru ?? '—'}</td>
+                <td className="px-3 py-2 text-gray-300 text-xs">{r.title_en ?? '—'}</td>
                 <td className="px-3 py-2 text-gray-300">{r.publisher ?? '—'}</td>
-                <td className="px-3 py-2 text-gray-300">
-                  {r.release_year ?? '—'}
-                  {r.release_month ? `/${r.release_month}` : ''}
+                <td className="px-3 py-2 text-gray-300 text-xs font-mono">
+                  {r.preorder_price != null ? formatRub(r.preorder_price) : '—'}
+                </td>
+                <td className="px-3 py-2 text-xs">
+                  {r.external_links.length > 0
+                    ? r.external_links.map(l => l.kind).join(',')
+                    : '—'}
                 </td>
                 <td className="px-3 py-2"><StatusBadge status={r.status} /></td>
               </tr>
             ))}
             {!queue.isLoading && items.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-500">
+              <tr><td colSpan={8} className="px-3 py-6 text-center text-gray-500">
                 Нет записей со статусом «{statusFilter}»
               </td></tr>
             )}
@@ -257,13 +282,18 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
           <div className="text-sm font-semibold text-gray-100 truncate">
             {raw.title_ru ?? raw.slug}
           </div>
+          {raw.title_en && (
+            <div className="text-xs text-gray-400 italic mt-0.5 truncate">{raw.title_en}</div>
+          )}
           <div className="text-xs text-gray-500 font-mono mt-1 flex items-center gap-2 flex-wrap">
             <span>id={raw.id}</span>
             <a href={raw.page_url} target="_blank" rel="noreferrer"
                className="text-violet-300 hover:underline">{raw.slug}</a>
-            {raw.publisher && <span>· {raw.publisher}</span>}
-            {raw.release_year && <span>· {raw.release_year}{raw.release_month ? `/${raw.release_month}` : ''}</span>}
+            {raw.publisher && <span>· Издатель в РФ: <b>{raw.publisher}</b></span>}
             {raw.release_status && <span>· {raw.release_status}</span>}
+            {raw.preorder_price != null && (
+              <span>· <b>{formatRub(raw.preorder_price)}</b></span>
+            )}
           </div>
         </div>
         <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded">
@@ -275,6 +305,27 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
         {raw.cover_url && (
           <img src={raw.cover_url} alt={raw.title_ru ?? raw.slug}
                className="max-h-48 rounded border border-gray-800" />
+        )}
+
+        {raw.external_links.length > 0 && (
+          <div>
+            <div className="text-xs text-gray-500 mb-1">Внешние ссылки</div>
+            <div className="flex flex-wrap gap-1.5">
+              {raw.external_links.map((link, i) => (
+                <a
+                  key={i}
+                  href={link.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className={`text-[11px] px-2 py-1 rounded font-mono hover:underline ${LINK_BADGE[link.kind]}`}
+                  title={link.label}
+                >
+                  {LINK_LABEL[link.kind]}
+                  {link.external_id && ` #${link.external_id}`}
+                </a>
+              ))}
+            </div>
+          </div>
         )}
 
         {raw.description && (
@@ -294,7 +345,6 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
             items={high}
             onLink={(gid) => apply.mutate({ action: 'link', target_game_id: gid })}
             disabled={apply.isPending}
-            rawYear={raw.release_year}
           />
         )}
         {mid.length > 0 && (
@@ -304,7 +354,6 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
             items={mid}
             onLink={(gid) => apply.mutate({ action: 'link', target_game_id: gid })}
             disabled={apply.isPending}
-            rawYear={raw.release_year}
           />
         )}
         {low.length > 0 && (
@@ -314,7 +363,6 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
             items={low}
             onLink={(gid) => apply.mutate({ action: 'link', target_game_id: gid })}
             disabled={apply.isPending}
-            rawYear={raw.release_year}
             collapsed
           />
         )}
@@ -375,14 +423,13 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
 }
 
 function CandidateBucket({
-  title, color, items, onLink, disabled, rawYear, collapsed,
+  title, color, items, onLink, disabled, collapsed,
 }: {
   title: string
   color: 'emerald' | 'amber' | 'gray'
   items: PromotionCandidate[]
   onLink: (gameId: number) => void
   disabled: boolean
-  rawYear: number | null
   collapsed?: boolean
 }) {
   const [open, setOpen] = useState(!collapsed)
@@ -406,7 +453,6 @@ function CandidateBucket({
             <CandidateRow
               key={c.game_id}
               c={c}
-              rawYear={rawYear}
               onLink={onLink}
               disabled={disabled}
             />
@@ -418,13 +464,15 @@ function CandidateBucket({
 }
 
 function CandidateRow({
-  c, rawYear, onLink, disabled,
+  c, onLink, disabled,
 }: {
   c: PromotionCandidate
-  rawYear: number | null
   onLink: (gameId: number) => void
   disabled: boolean
 }) {
+  // year_diff УБРАН в PR-4 (release_year на dicefest относится к РФ-релизу,
+  // не к оригиналу — давал ложно-тревожные warning'и). Поле в типах
+  // оставлено на будущее, рендерим только если backend его пришлёт.
   const yearWarn = c.year_diff != null && c.year_diff >= 3
   return (
     <div className="bg-gray-950 rounded p-2 flex items-center gap-2">
@@ -437,7 +485,7 @@ function CandidateRow({
       <span className="text-sm text-gray-100 truncate flex-1">{c.title}</span>
       {c.year && <span className="text-xs text-gray-500 flex-shrink-0">({c.year})</span>}
       {yearWarn && (
-        <span title={`raw=${rawYear ?? '?'}, candidate=${c.year}`}
+        <span title={`candidate=${c.year}`}
               className="flex items-center gap-1 text-[10px] text-amber-300 px-1.5 py-0.5 bg-amber-900/40 rounded">
           <AlertTriangle size={10} /> Δ{c.year_diff}лет
         </span>

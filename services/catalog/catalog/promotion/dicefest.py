@@ -139,9 +139,11 @@ async def match_candidates(
                 select(GameAlias).where(GameAlias.game_id == r["game_id"])
             )
         ).scalars().all()
-        year_diff = None
-        if raw.release_year and r["year"]:
-            year_diff = abs(int(raw.release_year) - int(r["year"]))
+        # year_diff УБРАН в PR-4: release_year/_month относились к РФ-релизу,
+        # а не к оригинальному году издания (как в games.year). Сравнение давало
+        # ложно-тревожные warning'и. Если позже извлечём год оригинала из
+        # external_links (BGG) — вернём.
+        year_diff: int | None = None
         candidates.append(
             {
                 "game_id": r["game_id"],
@@ -238,10 +240,12 @@ async def promote(
         # Создаём новую canonical Game со slug-префиксом.
         canonical_slug = f"dicefest-{raw.slug}"
         new_title = raw.title_ru or raw.title_en or raw.slug
+        # year оставляем None — release_year раньше парсился из РФ-релиза
+        # (не оригинал). Корректный год игры подтянет последующее обогащение
+        # через wikidata/BGG.
         game = Game(
             slug=canonical_slug,
             title=new_title,
-            year=raw.release_year,
             source="dicefest",
             status="active",
         )
@@ -336,12 +340,12 @@ async def _attach_dicefest_data(
         title_ru=raw.title_ru,
         title_en=raw.title_en,
         publisher=raw.publisher,
-        release_year=raw.release_year,
-        release_month=raw.release_month,
         release_status=raw.release_status,
         description=raw.description,
         cover_url=raw.cover_url,
         page_url=raw.page_url,
+        preorder_price=raw.preorder_price,
+        external_links=raw.external_links or [],
         raw=raw.raw,
         fetched_at=raw.fetched_at,
     )

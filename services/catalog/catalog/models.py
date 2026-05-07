@@ -364,13 +364,18 @@ class DicefestRawGame(Base):
     # Извлечённые поля — все nullable, потому что сайт может менять структуру
     # или вообще не отдавать поле для конкретной игры.
     title_ru: Mapped[str | None] = mapped_column(Text)
-    title_en: Mapped[str | None] = mapped_column(Text)
-    publisher: Mapped[str | None] = mapped_column(Text)
-    release_year: Mapped[int | None] = mapped_column(Integer)
-    release_month: Mapped[int | None] = mapped_column(Integer)
-    release_status: Mapped[str | None] = mapped_column(Text)  # data-status code
+    title_en: Mapped[str | None] = mapped_column(Text)        # из «RU / EN»-разделителя
+    publisher: Mapped[str | None] = mapped_column(Text)        # «Издатель в РФ» в UI
+    release_status: Mapped[str | None] = mapped_column(Text)   # data-status code
     description: Mapped[str | None] = mapped_column(Text)
     cover_url: Mapped[str | None] = mapped_column(Text)
+    # Цена в копейках (как принято в проекте). Из pair «Цена на предзаказе: 1990 руб».
+    preorder_price: Mapped[int | None] = mapped_column(BigInteger)
+    # Массив ссылок на внешние сайты ([{kind, url, label, external_id?}]).
+    # default=list — на новых INSERT через ORM; server_default — на raw SQL.
+    external_links: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, nullable=False, server_default="[]"
+    )
 
     raw_html: Mapped[str | None] = mapped_column(Text)
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
@@ -448,13 +453,15 @@ class GameDicefest(Base):
     slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
     title_ru: Mapped[str | None] = mapped_column(Text)
     title_en: Mapped[str | None] = mapped_column(Text)
-    publisher: Mapped[str | None] = mapped_column(Text)
-    release_year: Mapped[int | None] = mapped_column(Integer)
-    release_month: Mapped[int | None] = mapped_column(Integer)
+    publisher: Mapped[str | None] = mapped_column(Text)        # «Издатель в РФ»
     release_status: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     cover_url: Mapped[str | None] = mapped_column(Text)
     page_url: Mapped[str | None] = mapped_column(Text)
+    preorder_price: Mapped[int | None] = mapped_column(BigInteger)   # копейки
+    external_links: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, nullable=False, server_default="[]"
+    )
     raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

@@ -146,6 +146,15 @@ class CatalogClient:
         resp = await self._client.post("/import/dicefest", json=payload)
         return _ok_or_raise(resp)
 
+    async def import_dicefest_reparse(self) -> dict[str, Any]:
+        """POST /import/dicefest/reparse → re-parse уже скачанных карточек.
+
+        Без сети: используется сохранённый raw_html из staging. Полезно после
+        изменения парсера (новые поля / правка селекторов).
+        """
+        resp = await self._client.post("/import/dicefest/reparse")
+        return _ok_or_raise(resp)
+
     # ── Promotion (PR-2/PR-3) ───────────────────────────────────────────
 
     async def promotion_queue(

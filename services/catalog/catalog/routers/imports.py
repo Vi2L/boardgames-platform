@@ -37,7 +37,10 @@ from catalog.importers.tesera import (
     fetch_tesera_thing,
     parse_tesera_json,
 )
-from catalog.importers.dicefest import _run_dicefest_import_job
+from catalog.importers.dicefest import (
+    _run_dicefest_import_job,
+    _run_dicefest_reparse_job,
+)
 from catalog.models import Game, GameAlias, ImportJob
 from catalog.schemas import (
     BggImportRequest,
@@ -352,6 +355,39 @@ async def import_dicefest(
         await session.refresh(job)
     else:
         asyncio.create_task(_run_dicefest_import_job(job.id, job.payload))
+
+    return ImportJobOut.model_validate(job)
+
+
+@router.post(
+    "/dicefest/reparse",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_dicefest_reparse(
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    """Re-parse уже скачанных карточек dicefest БЕЗ повторных HTTP-запросов.
+
+    Используется после изменения парсера (например, добавили новые поля
+    или поправили селекторы) — обновляет извлекаемые поля по сохранённому
+    raw_html. Не трогает status/promoted_*/raw_html/fetched_at.
+    """
+    job = ImportJob(
+        type="dicefest-reparse",
+        payload={},
+        status="pending",
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await _run_dicefest_reparse_job(job.id, {})
+        await session.refresh(job)
+    else:
+        asyncio.create_task(_run_dicefest_reparse_job(job.id, {}))
 
     return ImportJobOut.model_validate(job)
 

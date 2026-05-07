@@ -311,23 +311,40 @@ export const importDicefest = (payload: { max_items?: number; only_year?: number
     body: JSON.stringify(payload),
   }).then(r => json<ImportJob>(r))
 
+// Re-parse сохранённого raw_html без HTTP к dicefest.ru (PR-4).
+export const importDicefestReparse = () =>
+  fetch(`${BASE}/import/dicefest/reparse`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: '{}',
+  }).then(r => json<ImportJob>(r))
+
 export const fetchImportJob = (id: number) =>
   fetch(`${BASE}/import/jobs/${id}`).then(r => json<ImportJob>(r))
 
 // ── Promotion (двухстадийная схема: staging → canonical) ─────────────────
 
+export type ExternalLink = {
+  // Машинный тип источника. 'shop' — магазин-партнёр (gaga-games, hobbygames…).
+  // 'other' зарезервировано на случай новых доменов.
+  kind: 'bgg' | 'tesera' | 'nastolio' | 'shop' | 'other'
+  url: string
+  label: string
+  external_id?: string             // BGG: '447174'; Tesera: 'pandemic'
+}
+
 export type DicefestRawGame = {
   id: number
   slug: string
   page_url: string
-  title_ru: string | null
-  title_en: string | null
-  publisher: string | null
-  release_year: number | null
-  release_month: number | null
+  title_ru: string | null            // RU из «RU / EN» split (PR-4)
+  title_en: string | null            // EN из «RU / EN» split, иначе null
+  publisher: string | null           // «Издатель в РФ» — UI label
   release_status: string | null      // data-status code, например 'v-prodazhe'
   description: string | null
   cover_url: string | null
+  preorder_price: number | null      // копейки (1 ₽ = 100); null если не указана
+  external_links: ExternalLink[]     // BGG / Tesera / Nastolio / магазины
   raw: Record<string, unknown>
   source_listing: string | null
   fetched_at: string
