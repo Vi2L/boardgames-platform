@@ -9,7 +9,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { X, Loader2, ExternalLink, Users, Clock, Calendar, Cake } from 'lucide-react'
 import { fetchCatalogGame } from '../../lib/catalog'
-import { AliasList } from './AliasList'
+import { AliasEditor } from './AliasEditor'
 import { BggCard } from './BggCard'
 import { WikidataCard } from './WikidataCard'
 
@@ -103,9 +103,9 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
                 </Section>
               )}
 
-              {/* Aliases */}
+              {/* Aliases (с CRUD) */}
               <Section title={`Алиасы (${data.aliases.length})`}>
-                <AliasList aliases={data.aliases} />
+                <AliasEditor gameId={data.id} aliases={data.aliases} />
               </Section>
 
               {/* External links */}

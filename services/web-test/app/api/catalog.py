@@ -82,3 +82,45 @@ async def reject_offer(
         return await client.reject_offer(offer_id)
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ── Aliases CRUD ───────────────────────────────────────────────────────────
+
+
+@router.post("/games/{game_id}/aliases")
+async def add_alias(
+    game_id: int,
+    body: dict,  # {alias, source?, language?, verified?}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    if not isinstance(body.get("alias"), str) or not body["alias"].strip():
+        raise HTTPException(status_code=400, detail="alias (str) required")
+    try:
+        return await client.add_alias(game_id, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.patch("/games/{game_id}/aliases/{alias_id}")
+async def patch_alias(
+    game_id: int,
+    alias_id: int,
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.patch_alias(game_id, alias_id, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.delete("/games/{game_id}/aliases/{alias_id}", status_code=204)
+async def delete_alias(
+    game_id: int,
+    alias_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> None:
+    try:
+        await client.delete_alias(game_id, alias_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e

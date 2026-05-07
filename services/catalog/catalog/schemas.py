@@ -136,6 +136,18 @@ class GamePatch(BaseModel):
 class AliasCreate(BaseModel):
     alias: str = Field(min_length=1)
     source: str = "manual"
+    # ISO-код языка ('ru', 'en', 'de', ...). NULL для магазинных названий
+    # и manual без явной локали — на стороне модели поле уже nullable.
+    language: str | None = Field(None, max_length=8)
+    verified: bool = False
+
+
+class AliasPatch(BaseModel):
+    """Редактирование существующего алиаса. Все поля опциональны."""
+    alias: str | None = Field(None, min_length=1)
+    source: str | None = None
+    language: str | None = Field(None, max_length=8)
+    verified: bool | None = None
 
 
 class GameListOut(BaseModel):

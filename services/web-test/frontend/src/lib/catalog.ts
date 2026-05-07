@@ -139,3 +139,35 @@ export const linkOffer = (offerId: number, gameId: number) =>
 export const rejectOffer = (offerId: number) =>
   fetch(`${BASE}/matching/${offerId}/reject`, { method: 'POST' })
     .then(r => json<CatalogOffer>(r))
+
+// ── Aliases CRUD ──────────────────────────────────────────────────────
+
+export type AliasInput = {
+  alias: string
+  source?: string
+  language?: string | null
+  verified?: boolean
+}
+
+export const addAlias = (gameId: number, payload: AliasInput) =>
+  fetch(`${BASE}/games/${gameId}/aliases`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<CatalogGameAlias>(r))
+
+export const patchAlias = (
+  gameId: number, aliasId: number, payload: Partial<AliasInput>,
+) =>
+  fetch(`${BASE}/games/${gameId}/aliases/${aliasId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<CatalogGameAlias>(r))
+
+export const deleteAlias = async (gameId: number, aliasId: number) => {
+  const r = await fetch(`${BASE}/games/${gameId}/aliases/${aliasId}`, {
+    method: 'DELETE',
+  })
+  if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
+}

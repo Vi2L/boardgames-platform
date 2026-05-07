@@ -79,6 +79,32 @@ class CatalogClient:
         resp = await self._client.post(f"/matching/{offer_id}/reject")
         return _ok_or_raise(resp)
 
+    # ── Aliases CRUD ────────────────────────────────────────────────────
+
+    async def add_alias(self, game_id: int, payload: dict) -> dict[str, Any]:
+        """POST /games/{id}/aliases — добавить альтернативное название."""
+        resp = await self._client.post(f"/games/{game_id}/aliases", json=payload)
+        return _ok_or_raise(resp)
+
+    async def patch_alias(
+        self, game_id: int, alias_id: int, payload: dict,
+    ) -> dict[str, Any]:
+        """PATCH /games/{id}/aliases/{alias_id} — редактирование."""
+        resp = await self._client.patch(
+            f"/games/{game_id}/aliases/{alias_id}", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def delete_alias(self, game_id: int, alias_id: int) -> None:
+        """DELETE /games/{id}/aliases/{alias_id} → 204."""
+        resp = await self._client.delete(f"/games/{game_id}/aliases/{alias_id}")
+        if resp.is_error:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = resp.text[:500]
+            raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
+
 
 def _ok_or_raise(resp: httpx.Response) -> dict[str, Any]:
     if resp.is_error:

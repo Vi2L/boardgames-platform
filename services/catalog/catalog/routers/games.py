@@ -19,6 +19,7 @@ from catalog.db import get_session
 from catalog.models import Game, GameAlias
 from catalog.schemas import (
     AliasCreate,
+    AliasPatch,
     GameAliasOut,
     GameBggOut,
     GameCreate,
@@ -168,7 +169,13 @@ async def add_alias(
     game = (await session.execute(select(Game).where(Game.id == game_id))).scalar_one_or_none()
     if game is None:
         raise HTTPException(status_code=404, detail="game not found")
-    alias = GameAlias(game_id=game_id, alias=payload.alias, source=payload.source)
+    alias = GameAlias(
+        game_id=game_id,
+        alias=payload.alias,
+        source=payload.source,
+        language=payload.language,
+        verified=payload.verified,
+    )
     session.add(alias)
     try:
         await session.commit()
@@ -178,3 +185,65 @@ async def add_alias(
         raise HTTPException(status_code=409, detail="alias already exists") from e
     await session.refresh(alias)
     return GameAliasOut.model_validate(alias)
+
+
+@router.patch(
+    "/{game_id}/aliases/{alias_id}",
+    response_model=GameAliasOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def patch_alias(
+    game_id: int,
+    alias_id: int,
+    payload: AliasPatch,
+    session: AsyncSession = Depends(get_session),
+) -> GameAliasOut:
+    """Редактирование алиаса.
+
+    Главный сценарий: проставить verified=true ручным алиасам после ревью,
+    либо уточнить language ('en' → 'ru-RU' и т.п.).
+    """
+    alias = (await session.execute(
+        select(GameAlias).where(
+            GameAlias.id == alias_id, GameAlias.game_id == game_id,
+        )
+    )).scalar_one_or_none()
+    if alias is None:
+        raise HTTPException(status_code=404, detail="alias not found")
+    for k, v in payload.model_dump(exclude_unset=True).items():
+        setattr(alias, k, v)
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=f"conflict: {e.orig}") from e
+    await session.refresh(alias)
+    return GameAliasOut.model_validate(alias)
+
+
+@router.delete(
+    "/{game_id}/aliases/{alias_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def delete_alias(
+    game_id: int,
+    alias_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> None:
+    """Удаление алиаса.
+
+    Удаление manual-алиаса оставляет пробел в локализации, удаление
+    auto-match — может вернуть оффер в очередь матчинга при следующем
+    ingest'е, потому что title_raw_norm перестанет % matchить.
+    """
+    alias = (await session.execute(
+        select(GameAlias).where(
+            GameAlias.id == alias_id, GameAlias.game_id == game_id,
+        )
+    )).scalar_one_or_none()
+    if alias is None:
+        raise HTTPException(status_code=404, detail="alias not found")
+    await session.delete(alias)
+    await session.commit()
+    return None
