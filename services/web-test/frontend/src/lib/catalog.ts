@@ -319,3 +319,28 @@ export const deleteAlias = async (gameId: number, aliasId: number) => {
   })
   if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
 }
+
+// ── Backup каталога ──────────────────────────────────────────────────────
+
+export type BackupFile = {
+  name: string
+  size_bytes: number
+  modified_at: string
+}
+
+export type BackupCreateResponse = {
+  status: 'ok'
+  file: BackupFile
+  log_tail: string
+}
+
+export type BackupListResponse = {
+  items: BackupFile[]
+  dir: string
+}
+
+export const createCatalogBackup = () =>
+  fetch(`${BASE}/backup`, { method: 'POST' }).then(r => json<BackupCreateResponse>(r))
+
+export const listCatalogBackups = () =>
+  fetch(`${BASE}/backups`).then(r => json<BackupListResponse>(r))

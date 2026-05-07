@@ -28,6 +28,7 @@ import { GameDetailDrawer } from '../components/catalog/GameDetailDrawer'
 import { ImportWizard } from '../components/catalog/ImportWizard'
 import { GameEditor } from '../components/catalog/GameEditor'
 import { MatchingStatsHeader } from '../components/catalog/MatchingStatsHeader'
+import { BackupButton } from '../components/catalog/BackupButton'
 import { Download, Plus } from 'lucide-react'
 
 type Tab = 'catalog' | 'matching'
@@ -62,6 +63,7 @@ export function CatalogPage() {
           >
             <Download size={12} /> Импорт BGG / Tesera
           </button>
+          <BackupButton />
           <div className="text-xs text-gray-400">
             catalog: {health.isError ? <span className="text-red-400">недоступен</span> :
               health.data ? <span className="text-emerald-400">{health.data.status}</span> :

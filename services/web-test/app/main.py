@@ -10,6 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from app.api import backup as backup_router_module
 from app.api import catalog as catalog_router_module
 from app.api import db as db_router_module
 from app.api import debug as debug_router_module
@@ -64,6 +65,7 @@ app.include_router(snapshots_router_module.router, prefix="/api")
 app.include_router(suites_router_module.router, prefix="/api")
 app.include_router(favorites_router_module.router, prefix="/api")
 app.include_router(catalog_router_module.router, prefix="/api")
+app.include_router(backup_router_module.router, prefix="/api")
 app.include_router(debug_router_module.router, prefix="/api")
 app.include_router(parsers_db_router_module.router, prefix="/api")
 app.include_router(dlq_router_module.router, prefix="/api")
