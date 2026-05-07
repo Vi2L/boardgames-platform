@@ -11,16 +11,12 @@
 # Файлы хранятся в `.scratch/backups/catalog_YYYYMMDD_HHMMSS.dump` — папка
 # в `.gitignore`, не утечёт в репо. Формат — pg_dump custom (-Fc), сжатый,
 # поддерживает parallel restore.
-#
-# Регулярный backup можно повесить на cron хоста:
-#   0 3 * * *  cd /Users/vitaliy/Projects/boardgames-platform && bin/backup-catalog.sh
 
 set -e
 
-# cron на macOS стартует с минимальным PATH=/usr/bin:/bin, и `docker` в нём
-# не находится (он в /usr/local/bin на Intel или /opt/homebrew/bin на Apple
-# Silicon). Расширяем PATH в начале — пусть скрипт работает одинаково и из
-# терминала, и из cron.
+# Расширяем PATH, чтобы `docker` (который обычно лежит в /usr/local/bin или
+# /opt/homebrew/bin на macOS) находился даже из неинтерактивных окружений
+# с минимальным PATH=/usr/bin:/bin.
 export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 cd "$(dirname "$0")/.."
