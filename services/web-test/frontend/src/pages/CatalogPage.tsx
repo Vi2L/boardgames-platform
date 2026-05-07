@@ -20,6 +20,7 @@ import {
   type CatalogGame,
   type CatalogOffer,
 } from '../lib/catalog'
+import { GameDetailDrawer } from '../components/catalog/GameDetailDrawer'
 
 type Tab = 'catalog' | 'matching'
 
@@ -69,6 +70,7 @@ export function CatalogPage() {
 
 function CatalogSection() {
   const [q, setQ] = useState('')
+  const [openId, setOpenId] = useState<number | null>(null)
   const games = useQuery({
     queryKey: ['catalog', 'games', q],
     queryFn: () => listCatalogGames(q || undefined, 50, 0),
@@ -102,7 +104,9 @@ function CatalogSection() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {games.data?.items.map(g => <GameRow key={g.id} g={g} />)}
+            {games.data?.items.map(g => (
+              <GameRow key={g.id} g={g} onOpen={() => setOpenId(g.id)} />
+            ))}
             {games.data?.items.length === 0 && (
               <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-500">
                 Нет игр {q && <>по запросу «{q}»</>}
@@ -111,13 +115,17 @@ function CatalogSection() {
           </tbody>
         </table>
       </div>
+
+      {openId !== null && (
+        <GameDetailDrawer gameId={openId} onClose={() => setOpenId(null)} />
+      )}
     </div>
   )
 }
 
-function GameRow({ g }: { g: CatalogGame }) {
+function GameRow({ g, onOpen }: { g: CatalogGame; onOpen: () => void }) {
   return (
-    <tr className="hover:bg-gray-900">
+    <tr className="hover:bg-gray-900 cursor-pointer" onClick={onOpen}>
       <td className="px-3 py-2 font-mono text-xs text-gray-500">{g.id}</td>
       <td className="px-3 py-2 font-mono text-xs text-gray-400">{g.slug}</td>
       <td className="px-3 py-2 text-gray-100">{g.title}</td>
