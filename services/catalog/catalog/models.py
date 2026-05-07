@@ -389,3 +389,75 @@ class DicefestRawGame(Base):
         BigInteger, ForeignKey("games.id", ondelete="SET NULL")
     )
     notes: Mapped[str | None] = mapped_column(Text)
+
+
+class ImportPromotionLog(Base):
+    """Универсальный аудит-журнал промоушенов из staging в canonical БД.
+
+    Используется всеми источниками (dicefest, в будущем BGA / dicebreaker).
+    `raw_id` намеренно без FK — staging-таблицы per-provider
+    (dicefest_raw_games / bga_raw_games / ...), общий внешний ключ невозможен.
+
+    revert: НЕ удаляем строку, а пишем reverted_at + reverted_by + новую
+    запись action='revert'. Так у нас полная история действий.
+    """
+
+    __tablename__ = "import_promotion_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    raw_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    action: Mapped[str] = mapped_column(Text, nullable=False)  # link|create|skip|reject|revert
+    game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="SET NULL")
+    )
+    alias_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("game_aliases.id", ondelete="SET NULL")
+    )
+    satellite_created: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
+    performed_by: Mapped[str | None] = mapped_column(Text)
+    performed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+    reverted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reverted_by: Mapped[str | None] = mapped_column(Text)
+    notes: Mapped[str | None] = mapped_column(Text)
+
+
+class GameDicefest(Base):
+    """Satellite-таблица для dicefest (заполняется при промоушене).
+
+    PK на id (а не game_id) + UNIQUE(game_id, slug) — одна canonical Game
+    может иметь несколько satellite-записей при переизданиях (две dicefest-
+    страницы → один canonical Game).
+    """
+
+    __tablename__ = "game_dicefest"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="CASCADE"), nullable=False
+    )
+    raw_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("dicefest_raw_games.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    title_ru: Mapped[str | None] = mapped_column(Text)
+    title_en: Mapped[str | None] = mapped_column(Text)
+    publisher: Mapped[str | None] = mapped_column(Text)
+    release_year: Mapped[int | None] = mapped_column(Integer)
+    release_month: Mapped[int | None] = mapped_column(Integer)
+    release_status: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    cover_url: Mapped[str | None] = mapped_column(Text)
+    page_url: Mapped[str | None] = mapped_column(Text)
+    raw: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "slug", name="uq_game_dicefest_game_slug"),
+    )

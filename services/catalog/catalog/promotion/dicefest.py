@@ -1,0 +1,467 @@
+"""Промоушен dicefest_raw_games → canonical games + game_dicefest.
+
+Workflow (raw.status state machine):
+   new → promoted | skipped | rejected
+   skipped/rejected → new   (через revert)
+   promoted → new           (через revert; alias+satellite удаляются)
+
+Идемпотентность от двойного клика — через optimistic UPDATE с RETURNING:
+  UPDATE dicefest_raw_games SET status='promoted' WHERE id=:rid AND status='new'
+  RETURNING id  → если 0 строк, значит конкурент уже сделал → 409.
+
+Revert проверяет:
+  - log не уже reverted (log.reverted_at IS NULL).
+  - games.status != 'merged' (если merged — отказ с понятным сообщением,
+    оператор должен решить какой target использовать).
+  - alias и satellite ещё существуют (если кто-то удалил руками — отказ).
+  - НЕ трогаем offers.game_id — explicit contract: revert убирает только
+    мост alias↔dicefest, оффер'ы остаются прикреплёнными.
+"""
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from typing import Literal
+
+from fastapi import HTTPException
+from sqlalchemy import or_, select, text, update
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from catalog.models import (
+    DicefestRawGame,
+    Game,
+    GameAlias,
+    GameDicefest,
+    ImportPromotionLog,
+)
+
+PROVIDER = "dicefest"
+DEFAULT_THRESHOLD = 0.5
+MIN_THRESHOLD = 0.0  # для UI: «показать всех» — любой допустим
+DEFAULT_LIMIT = 5
+
+PromoAction = Literal["link", "create", "skip", "reject"]
+
+
+# ─── Match candidates ────────────────────────────────────────────────────────
+
+
+async def match_candidates(
+    session: AsyncSession,
+    raw_id: int,
+    *,
+    threshold: float = DEFAULT_THRESHOLD,
+    limit: int = DEFAULT_LIMIT,
+) -> tuple[DicefestRawGame, list[dict]]:
+    """Кандидаты-canonical-Game для raw-записи, отсортированные по score DESC.
+
+    pg_trgm поверх title_norm games + alias_norm game_aliases (используя те
+    же индексы, что matcher.py:94-133). Кандидаты возвращаются с score
+    ≥threshold, дополнительно помечаются `has_satellite_for_provider` (уже
+    привязан другой dicefest-страницей) и `year_diff` (разница годов с raw).
+
+    Если raw не имеет ни title_ru, ни title_en — возвращаем пустой список
+    (нечего матчить).
+    """
+    raw = await session.get(DicefestRawGame, raw_id)
+    if raw is None:
+        raise HTTPException(404, detail=f"raw_id={raw_id} not found")
+
+    queries = [t for t in (raw.title_ru, raw.title_en) if t]
+    if not queries:
+        return raw, []
+
+    # CTE объединяет матчи по двум источникам (title + aliases) для каждого
+    # из max-2 query-строк (title_ru/title_en). Берём MAX(score) per game.
+    sql = text(
+        """
+        WITH q AS (
+            SELECT unnest(CAST(:queries AS text[])) AS norm
+        ),
+        from_title AS (
+            SELECT g.id AS game_id,
+                   g.title AS title,
+                   g.year AS year,
+                   GREATEST(
+                       similarity(g.title_norm, lower(immutable_unaccent(q.norm))),
+                       0
+                   ) AS score,
+                   'title'::text AS via,
+                   g.title AS matched_text
+            FROM games g, q
+            WHERE g.title_norm % lower(immutable_unaccent(q.norm))
+              AND (g.status IS NULL OR g.status != 'merged')
+        ),
+        from_alias AS (
+            SELECT a.game_id,
+                   g.title AS title,
+                   g.year AS year,
+                   similarity(a.alias_norm, lower(immutable_unaccent(q.norm))) AS score,
+                   ('alias_' || COALESCE(a.language, 'unknown'))::text AS via,
+                   a.alias AS matched_text
+            FROM game_aliases a
+            JOIN games g ON g.id = a.game_id
+            CROSS JOIN q
+            WHERE a.alias_norm % lower(immutable_unaccent(q.norm))
+              AND (g.status IS NULL OR g.status != 'merged')
+        ),
+        all_matches AS (
+            SELECT * FROM from_title
+            UNION ALL
+            SELECT * FROM from_alias
+        ),
+        per_game AS (
+            SELECT game_id,
+                   MAX(score) AS score,
+                   (ARRAY_AGG(via ORDER BY score DESC))[1] AS via,
+                   (ARRAY_AGG(matched_text ORDER BY score DESC))[1] AS matched_text,
+                   (ARRAY_AGG(title ORDER BY score DESC))[1] AS title,
+                   (ARRAY_AGG(year ORDER BY score DESC))[1] AS year
+            FROM all_matches
+            WHERE score >= :threshold
+            GROUP BY game_id
+        )
+        SELECT pg.game_id, pg.score, pg.via, pg.matched_text, pg.title, pg.year,
+               EXISTS(SELECT 1 FROM game_dicefest gd WHERE gd.game_id = pg.game_id)
+                   AS has_satellite_for_provider
+        FROM per_game pg
+        ORDER BY pg.score DESC, pg.game_id
+        LIMIT :limit
+        """
+    ).bindparams(queries=queries, threshold=threshold, limit=limit)
+    rows = (await session.execute(sql)).mappings().all()
+
+    # Подгружаем aliases для каждого кандидата (для контекста в UI: какие у
+    # canonical игры локализации). N+1 не страшно: limit≤10.
+    candidates: list[dict] = []
+    for r in rows:
+        aliases = (
+            await session.execute(
+                select(GameAlias).where(GameAlias.game_id == r["game_id"])
+            )
+        ).scalars().all()
+        year_diff = None
+        if raw.release_year and r["year"]:
+            year_diff = abs(int(raw.release_year) - int(r["year"]))
+        candidates.append(
+            {
+                "game_id": r["game_id"],
+                "title": r["title"],
+                "year": r["year"],
+                "score": float(r["score"]),
+                "via": r["via"],
+                "matched_text": r["matched_text"],
+                "aliases": list(aliases),
+                "has_satellite_for_provider": bool(r["has_satellite_for_provider"]),
+                "year_diff": year_diff,
+            }
+        )
+    return raw, candidates
+
+
+# ─── Promote ─────────────────────────────────────────────────────────────────
+
+
+async def promote(
+    session: AsyncSession,
+    raw_id: int,
+    *,
+    action: PromoAction,
+    target_game_id: int | None = None,
+    notes: str | None = None,
+    performed_by: str = "operator",
+) -> dict:
+    """Транзакционно: переводит raw в новое состояние + создаёт alias/satellite/game,
+    пишет audit-строку в import_promotion_log.
+
+    Все действия атомарны — один commit в конце. При ошибке — rollback.
+    Идемпотентность через UPDATE ... WHERE status='new' RETURNING (двойной
+    клик на UI получит 409).
+    """
+    if action == "link" and target_game_id is None:
+        raise HTTPException(400, detail="link требует target_game_id")
+    if action not in ("link", "create", "skip", "reject"):
+        raise HTTPException(400, detail=f"unknown action: {action}")
+
+    # 1) Атомарно переводим raw из 'new' в новое состояние. Если 0 строк —
+    #    кто-то уже сделал.
+    new_status = {
+        "link": "promoted",
+        "create": "promoted",
+        "skip": "skipped",
+        "reject": "rejected",
+    }[action]
+
+    res = await session.execute(
+        update(DicefestRawGame)
+        .where(DicefestRawGame.id == raw_id, DicefestRawGame.status == "new")
+        .values(
+            status=new_status,
+            promoted_at=datetime.now(timezone.utc) if action in ("link", "create") else None,
+            notes=notes,
+        )
+        .returning(DicefestRawGame.id)
+    )
+    if res.scalar_one_or_none() is None:
+        # Либо нет такой записи, либо статус уже не 'new'
+        raw = await session.get(DicefestRawGame, raw_id)
+        if raw is None:
+            raise HTTPException(404, detail=f"raw_id={raw_id} not found")
+        raise HTTPException(
+            409,
+            detail=f"raw {raw_id} уже в статусе '{raw.status}', промоушен невозможен",
+        )
+
+    # Перечитываем с актуальными значениями.
+    raw = await session.get(DicefestRawGame, raw_id)
+    assert raw is not None
+
+    game_id: int | None = None
+    alias_id: int | None = None
+    satellite_id: int | None = None
+
+    if action == "link":
+        # Проверяем, что target game существует и не merged.
+        target = await session.get(Game, target_game_id)
+        if target is None:
+            raise HTTPException(404, detail=f"target_game_id={target_game_id} not found")
+        if target.status == "merged":
+            raise HTTPException(
+                409,
+                detail=f"game {target_game_id} merged — выберите target из meta.merged_into",
+            )
+        game_id = target_game_id
+        alias_id, satellite_id = await _attach_dicefest_data(
+            session, raw, game_id=game_id,
+        )
+
+    elif action == "create":
+        # Создаём новую canonical Game со slug-префиксом.
+        canonical_slug = f"dicefest-{raw.slug}"
+        new_title = raw.title_ru or raw.title_en or raw.slug
+        game = Game(
+            slug=canonical_slug,
+            title=new_title,
+            year=raw.release_year,
+            source="dicefest",
+            status="active",
+        )
+        session.add(game)
+        await session.flush()       # получаем game.id без commit'а
+        game_id = game.id
+        alias_id, satellite_id = await _attach_dicefest_data(
+            session, raw, game_id=game_id,
+        )
+
+    # action == 'skip' / 'reject' — только статус меняется, никаких alias/satellite.
+
+    # 2) Денормализованную ссылку обновляем у raw для удобства.
+    if game_id is not None:
+        raw.promoted_to_game_id = game_id
+
+    # 3) Audit log
+    log = ImportPromotionLog(
+        provider=PROVIDER,
+        raw_id=raw_id,
+        action=action,
+        game_id=game_id,
+        alias_id=alias_id,
+        satellite_created=(satellite_id is not None),
+        performed_by=performed_by,
+        notes=notes,
+    )
+    session.add(log)
+    await session.commit()
+    await session.refresh(log)
+
+    return {
+        "raw_id": raw_id,
+        "log_id": log.id,
+        "game_id": game_id,
+        "alias_id": alias_id,
+        "satellite_id": satellite_id,
+        "status": new_status,
+    }
+
+
+async def _attach_dicefest_data(
+    session: AsyncSession, raw: DicefestRawGame, *, game_id: int,
+) -> tuple[int | None, int | None]:
+    """Создаёт alias source='dicefest' (если ещё нет) + satellite game_dicefest.
+
+    alias.alias = raw.title_ru, language='ru' (основная локализация dicefest).
+    satellite — 1:1 с raw, но с привязкой к canonical game_id.
+    """
+    alias_id: int | None = None
+    if raw.title_ru:
+        # Проверяем существующий alias (на случай повторной привязки той же raw).
+        existing_alias = (
+            await session.execute(
+                select(GameAlias).where(
+                    GameAlias.game_id == game_id,
+                    GameAlias.alias == raw.title_ru,
+                )
+            )
+        ).scalar_one_or_none()
+        if existing_alias is None:
+            alias = GameAlias(
+                game_id=game_id,
+                alias=raw.title_ru,
+                source=PROVIDER,
+                language="ru",
+                verified=True,  # промоушен — это ручное подтверждение
+            )
+            session.add(alias)
+            await session.flush()
+            alias_id = alias.id
+        else:
+            alias_id = existing_alias.id
+
+    # Satellite. UNIQUE(game_id, slug) защищает от дублей.
+    existing_sat = (
+        await session.execute(
+            select(GameDicefest).where(GameDicefest.slug == raw.slug)
+        )
+    ).scalar_one_or_none()
+    if existing_sat is not None:
+        # Уже есть satellite — это означает, что raw был промоушен раньше,
+        # потом revert'нут (satellite удалён), но теперь повторно. Создадим
+        # заново, удалив старый.
+        await session.delete(existing_sat)
+        await session.flush()
+
+    satellite = GameDicefest(
+        game_id=game_id,
+        raw_id=raw.id,
+        slug=raw.slug,
+        title_ru=raw.title_ru,
+        title_en=raw.title_en,
+        publisher=raw.publisher,
+        release_year=raw.release_year,
+        release_month=raw.release_month,
+        release_status=raw.release_status,
+        description=raw.description,
+        cover_url=raw.cover_url,
+        page_url=raw.page_url,
+        raw=raw.raw,
+        fetched_at=raw.fetched_at,
+    )
+    session.add(satellite)
+    await session.flush()
+    return alias_id, satellite.id
+
+
+# ─── Revert ──────────────────────────────────────────────────────────────────
+
+
+async def revert(
+    session: AsyncSession,
+    log_id: int,
+    *,
+    performed_by: str = "operator",
+    notes: str | None = None,
+) -> dict:
+    """Откатывает действие promote.
+
+    link/create → удаляет alias и satellite (если они ещё на месте).
+                  Для action='create' пытается также удалить game, но ТОЛЬКО
+                  если у неё нет offers и нет других promotion-логов.
+    skip/reject → возвращает raw в 'new'.
+
+    Не трогает offers.game_id — оператор разбирается отдельно.
+    """
+    log = await session.get(ImportPromotionLog, log_id)
+    if log is None:
+        raise HTTPException(404, detail=f"log_id={log_id} not found")
+    if log.reverted_at is not None:
+        raise HTTPException(409, detail=f"log {log_id} уже reverted at {log.reverted_at}")
+    if log.action == "revert":
+        raise HTTPException(400, detail="нельзя revert revert-action")
+
+    raw = await session.get(DicefestRawGame, log.raw_id)
+    if raw is None:
+        raise HTTPException(404, detail=f"raw_id={log.raw_id} disappeared")
+
+    # Защита от расхождений с merge: если game была сliянa, оператор должен
+    # сам решить как откатывать.
+    if log.game_id is not None:
+        game = await session.get(Game, log.game_id)
+        if game is not None and game.status == "merged":
+            raise HTTPException(
+                409,
+                detail=(
+                    f"game {log.game_id} была merged — состояние расходится "
+                    f"с журналом, выполните revert вручную"
+                ),
+            )
+
+    if log.action in ("link", "create"):
+        # 1) Удалить alias (если он ещё ровно тот, что в логе)
+        if log.alias_id is not None:
+            alias = await session.get(GameAlias, log.alias_id)
+            if alias is not None:
+                await session.delete(alias)
+
+        # 2) Удалить satellite по slug (PK satellite — id, но в логе мы его
+        #    не сохраняли; используем slug, который уникален).
+        sat = (
+            await session.execute(
+                select(GameDicefest).where(GameDicefest.slug == raw.slug)
+            )
+        ).scalar_one_or_none()
+        if sat is not None:
+            await session.delete(sat)
+
+        # 3) Если action='create' — пытаемся удалить game, но осторожно.
+        if log.action == "create" and log.game_id is not None:
+            # Проверяем: нет других promotion-логов на эту game и нет offers.
+            other_logs = (
+                await session.execute(
+                    select(ImportPromotionLog).where(
+                        ImportPromotionLog.game_id == log.game_id,
+                        ImportPromotionLog.id != log.id,
+                        ImportPromotionLog.action.in_(("link", "create")),
+                        ImportPromotionLog.reverted_at.is_(None),
+                    )
+                )
+            ).scalars().all()
+            offers_count = (
+                await session.execute(
+                    text("SELECT count(*) FROM offers WHERE game_id = :gid").bindparams(
+                        gid=log.game_id,
+                    )
+                )
+            ).scalar_one()
+            if not other_logs and not offers_count:
+                game = await session.get(Game, log.game_id)
+                if game is not None:
+                    await session.delete(game)
+            # иначе — game остаётся, но без alias/satellite (всё равно безопасно).
+
+    # 4) Возвращаем raw в 'new'
+    raw.status = "new"
+    raw.promoted_at = None
+    raw.promoted_to_game_id = None
+
+    # 5) Помечаем log как reverted + создаём отдельную revert-запись
+    now = datetime.now(timezone.utc)
+    log.reverted_at = now
+    log.reverted_by = performed_by
+
+    revert_log = ImportPromotionLog(
+        provider=PROVIDER,
+        raw_id=log.raw_id,
+        action="revert",
+        game_id=log.game_id,
+        performed_by=performed_by,
+        notes=notes or f"revert of log #{log_id}",
+    )
+    session.add(revert_log)
+    await session.commit()
+    await session.refresh(revert_log)
+
+    return {
+        "raw_id": log.raw_id,
+        "revert_log_id": revert_log.id,
+        "original_log_id": log.id,
+        "status_after_revert": raw.status,
+    }

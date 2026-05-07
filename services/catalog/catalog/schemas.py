@@ -313,3 +313,93 @@ class DicefestRawGameOut(_ORMBase):
     # raw_html намеренно НЕ в Out — слишком большой для типового списка/детали;
     # запрашивается отдельным эндпоинтом при необходимости (например, для
     # просмотра «исходник» в debug-портале).
+
+
+class DicefestRawListOut(BaseModel):
+    items: list[DicefestRawGameOut]
+    total: int
+    limit: int
+    offset: int
+
+
+# ---------- promotion ----------
+
+class PromotionCandidate(BaseModel):
+    """Кандидат-canonical-Game для привязки raw-записи (dicefest и др.).
+
+    `via` — что именно мэтчилось (title_ru/title_en raw vs games.title или alias).
+    `has_satellite_for_provider` — у этой game уже есть satellite от текущего
+    источника (для dicefest — game_dicefest). Красный флаг в UI.
+    `year_diff` — разница годов между raw и canonical (если оба известны);
+    UI рисует жёлтый warning при ≥3 лет.
+    """
+
+    game_id: int
+    title: str
+    year: int | None = None
+    score: float
+    via: str  # 'title' | 'alias_ru' | 'alias_en'
+    matched_text: str | None = None
+    aliases: list[GameAliasOut] = []
+    has_satellite_for_provider: bool = False
+    year_diff: int | None = None
+
+
+class PromotionCandidatesOut(BaseModel):
+    raw: DicefestRawGameOut
+    candidates: list[PromotionCandidate]
+    threshold: float
+
+
+class PromotionApplyRequest(BaseModel):
+    """Действие промоушена.
+
+    action:
+      - link: привязать raw к существующей game (target_game_id обязателен)
+      - create: создать новую canonical Game со slug='dicefest-{slug}'
+      - skip: пометить raw как 'skipped' (можно вернуть в 'new' через revert)
+      - reject: пометить raw как 'rejected' (то же)
+    """
+
+    action: str  # 'link' | 'create' | 'skip' | 'reject'
+    target_game_id: int | None = None
+    notes: str | None = None
+    performed_by: str | None = None
+
+
+class PromotionApplyResult(BaseModel):
+    raw_id: int
+    log_id: int
+    game_id: int | None = None
+    alias_id: int | None = None
+    satellite_id: int | None = None
+    status: str  # status raw после действия
+
+
+class PromotionLogOut(_ORMBase):
+    id: int
+    provider: str
+    raw_id: int
+    action: str
+    game_id: int | None = None
+    alias_id: int | None = None
+    satellite_created: bool
+    performed_by: str | None = None
+    performed_at: datetime
+    reverted_at: datetime | None = None
+    reverted_by: str | None = None
+    notes: str | None = None
+
+
+class PromotionLogList(BaseModel):
+    items: list[PromotionLogOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class PromotionRevertResult(BaseModel):
+    raw_id: int
+    revert_log_id: int
+    original_log_id: int
+    status_after_revert: str
