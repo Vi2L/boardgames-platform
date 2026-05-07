@@ -5,29 +5,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Проект
 
 Сервис сравнения цен на настольные игры в российских интернет-магазинах.
-Предназначен для мобильного приложения (React Native). Python ≥ 3.9, полностью async.
+Предназначен для мобильного приложения (React Native). Python ≥ 3.12, полностью async.
 
-User-facing документация — в `README.md` (если появится). Этот файл — для разработчика/Claude.
+User-facing документация — в `README.md`. Этот файл — для разработчика/Claude.
 
 ## Команды
 
 ```bash
-# Создать venv (один раз; пакет поддерживает Python >=3.9)
-python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+# Установка (один раз, из корня монорепо)
+uv sync --all-packages --group dev
 
-# Запуск API (http://127.0.0.1:8001)
-.venv/bin/uvicorn parsers.api:app --reload --port 8001
+# Запуск API (http://127.0.0.1:8001) — из корня монорепо
+uv run --package parsers uvicorn parsers.api:app --reload --port 8001
 
 # С raw-snapshot recorder'ом (диагностика парсеров через /dashboard)
-ENABLE_RAW_SNAPSHOTS=1 .venv/bin/uvicorn parsers.api:app --reload --port 8001
+ENABLE_RAW_SNAPSHOTS=1 uv run --package parsers uvicorn parsers.api:app --reload --port 8001
 
-# Тесты (без сети, без БД — только моки и временные SQLite)
-.venv/bin/pytest tests/ -v
+# Тесты (без сети, без БД — только моки и временные SQLite). Запускать из services/parsers/
+cd services/parsers && uv run pytest tests/ -v
 
 # Один тест или один класс
-.venv/bin/pytest tests/test_service.py::TestPriceService::test_cold_cache_hits_parser -v
-.venv/bin/pytest tests/test_db_analytics.py -v
-.venv/bin/pytest tests/test_db_explorer.py -v
+cd services/parsers && uv run pytest tests/test_service.py::TestPriceService::test_cold_cache_hits_parser -v
+cd services/parsers && uv run pytest tests/test_db_analytics.py -v
+cd services/parsers && uv run pytest tests/test_db_explorer.py -v
 
 # Тест поиска через API
 curl "http://127.0.0.1:8001/search?q=Каркассон"
@@ -60,16 +60,15 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
 | `CATALOG_INGEST_URL` | — | URL webhook'а `boardgames-catalog`. Если задан — после успешного парсинга батча offers пушатся туда. Не задан → publisher отключён, нулевой оверхед. См. секцию «Интеграция с boardgames-catalog». |
 | `CATALOG_API_KEY` | — | API-ключ для `boardgames-catalog` со scope `ingest`. Используется publisher'ом, если `boardgames-catalog` запущен с `REQUIRE_AUTH=1`. |
 
-## Соседи (multi-repo стек)
+## Соседи (монорепо `boardgames-platform`)
 
-`parsers` — один из четырёх репозиториев. Полная карта стека:
-[`~/Projects/boardgames-infra/README.md`](../boardgames-infra/README.md).
+`parsers` — один из 3 backend-сервисов монорепо. Полная карта стека —
+в корневом [`CLAUDE.md`](../../CLAUDE.md) и [`docs/architecture.md`](../../docs/architecture.md).
 
 | Сервис | Роль | URL в dev |
 |---|---|---|
-| `~/Projects/boardgames-catalog` | канонический каталог + матчинг offers | `http://localhost:8002` |
-| `~/Projects/parsers_web_test` | дебаг-портал, UI ручного матчинга | `http://localhost:8000` (backend) / `5173` (frontend) |
-| `~/Projects/boardgames-infra` | docker-compose, Postgres | — |
+| `services/catalog` | канонический каталог + матчинг offers | `http://localhost:8002` |
+| `services/web-test` | дебаг-портал, UI ручного матчинга | `http://localhost:8000` (backend) / `5173` (frontend) |
 
 ## Интеграция с boardgames-catalog
 
@@ -90,8 +89,8 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
   web-test UI (`/dlq`) можно сделать replay одной записи или
   batch'ом — при успехе запись удаляется из DLQ.
 - **Контракт webhook'а** — стабильный, **single source of truth**:
-  [`services/catalog/CLAUDE.md`](../catalog/CLAUDE.md)
-  секция «Контракты с соседями».
+  [`services/catalog/CLAUDE.md`](../catalog/CLAUDE.md), секция
+  «Контракты с соседями».
 - **При изменении формата** в `catalog_publisher.py` — синхронно править
   `services/catalog/catalog/routers/ingest.py` и общую схему в
   `services/catalog/catalog/schemas.py:IngestRequest`.

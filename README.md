@@ -36,6 +36,32 @@ cd services/catalog && uv run pytest -v   # один сервис
 bin/test-all.sh                            # все сервисы (отдельные процессы)
 ```
 
+## Наполнение catalog данными (seed)
+
+После первого запуска `catalog` БД пустая (только применённые миграции).
+Загрузить ~162K игр из BGG-выгрузки + русские локализации из Wikidata:
+
+```bash
+# 1) Скачать BGG ranks CSV (~10 МБ) с https://boardgamegeek.com/data_dumps/bg_ranks
+#    (требует BGG-аккаунт; обновляется ежемесячно)
+
+# 2) Загрузить ~162K игр в `games` + `game_bgg` (~50 секунд):
+uv run --package boardgames-catalog python -m catalog.scripts.import_bgg_ranks ~/Downloads/boardgames_ranks.csv
+
+# 3) Обогатить топ-1000 русскими названиями + descriptions из Wikidata (~10 минут):
+uv run --package boardgames-catalog python -m catalog.scripts.import_wikidata --only-rank-le 1000
+
+# Полный прогон по всем ~30K ranked игр займёт ~8 часов (rate-limit Wikidata 1 req/sec):
+# nohup uv run --package boardgames-catalog python -m catalog.scripts.import_wikidata > wikidata.log 2>&1 &
+```
+
+Оба скрипта **идемпотентные** (`ON CONFLICT (bgg_id) DO UPDATE`) — повторный
+запуск только обновит существующие записи. Их также можно запускать
+изнутри docker-контейнера через `docker compose exec catalog python -m ...`
+(после `docker cp <csv> bg-catalog:/tmp/`).
+
+Подробности — в [`services/catalog/CLAUDE.md`](services/catalog/CLAUDE.md), секция «Обогащение catalog'а».
+
 ## Профили docker compose
 
 | Profile | Что поднимается | Когда использовать |

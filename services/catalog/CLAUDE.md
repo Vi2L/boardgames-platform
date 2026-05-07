@@ -4,21 +4,23 @@
 
 ## Проект
 
-Сервис каталога настольных игр. Хранит **канонические Game** (метаданные из BGG/Tesera + ручной ввод) и связанные **offers** — предложения магазинов, приходящие из соседнего сервиса `~/Projects/parsers` через webhook `/ingest/offers`.
+Сервис каталога настольных игр. Хранит **канонические Game** (метаданные из BGG/Tesera + ручной ввод) и связанные **offers** — предложения магазинов, приходящие из соседнего сервиса `services/parsers` через webhook `/ingest/offers`.
 
 Полный план развития — в `~/.claude/plans/woolly-wobbling-simon.md`.
 
-## Соседи
+## Соседи (монорепо `boardgames-platform`)
 
-| Проект | Роль | URL в dev |
+| Сервис | Роль | URL в dev |
 |---|---|---|
-| `~/Projects/parsers` | Источник offers (парсинг цен в магазинах) | `http://localhost:8001` |
-| `~/Projects/parsers_web_test` | Диагностика парсеров + UI ручного матчинга | `http://localhost:8000` |
-| `~/Projects/boardgames-infra` | docker-compose, Postgres, общий `.env` | — |
+| `services/parsers` | Источник offers (парсинг цен в магазинах) | `http://localhost:8001` |
+| `services/web-test` | Диагностика парсеров + UI ручного матчинга | `http://localhost:8000` |
+| `infra/postgres/init.sql` | Расширения PG (pg_trgm, unaccent) — выполняется один раз при создании volume | — |
+
+Карта стека целиком — в корневом [`CLAUDE.md`](../../CLAUDE.md) и [`docs/architecture.md`](../../docs/architecture.md).
 
 ## Стек
 
-- Python ≥ 3.12 (новее, чем `parsers` — там 3.9; здесь смело берём свежий)
+- Python ≥ 3.12 (тот же, что в parsers и web-test после миграции в монорепо)
 - FastAPI + uvicorn
 - SQLAlchemy 2.0 async + asyncpg
 - Alembic для миграций
@@ -28,18 +30,22 @@
 ## Команды
 
 ```bash
-# Создать venv (один раз)
-python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+# Установка (один раз, из корня монорепо)
+uv sync --all-packages --group dev
 
-# Запуск API (требует поднятый Postgres из infra)
-.venv/bin/uvicorn catalog.api:app --reload --port 8002
+# Запуск API (требует поднятый Postgres — `docker compose --profile minimal up -d`)
+# Из корня монорепо:
+uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
 
-# Тесты
-.venv/bin/pytest -v
+# Тесты — запускать из services/catalog/, иначе pytest сталкивается с conftest'ами других сервисов
+cd services/catalog && uv run pytest -v
 
-# Миграции (этап 2+)
-.venv/bin/alembic revision --autogenerate -m "..."
-.venv/bin/alembic upgrade head
+# Миграции — alembic.ini лежит в services/catalog/, запускать оттуда
+cd services/catalog && uv run --package boardgames-catalog alembic revision --autogenerate -m "..."
+cd services/catalog && uv run --package boardgames-catalog alembic upgrade head
+
+# В Docker миграции применяются вручную после первого `docker compose up`:
+docker compose exec catalog alembic upgrade head
 ```
 
 ## Архитектура
@@ -62,8 +68,8 @@ catalog/
 ## Satellite-схема (с миграции `0002_satellite_schema`)
 
 Каждый внешний источник живёт в своей таблице с «жёсткими» полями + `raw jsonb`
-+ `fetched_at`. Связь с canonical `games` через `game_id`. Reference design —
-`~/Projects/board_game_db` (есть `GameWikidata`, `TsGame`, `DfGame` etc.).
++ `fetched_at`. Связь с canonical `games` через `game_id`. Reference design
+адаптирован из старого проекта `board_game_db` (`GameWikidata`, `TsGame`, `DfGame` etc.).
 
 ```
 games  (canonical, slim)
@@ -91,33 +97,42 @@ games  (canonical, slim)
 ### CSV BGG ranks (массовый seed)
 
 ```bash
-.venv/bin/python -m catalog.scripts.import_bgg_ranks /path/to/boardgames_ranks.csv
+# С хоста (через port mapping bg-postgres :5433):
+uv run --package boardgames-catalog python -m catalog.scripts.import_bgg_ranks /path/to/boardgames_ranks.csv
+
+# Внутри Docker контейнера (DATABASE_URL=postgres:5432 из ENV):
+docker cp /path/to/boardgames_ranks.csv bg-catalog:/tmp/boardgames_ranks.csv
+docker compose exec catalog python -m catalog.scripts.import_bgg_ranks /tmp/boardgames_ranks.csv
 ```
 
-Заливает 176K записей в `games` + `game_bgg` за ~50 секунд. Идемпотентно
+Заливает ~162K записей в `games` + `game_bgg` за ~50 секунд. Идемпотентно
 (`ON CONFLICT (bgg_id) DO UPDATE`). Поля: rank, bayes_average, average,
 users_rated, is_expansion, subtype_ranks. Description/mechanics/designers
 остаются пустыми — для них нужен XML API через `POST /import/bgg`.
 
+CSV-файл — официальная выгрузка BGG, обновляется ежемесячно. Скачивается
+с https://boardgamegeek.com/data_dumps/bg_ranks (требует BGG-аккаунт).
+
 ### Wikidata (русские локализации + descriptions)
 
 ```bash
-.venv/bin/python -m catalog.scripts.import_wikidata --only-rank-le 1000
+uv run --package boardgames-catalog python -m catalog.scripts.import_wikidata --only-rank-le 1000
 ```
 
 Обходит топ-N игр по rank, обогащает `game_wikidata` (labels/aliases/
 descriptions per language) и пишет ru-локализации в `game_aliases` со
 `source='wikidata'`, `language='ru'`. 1 req/sec по best practice Wikidata,
-fully recoverable retry на 429/5xx. Топ-1000 — ~17 минут. Для полного прогона
-по 30K ranked-играм — ~8 часов под `nohup`.
+fully recoverable retry на 429/5xx. Топ-1000 — ~10 минут (~600 секунд),
+~585 found+written. Для полного прогона по ~30K ranked-играм — ~8 часов
+под `nohup`.
 
 Алгоритм: SPARQL `VALUES`-batch (50 ID на запрос) → entity-API per Q-id →
-parse → upsert. Источник адаптирован из `~/Projects/board_game_db/app/wikidata.py`.
+parse → upsert. Источник адаптирован из старого `board_game_db/app/wikidata.py`.
 
 ### XML API BGG (точечное полное обогащение)
 
 ```bash
-curl -X POST 'http://localhost:8012/import/bgg?wait=true' \
+curl -X POST 'http://localhost:8002/import/bgg?wait=true' \
   -H 'content-type: application/json' -d '{"bgg_id":822}'
 ```
 
@@ -135,7 +150,7 @@ Cloudflare блокирует tesera.ru / api.tesera.ru с большинств�
 ### Webhook от `parsers` — `POST /ingest/offers`
 
 **Source of truth для контракта.** Менять формат — только синхронно с
-`~/Projects/parsers/parsers/catalog_publisher.py`.
+`services/parsers/parsers/catalog_publisher.py`.
 
 ```http
 POST /ingest/offers
@@ -234,9 +249,13 @@ Scope'ы:
 Управление ключами через CLI:
 
 ```bash
-.venv/bin/python -m catalog.cli create-key --owner parsers --scopes ingest
-.venv/bin/python -m catalog.cli list-keys
-.venv/bin/python -m catalog.cli revoke 5
+# С хоста (postgres на :5433 через port mapping):
+uv run --package boardgames-catalog python -m catalog.cli create-key --owner parsers --scopes ingest
+uv run --package boardgames-catalog python -m catalog.cli list-keys
+uv run --package boardgames-catalog python -m catalog.cli revoke 5
+
+# В контейнере (postgres на :5432 через docker network):
+docker compose exec catalog python -m catalog.cli create-key --owner parsers --scopes ingest
 ```
 
 В БД хранится только `sha256(plaintext)`. Plaintext показывается один раз при
@@ -256,5 +275,5 @@ Scope'ы:
 
 ## Запреты
 
-- Не менять формат webhook `/ingest/offers` без синхронного обновления `~/Projects/parsers/parsers/catalog_publisher.py`.
+- Не менять формат webhook `/ingest/offers` без синхронного обновления `services/parsers/parsers/catalog_publisher.py`.
 - Не push'ить в remote без явного разрешения пользователя.

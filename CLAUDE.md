@@ -90,7 +90,13 @@ docker compose --profile full down -v           # ⚠ ОПАСНО — удал�
 - `infra/postgres/init.sql` — расширения PG (pg_trgm, unaccent), запускается раз.
 - `services/<name>/CLAUDE.md` — детали конкретного сервиса (читать перед изменениями).
 - `services/catalog/alembic/` — миграции БД. Запускать `alembic` из
-  `services/catalog/` (`cd services/catalog && uv run --package catalog alembic upgrade head`).
+  `services/catalog/` (`cd services/catalog && uv run --package boardgames-catalog alembic upgrade head`).
+- `services/catalog/catalog/scripts/` — CLI-скрипты:
+  - `import_bgg_ranks.py` — массовый seed catalog из CSV (~162K игр за 50 сек)
+  - `import_wikidata.py` — обогащение русскими названиями + descriptions (топ-1000 за ~10 мин)
+  - `migrate_meta_to_satellites.py` — миграция данных из старой `games.meta` в satellite-таблицы.
+  - Инструкция запуска — в `README.md` секция «Наполнение catalog данными».
+- `bin/test-all.sh` — прогон тестов всех сервисов отдельными процессами pytest.
 
 ## Запреты (для всего монорепо)
 
