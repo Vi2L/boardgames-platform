@@ -16,24 +16,38 @@
 
 ## Быстрый старт
 
+**Все сервисы локально запускаются в Docker-контейнерах** через единый
+`docker compose` — это канонический способ работы с репо. Host-uvicorn
+оставлен только для точечной отладки одного сервиса (см. ниже).
+
 ```bash
 # Один раз
 cp .env.example .env
 uv sync --all-packages --group dev     # один общий .venv в корне со всеми members
+                                        # (нужен для тестов, миграций и host-debug)
 
-# Запуск через docker compose
-docker compose --profile full up -d    # все сервисы + postgres
+# Запуск всего стека
+docker compose --profile full up -d    # postgres + catalog + parsers + web-test
 docker compose ps                       # все 4 healthy
-
-# Запуск вручную (без docker), полезно для отладки
-docker compose --profile minimal up -d                                    # только postgres
-uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
-uv run --package parsers uvicorn parsers.api:app --reload --port 8001
-uv run --package web-test uvicorn app.main:app --reload --port 8000
+docker compose --profile full down      # стоп (volumes сохраняются)
 
 # Тесты — запускаются per-service (см. CLAUDE.md о pytest)
 cd services/catalog && uv run pytest -v   # один сервис
 bin/test-all.sh                            # все сервисы (отдельные процессы)
+```
+
+### Локальная отладка одного сервиса (host-uvicorn)
+
+Когда нужен hot-reload или отладчик в IDE — поднимаем postgres в Docker,
+а конкретный сервис запускаем uvicorn'ом с хоста. Остальные сервисы
+обычно тоже остаются в Docker (либо тушим только тот, что отлаживаем).
+
+```bash
+docker compose --profile minimal up -d                                    # только postgres
+docker stop bg-<service>                                                  # тушим тот, что заменяем
+uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
+uv run --package parsers uvicorn parsers.api:app --reload --port 8001
+uv run --package web-test uvicorn app.main:app --reload --port 8000
 ```
 
 ## Наполнение catalog данными (seed)

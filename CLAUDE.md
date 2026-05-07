@@ -19,25 +19,50 @@
 | [services/parsers](services/parsers/) | Парсинг 4 магазинов (FastAPI · SQLite · async) | 8001 | [services/parsers/CLAUDE.md](services/parsers/CLAUDE.md) |
 | [services/web-test](services/web-test/) | Внутренний debug-портал (FastAPI · React) | 8000 | [services/web-test/CLAUDE.md](services/web-test/CLAUDE.md) |
 
+## Запуск (канонический способ — Docker)
+
+**Все сервисы локально запускаются в Docker-контейнерах** через единый
+`docker compose`. Host-uvicorn оставлен для точечной отладки одного
+сервиса (см. ниже) — не использовать как режим по умолчанию.
+
+```bash
+cp .env.example .env                            # один раз
+docker compose --profile full up -d             # все 4 сервиса
+docker compose ps                                # все 4 healthy
+docker compose --profile full down              # стоп (volumes сохраняются)
+docker compose --profile full down -v           # ⚠ ОПАСНО — удаляет volumes
+```
+
+Профили: `minimal` (postgres), `catalog` (postgres+catalog), `full` (всё).
+
 ## Менеджер пакетов
 
 **uv workspace** — один корневой `pyproject.toml`, каждый сервис как member
 со своим `pyproject.toml`. После `uv sync` появляется единый `.venv/` в
-корне с editable-установкой всех members.
+корне с editable-установкой всех members. Нужен для тестов, alembic-миграций
+и host-debug режима — для обычного запуска сервисов хватает Docker.
 
 ```bash
 # Установка зависимостей всего workspace (один .venv в корне)
 uv sync --all-packages --group dev                 # все members + dev-tools
 uv sync --all-packages --all-extras                # + extras типа playwright
 
-# Запуск конкретного сервиса
-uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
-uv run --package parsers uvicorn parsers.api:app --reload --port 8001
-uv run --package web-test uvicorn app.main:app --reload --port 8000
-
 # Тесты — запускаются ПЕР-СЕРВИС (см. секцию «Подводные камни» ниже о pytest)
 cd services/catalog && uv run pytest -v             # тесты одного сервиса
 bin/test-all.sh                                     # все сервисы скопом
+```
+
+### Host-uvicorn — только для отладки
+
+Когда нужен hot-reload или отладчик в IDE для одного сервиса, тушим его
+docker-контейнер и поднимаем uvicorn'ом с хоста. Postgres и остальные
+сервисы при этом обычно остаются в Docker.
+
+```bash
+docker stop bg-<service>                                                  # тушим тот, что заменяем
+uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
+uv run --package parsers uvicorn parsers.api:app --reload --port 8001
+uv run --package web-test uvicorn app.main:app --reload --port 8000
 ```
 
 **Важное правило:** в монорепо **только один `.venv` — в корне**. Если
@@ -57,18 +82,7 @@ npm run build  # производит dist/, FastAPI отдаёт его как 
 ```
 
 В Docker frontend собирается через multi-stage Dockerfile
-(`services/web-test/Dockerfile`).
-
-## Запуск через docker compose
-
-```bash
-cp .env.example .env                            # один раз
-docker compose --profile full up -d             # все 4 сервиса
-docker compose --profile full down              # стоп (без потери данных)
-docker compose --profile full down -v           # ⚠ ОПАСНО — удаляет volumes
-```
-
-Профили: `minimal` (postgres), `catalog` (postgres+catalog), `full` (всё).
+(`services/web-test/Dockerfile`) и попадает в образ как статика.
 
 ## Контракты между сервисами
 
