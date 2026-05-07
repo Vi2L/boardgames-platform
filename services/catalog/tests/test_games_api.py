@@ -83,6 +83,54 @@ async def test_search_with_pg_trgm(client: AsyncClient):
     assert body["items"][0]["title"] == "Каркассон"
 
 
+async def test_search_substring_short_query(client: AsyncClient):
+    """Короткий запрос (4 символа) должен находить ВСЁ, что содержит подстроку.
+
+    pg_trgm % с дефолтным similarity_threshold=0.3 на 4-буквенных запросах часто
+    отсекает релевантные результаты — фикс через ILIKE-substring дополнение.
+    Регресс-тест на проблему: 'Azul' возвращал только 6 игр из ~162K.
+    """
+    titles = ["Azul", "Azul Mini", "Azul: Summer Pavilion", "FUCAZUL!", "Settlers"]
+    for i, t in enumerate(titles):
+        await client.post("/games", json={"slug": f"sub{i}", "title": t})
+
+    r = await client.get("/games", params={"q": "Azul", "limit": 50})
+    assert r.status_code == 200
+    body = r.json()
+    found = {item["title"] for item in body["items"]}
+    # Все 4 игры с подстрокой "Azul" (case-insensitive) должны найтись:
+    assert {"Azul", "Azul Mini", "Azul: Summer Pavilion", "FUCAZUL!"} <= found
+    assert "Settlers" not in found
+
+
+async def test_search_substring_priority_over_fuzzy(client: AsyncClient):
+    """Точные substring-matches идут первыми в выдаче, fuzzy — после.
+
+    'Azul Mini' содержит подстроку — score=1.0. 'Azuleo' только похож по
+    триграммам — score < 1.0. Substring должен быть выше в результатах.
+    """
+    await client.post("/games", json={"slug": "az1", "title": "Azuleo"})
+    await client.post("/games", json={"slug": "az2", "title": "Azul Mini"})
+    r = await client.get("/games", params={"q": "Azul"})
+    titles = [item["title"] for item in r.json()["items"]]
+    assert "Azul Mini" in titles
+    assert "Azuleo" in titles
+    assert titles.index("Azul Mini") < titles.index("Azuleo")
+
+
+async def test_search_escapes_like_wildcards(client: AsyncClient):
+    """Символы % и _ в запросе — литералы, не LIKE-wildcards.
+
+    Иначе пользовательский ввод 'A%' матчил бы вообще всё, что начинается с 'A'.
+    """
+    await client.post("/games", json={"slug": "p1", "title": "100% Pure"})
+    await client.post("/games", json={"slug": "p2", "title": "Other game"})
+    r = await client.get("/games", params={"q": "100%"})
+    titles = [item["title"] for item in r.json()["items"]]
+    assert "100% Pure" in titles
+    assert "Other game" not in titles
+
+
 async def test_patch_partial(client: AsyncClient):
     r = await client.post("/games", json={"slug": "p", "title": "Old"})
     gid = r.json()["id"]

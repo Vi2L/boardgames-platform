@@ -9,7 +9,7 @@
  * матчинга, нагружать визуалом будем по мере живого использования.
  */
 import { useState } from 'react'
-import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
+import { useQuery, useQueryClient, useMutation, useInfiniteQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   fetchCatalogHealth,
@@ -98,19 +98,37 @@ export function CatalogPage() {
 
 // ─── Каталог ──────────────────────────────────────────────────────────────
 
+// Пагинация через useInfiniteQuery: классический "Показать ещё" — каждый
+// fetchNextPage добавляет ещё PAGE_SIZE результатов к предыдущим страницам.
+// Для UX каталога это естественнее, чем нумерация: пользователь обычно ищет
+// конкретную игру, остановится как только найдёт.
+const PAGE_SIZE = 50
+
 function CatalogSection() {
   const [q, setQ] = useState('')
   const [openId, setOpenId] = useState<number | null>(null)
-  const games = useQuery({
+  const games = useInfiniteQuery({
     queryKey: ['catalog', 'games', q],
-    queryFn: () => listCatalogGames(q || undefined, 50, 0),
+    queryFn: ({ pageParam }) =>
+      listCatalogGames(q || undefined, PAGE_SIZE, pageParam),
+    initialPageParam: 0,
+    // Если уже подгружено столько же или больше, чем total — следующих страниц нет.
+    getNextPageParam: (lastPage, allPages) => {
+      const loaded = allPages.reduce((sum, p) => sum + p.items.length, 0)
+      return loaded < lastPage.total ? loaded : undefined
+    },
   })
+
+  // flatMap собирает все загруженные страницы в один массив для рендера.
+  const items = games.data?.pages.flatMap(p => p.items) ?? []
+  const total = games.data?.pages[0]?.total ?? 0
+  const remaining = Math.max(0, total - items.length)
 
   return (
     <div className="space-y-3">
       <input
         type="text"
-        placeholder="Поиск по названию (pg_trgm fuzzy: «каркасон» найдёт «Каркассон»)"
+        placeholder="Поиск по названию (substring + fuzzy: «каркасон» найдёт «Каркассон», «Azul» найдёт всю серию)"
         value={q}
         onChange={e => setQ(e.target.value)}
         className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-500 focus:border-violet-500 focus:outline-none"
@@ -119,7 +137,9 @@ function CatalogSection() {
         <div className="text-sm text-red-400">Не удалось получить каталог: {String(games.error)}</div>
       )}
       <div className="text-xs text-gray-500">
-        {games.data ? `${games.data.total} игр в каталоге` : 'загрузка...'}
+        {games.isLoading
+          ? 'загрузка...'
+          : `показано ${items.length} из ${total} игр`}
       </div>
       <div className="border border-gray-800 rounded overflow-hidden">
         <table className="w-full text-sm">
@@ -134,10 +154,10 @@ function CatalogSection() {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {games.data?.items.map(g => (
+            {items.map(g => (
               <GameRow key={g.id} g={g} onOpen={() => setOpenId(g.id)} />
             ))}
-            {games.data?.items.length === 0 && (
+            {!games.isLoading && items.length === 0 && (
               <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-500">
                 Нет игр {q && <>по запросу «{q}»</>}
               </td></tr>
@@ -145,6 +165,19 @@ function CatalogSection() {
           </tbody>
         </table>
       </div>
+
+      {games.hasNextPage && (
+        <button
+          type="button"
+          onClick={() => games.fetchNextPage()}
+          disabled={games.isFetchingNextPage}
+          className="w-full px-3 py-2 text-sm bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded text-gray-300 disabled:opacity-50"
+        >
+          {games.isFetchingNextPage
+            ? 'загрузка…'
+            : `Показать ещё (осталось ${remaining})`}
+        </button>
+      )}
 
       {openId !== null && (
         <GameDetailDrawer gameId={openId} onClose={() => setOpenId(null)} />

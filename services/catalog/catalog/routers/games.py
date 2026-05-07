@@ -50,18 +50,35 @@ async def list_games(
 ) -> GameListOut:
     stmt = select(Game)
 
+    # Экранирование LIKE-wildcards: % и _ в пользовательском запросе
+    # должны трактоваться как литералы, а не паттерн. ESCAPE '\' в SQL.
+    # Считаем один раз, переиспользуем в WHERE и ORDER BY.
+    q_like = (
+        q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        if q
+        else None
+    )
+
     if q:
-        # Fuzzy-search по двум источникам: canonical title и game_aliases.
-        # Это критично для ru-запросов: title в games хранится на исходном
-        # языке (часто en), русские локализации сидят в game_aliases (source=
-        # 'wikidata' / 'manual'). Оба условия используют GIN pg_trgm индексы.
+        # Гибрид substring (ILIKE) + fuzzy (pg_trgm %).
+        # Зачем substring: на коротких запросах (4-5 символов, например "Azul")
+        # pg_trgm % с дефолтным similarity_threshold=0.3 отсекает релевантные
+        # результаты вроде "Azul Mini" или "Azul: Summer Pavilion" — слишком
+        # мало общих триграмм. ILIKE гарантирует, что всё, что содержит
+        # подстроку, попадёт в выдачу. Fuzzy остаётся для опечаток
+        # ("каркасон" → "Каркассон").
+        # Производительность: GIN gin_trgm_ops индексы, созданные миграцией
+        # 0001 (ix_games_title_norm_trgm, ix_game_aliases_alias_norm_trgm),
+        # ускоряют и `LIKE '%x%'`, и оператор `%` (см. pg_trgm docs).
         stmt = stmt.where(
             text(
-                "(title_norm % lower(immutable_unaccent(:q)) "
+                "(title_norm LIKE '%' || lower(immutable_unaccent(:qlike)) || '%' ESCAPE '\\' "
+                " OR title_norm % lower(immutable_unaccent(:q)) "
                 " OR EXISTS (SELECT 1 FROM game_aliases ga "
                 "  WHERE ga.game_id = games.id "
-                "    AND ga.alias_norm % lower(immutable_unaccent(:q))))"
-            ).bindparams(q=q)
+                "    AND (ga.alias_norm LIKE '%' || lower(immutable_unaccent(:qlike)) || '%' ESCAPE '\\' "
+                "         OR ga.alias_norm % lower(immutable_unaccent(:q)))))"
+            ).bindparams(q=q, qlike=q_like)
         )
     if designer:
         # ANY(:val) = ANY(designers) — включает GIN-индекс по array, если он есть.
@@ -75,7 +92,22 @@ async def list_games(
     # Считаем total ДО pagination'а.
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
-    stmt = stmt.order_by(Game.id.desc()).limit(limit).offset(offset)
+    if q:
+        # Сортировка: точные substring-matches (score=1.0) первыми, потом
+        # fuzzy-кандидаты по убыванию pg_trgm similarity, потом по id.
+        # Имена параметров не пересекаются с WHERE, чтобы не зависеть от того,
+        # как SQLAlchemy объединяет bindparams в финальном SQL.
+        stmt = stmt.order_by(
+            text(
+                "(CASE WHEN title_norm LIKE '%' || lower(immutable_unaccent(:qlike2)) || '%' ESCAPE '\\' "
+                "      THEN 1.0 "
+                "      ELSE similarity(title_norm, lower(immutable_unaccent(:q2))) END) DESC"
+            ).bindparams(q2=q, qlike2=q_like),
+            Game.id.desc(),
+        )
+    else:
+        stmt = stmt.order_by(Game.id.desc())
+    stmt = stmt.limit(limit).offset(offset)
     result = await session.execute(stmt)
     items = result.scalars().all()
     return GameListOut(
