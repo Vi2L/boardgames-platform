@@ -54,15 +54,17 @@ extend-exclude = [
 # Базовый набор: pyflakes (F), pycodestyle errors/warnings (E, W), isort (I)
 select = ["F", "E", "W", "I"]
 
-# === Тесты — корневой pytest ===
-# Без `testpaths` — каждый сервис запускает свои тесты явно через
-# `uv run --package <name> pytest` (per-service pyproject задаёт свой
-# testpaths). Корневой запуск с явным путём:
-#   uv run pytest services/catalog/tests
+# === Тесты ===
+# Корневого `[tool.pytest.ini_options]` нет специально: иначе pytest при
+# любом запуске из корня собирает test_*.py из всех services/*/tests и
+# падает с ImportPathMismatchError — у каждого сервиса свой conftest.py,
+# и pluggy не может зарегистрировать два модуля с одинаковым именем
+# `tests.conftest` в одной pytest-сессии.
 #
-# `importmode = "importlib"` обязателен, чтобы одноимённые модули
-# (`tests.conftest` в каждом сервисе) не конфликтовали при сборе из
-# нескольких папок. См. https://docs.pytest.org/en/stable/explanation/goodpractices.html#tests-as-part-of-application-code
-[tool.pytest.ini_options]
-asyncio_mode = "strict"
-addopts = "--import-mode=importlib"
+# Workflow для тестов:
+#   cd services/catalog && uv run pytest    # тесты одного сервиса
+#   bin/test-all.sh                         # все сервисы (отдельные процессы pytest)
+#
+# Per-service config (testpaths, asyncio_mode) живёт в каждом
+# services/*/pyproject.toml — pytest автоматически их подхватит при
+# запуске из service-папки.

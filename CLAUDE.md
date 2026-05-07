@@ -26,19 +26,18 @@
 корне с editable-установкой всех members.
 
 ```bash
-# Установка зависимостей всего workspace
-uv sync                                            # один .venv в корне
-uv sync --group dev                                # + dev-tools (pytest, ruff)
-uv sync --all-extras                               # + extras типа playwright
+# Установка зависимостей всего workspace (один .venv в корне)
+uv sync --all-packages --group dev                 # все members + dev-tools
+uv sync --all-packages --all-extras                # + extras типа playwright
 
 # Запуск конкретного сервиса
-uv run --package catalog uvicorn catalog.api:app --reload --port 8002
+uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
 uv run --package parsers uvicorn parsers.api:app --reload --port 8001
 uv run --package web-test uvicorn app.main:app --reload --port 8000
 
-# Тесты
-uv run pytest                                      # все members разом
-uv run --package catalog pytest -v                 # тесты одного сервиса
+# Тесты — запускаются ПЕР-СЕРВИС (см. секцию «Подводные камни» ниже о pytest)
+cd services/catalog && uv run pytest -v             # тесты одного сервиса
+bin/test-all.sh                                     # все сервисы скопом
 ```
 
 **Важное правило:** в монорепо **только один `.venv` — в корне**. Если
@@ -110,6 +109,13 @@ docker compose --profile full down -v           # ⚠ ОПАСНО — удал�
 - **`parsers @ file:///` в web-test заменён на workspace-source.** Старый
   путь `/Users/vitaliy/Projects/parsers` больше не используется — `parsers`
   резолвится через `[tool.uv.sources]` в корневом `pyproject.toml`.
+- **pytest нельзя запускать из корня монорепо без cd в сервис.** У каждого
+  сервиса свой `tests/conftest.py`, и pluggy падает с
+  `ImportPathMismatchError`/`Plugin already registered`, потому что не
+  может удержать два модуля с именем `tests.conftest` в одной сессии.
+  Поэтому корневой `[tool.pytest.ini_options]` отсутствует. Запуск:
+  `cd services/<name> && uv run pytest` (per-service) или
+  `bin/test-all.sh` (последовательно отдельными процессами).
 - **Alembic запускать из `services/catalog/`** — пути в `alembic.ini`
   относительные. Из корня — `alembic -c services/catalog/alembic.ini ...`.
 - **Цены везде в копейках** (int). Конвертация в рубли — на стороне клиента.

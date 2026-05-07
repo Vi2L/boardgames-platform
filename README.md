@@ -19,22 +19,21 @@
 ```bash
 # Один раз
 cp .env.example .env
-echo "3.12" > .python-version          # уже есть в репо
-uv sync                                # один общий .venv в корне
+uv sync --all-packages --group dev     # один общий .venv в корне со всеми members
 
 # Запуск через docker compose
 docker compose --profile full up -d    # все сервисы + postgres
 docker compose ps                       # все 4 healthy
 
 # Запуск вручную (без docker), полезно для отладки
-docker compose --profile minimal up -d # только postgres
-uv run --package catalog uvicorn catalog.api:app --reload --port 8002
+docker compose --profile minimal up -d                                    # только postgres
+uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
 uv run --package parsers uvicorn parsers.api:app --reload --port 8001
 uv run --package web-test uvicorn app.main:app --reload --port 8000
 
-# Тесты
-uv run pytest                          # все members
-uv run --package catalog pytest -v     # только catalog
+# Тесты — запускаются per-service (см. CLAUDE.md о pytest)
+cd services/catalog && uv run pytest -v   # один сервис
+bin/test-all.sh                            # все сервисы (отдельные процессы)
 ```
 
 ## Профили docker compose
