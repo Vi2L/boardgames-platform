@@ -6,6 +6,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Debug/testing web portal for parsers from `/Users/vitaliy/Projects/parsers`. Provides real-time HTTP inspection, parse step visualization, and database browsing.
 
+Также — UI поверх `boardgames-catalog`: вкладка «Каталог» показывает games
+и предлагает ручной матчинг unmatched-оффер'ов. См. секцию «Интеграция с
+boardgames-catalog».
+
+## Соседи (multi-repo стек)
+
+`parsers_web_test` — один из четырёх репозиториев. Полная карта стека:
+[`~/Projects/boardgames-infra/README.md`](../boardgames-infra/README.md).
+
+| Сервис | Роль | URL в dev | ENV для подключения |
+|---|---|---|---|
+| `~/Projects/parsers` | парсинг цен | `http://localhost:8001` | `PARSERS_API_URL` |
+| `~/Projects/boardgames-catalog` | каталог + матчинг | `http://localhost:8002` | `CATALOG_API_URL`, `CATALOG_API_KEY` |
+| `~/Projects/boardgames-infra` | docker-compose, Postgres | — | — |
+
 ## Commands
 
 ### Backend
@@ -97,5 +112,31 @@ parsers_web_test/
 ## Dependencies
 
 - Parsers package: `file:///Users/vitaliy/Projects/parsers` (local editable)
-- Backend: FastAPI, uvicorn, pydantic v2, aiosqlite, python-dotenv
+- Backend: FastAPI, uvicorn, pydantic v2, aiosqlite, python-dotenv, httpx
 - Frontend: React 18, Vite 5, Tailwind CSS v3, TanStack Query v5, Zustand v4, Recharts v2
+
+## Интеграция с boardgames-catalog
+
+Подключение через `app/catalog_client.py` (по образу `app/parsers_client.py`)
+и проксирующий роутер `app/api/catalog.py` под префиксом `/api/catalog/*`.
+
+Файлы:
+- `app/catalog_client.py` — `CatalogClient`: тонкая обёртка над httpx, методы
+  `list_games`, `get_game`, `matching_queue`, `link_offer`, `reject_offer`.
+  Поддержка `X-API-Key`.
+- `app/api/catalog.py` — proxy-роутер: фронт ходит на свой backend, не
+  cross-origin. Маршруты: `/api/catalog/health`, `/games`, `/games/{id}`,
+  `/matching/queue`, `/matching/{id}/link`, `/matching/{id}/reject`.
+- `app/deps.py` — singleton `CatalogClient`, env: `CATALOG_API_URL` (default
+  `http://localhost:8002`), `CATALOG_API_KEY` (для prod auth).
+- `frontend/src/lib/catalog.ts` — TS-клиент к `/api/catalog/*`.
+- `frontend/src/pages/CatalogPage.tsx` — две вкладки:
+  - **Каталог**: поиск с pg_trgm fuzzy, таблица games с source-бейджами
+    (manual/bgg/tesera).
+  - **Очередь матчинга**: unmatched-оффер'ы с inline-picker'ом для ручной
+    связки с Game.
+
+Контракт API каталога — **single source of truth**:
+[`~/Projects/boardgames-catalog/CLAUDE.md`](../boardgames-catalog/CLAUDE.md)
+секция «Контракты с соседями». При изменениях upstream'а синхронно
+поправить `app/catalog_client.py` и `frontend/src/lib/catalog.ts`.
