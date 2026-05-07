@@ -1,6 +1,8 @@
 # Board Game Price Parser
 
-Сервис сравнения цен на настольные игры в российских интернет-магазинах. Парсит 3 магазина, кеширует результаты в SQLite и отдаёт REST API для мобильного приложения или веб-фронтенда.
+Сервис сравнения цен на настольные игры в российских интернет-магазинах. Парсит 4 магазина, кеширует результаты в SQLite и отдаёт REST API для мобильного приложения или веб-фронтенда.
+
+В составе — встроенный dashboard на `/dashboard`: аналитика, мониторинг парсеров, обозреватель БД и Live Test для отладки.
 
 ## Магазины
 
@@ -82,6 +84,36 @@ curl "http://127.0.0.1:8001/stores"
 
 Полная документация API: [`docs/api_reference.md`](docs/api_reference.md)
 
+## Dashboard и аналитика
+
+Откройте `http://127.0.0.1:8001/dashboard` в браузере. Шесть табов:
+
+| Таб | Что внутри |
+|-----|------------|
+| **Обзор** | KPI (запросы / cache hit rate / avg latency / ошибки), графики timeline и cache rate, таблица здоровья парсеров |
+| **Парсеры** | Search vs Enrich latency breakdown (stacked bar), HTTP-counter, heatmap покрытия полей, топ ключей в `raw_json`, последний товар каждого парсера, snapshots raw HTTP-ответов |
+| **Запросы** | p50/p95/p99 latency, pie chart распределения по магазинам, гистограмма latency, сортируемая таблица топ-запросов |
+| **Ошибки** | Последние 50 ошибок парсеров |
+| **База данных** | Размер БД, инвентарь, обозреватель товаров с поиском/фильтрами/пагинацией, история цен в модалке |
+| **Live Test** | Запустить парсеры мимо кеша, посмотреть что и в каком виде они отдают |
+
+Все аналитические данные доступны и через REST — посмотрите endpoints ниже.
+
+### Аналитические endpoints
+
+- `GET /api/stats` — сводный KPI
+- `GET /api/stats/top-queries?hours=&limit=` — популярные запросы
+- `GET /api/stats/latency?hours=` — p50/p95/p99 latency
+- `GET /api/stats/timeline?bucket=hour|day&hours=` — распределение по времени
+- `GET /api/stats/store-distribution?hours=` — нагрузка по магазинам
+- `GET /api/stats/parser-breakdown` — search vs enrich
+- `GET /api/stats/field-coverage` — Data Quality (% непустых полей)
+- `GET /api/db/meta` — размер БД, counts
+- `GET /api/db/products?store=&q=&sort=&limit=&offset=` — обозреватель товаров
+- `GET /api/db/product/{id}` — товар + история цен
+- `GET /api/debug/parse?q=&stores=&limit=` — Live Test (без кеша, без записи в БД)
+- `GET /api/debug/snapshots` — raw HTTP-ответы парсеров (требует `ENABLE_RAW_SNAPSHOTS=1`)
+
 ## Переменные окружения
 
 Скопировать `.env.example` → `.env`:
@@ -91,6 +123,7 @@ curl "http://127.0.0.1:8001/stores"
 | `DB_PATH` | `data/prices.sqlite` | Путь к SQLite-файлу |
 | `CACHE_TTL_HOURS` | `4` | TTL кеша в часах |
 | `PROXY` | — | SOCKS5/HTTP-прокси |
+| `ENABLE_RAW_SNAPSHOTS` | — | `1` → каждый HTTP-ответ парсера сохраняется в `parser_snapshot` для отладки. По умолчанию выключено. |
 
 ## Тесты
 
@@ -98,26 +131,38 @@ curl "http://127.0.0.1:8001/stores"
 .venv/bin/pytest tests/ -v
 ```
 
-23 теста без сети: юнит-тесты HTML-парсеров на статичном HTML, тесты `_enrich` через fake HTTP-клиент, тесты `PriceService` через mock-парсер.
+70 тестов без сети: юнит-тесты HTML-парсеров на статичном HTML, тесты `_enrich` через fake HTTP-клиент, тесты `PriceService` через mock-парсер, тесты аналитики БД (percentiles, timelines), database explorer, field coverage, миграции `parser_log` и snapshot recorder'а, инварианты Live Test.
 
 ## Архитектура
 
 ```
-FastAPI /search /history /stores
+FastAPI /search /history /stores /dashboard /api/stats/* /api/db/* /api/debug/*
     ↓
 PriceService  — TTL-кеш per-store, asyncio.gather, graceful degradation
-    ├─ PriceDatabase (aiosqlite) — stores / products / price_observations
-    └─ StoreParser (ABC)
+    ├─ PriceDatabase (aiosqlite)
+    │     ├─ stores / products / price_observations  — основные данные
+    │     ├─ request_log / parser_log                 — мониторинг
+    │     └─ parser_snapshot                          — raw HTTP (при ENABLE_RAW_SNAPSHOTS=1)
+    └─ StoreParser (ABC) + ParserMetrics + SnapshotRecorder
            ├─ HobbyGamesParser   — JSON-LD ItemList
            ├─ LavkaIgrParser     — HTML + og:meta
            ├─ GagaParser         — HTML cp1251 + card-features
            └─ CrowdGamesParser   — каталог издателя, локальный поиск
 ```
 
-Каждый парсер: (1) страница поиска → базовые поля, (2) страница товара → обогащение (`players`, `age_min`, `playtime`, `rules_url`, `image_url_hd`, `gallery`, …).
+Каждый парсер: (1) страница поиска → базовые поля, (2) страница товара → обогащение (`players`, `age_min`, `playtime`, `rules_url`, `image_url_hd`, `gallery`, …). Search и enrich времена логируются раздельно — видно на /dashboard в табе «Парсеры».
 
 ## Добавление нового парсера
 
-1. Создать `parsers/stores/<slug>.py`, унаследоваться от `StoreParser`
-2. Реализовать `async def search(query, limit) -> list[ParsedProduct]`
-3. Добавить в `parsers/stores/__init__.py` и в `api.py` → `lifespan()`
+См. полный контракт в [`CLAUDE.md`](CLAUDE.md). Краткая шпаргалка:
+
+1. Создать `parsers/stores/<slug>.py`, унаследоваться от `StoreParser`.
+2. **Вызвать `super().__init__()`** в `__init__` — это даёт `last_metrics`, `_http_counter`, `_db`.
+3. Реализовать `async def search(self, query, limit) -> list[ParsedProduct]`. В реализации:
+   - Сбросить `self._http_counter = 0`, `self.last_metrics = None`.
+   - Передать в httpx event hooks `recorder.merged_hooks({"request": [self._count_request]})` где `recorder = self._make_recorder(query)`.
+   - Замерить `time.monotonic()` вокруг search-запроса → `search_ms`, вокруг `gather(*enrich)` → `enrich_ms`.
+   - Установить `self.last_metrics = ParserMetrics(...)` в конце.
+4. Импортировать в `parsers/stores/__init__.py` и добавить в `parsers` список в `parsers/api.py:lifespan()` — там же магазин зарегистрируется в БД и парсеру инжектируется `_db`.
+
+После этого парсер автоматически появится во всех аналитических виджетах dashboard'а, в Live Test и (при `ENABLE_RAW_SNAPSHOTS=1`) в snapshot-рекордере.

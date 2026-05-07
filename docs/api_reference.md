@@ -1,6 +1,6 @@
 # API Reference — Board Game Price Parser
 
-Сервис сравнения цен на настольные игры. Парсит 3 российских интернет-магазина (Лавка Игр, GaGa.ru, HobbyGames), кеширует результаты в SQLite и отдаёт единый JSON API.
+Сервис сравнения цен на настольные игры. Парсит 4 российских интернет-магазина (Лавка Игр, GaGa.ru, HobbyGames, Crowd Games), кеширует результаты в SQLite и отдаёт единый JSON API + HTML-dashboard на `/dashboard`.
 
 ## Запуск и базовый URL
 
@@ -572,3 +572,141 @@ if (product.rules_url) {
 // Все правила из extra (у Лавки — объекты {url, name}, у GaGa — строки)
 const allRules = product.extra?.rules ?? [];
 ```
+
+---
+
+## Dashboard и аналитика
+
+### `GET /dashboard`
+
+HTML-страница с интерактивным dashboard'ом (vanilla JS + Chart.js). Шесть табов:
+
+| Таб | Содержимое |
+|---|---|
+| Обзор | KPI-карточки (запросы / cache hit rate / latency / ошибки), графики timeline и cache rate, таблица здоровья парсеров |
+| Парсеры | Search vs Enrich latency breakdown, HTTP-counter, heatmap покрытия полей, топ ключей в `raw_json`, последний товар каждого парсера, snapshots сырых HTTP-ответов |
+| Запросы | Latency percentiles (p50/p95/p99), pie chart нагрузки, гистограмма latency, сортируемая таблица топ-запросов |
+| Ошибки | Последние 50 ошибок парсеров |
+| База данных | Метаданные БД, инвентарь, обозреватель товаров с поиском/фильтрами/пагинацией, история цен |
+| Live Test | Запуск парсеров мимо кеша с просмотром сырого результата каждого |
+
+### Stats API (`/api/stats/*`)
+
+#### `GET /api/stats?hours=24`
+Сводный KPI: `total_requests`, `cache_hits`, `network_hits`, `partial_hits`, `cache_hit_rate`, `total_errors`, `avg_response_ms`, `max_response_ms`.
+
+#### `GET /api/stats/stores`
+Здоровье парсеров за 24ч: per-store `total_calls_24h`, `success_count_24h`, `success_rate_24h`, `avg_response_ms`, `last_seen`, `last_success`, `last_error`.
+
+#### `GET /api/stats/errors?limit=20`
+Последние ошибки парсеров: `[{store_slug, error, duration_ms, ts}]`.
+
+#### `GET /api/stats/top-queries?hours=168&limit=20`
+Топ запросов с метриками: `[{query, count, cache_hits, cache_hit_rate, avg_ms, errors, last_seen}]`.
+
+#### `GET /api/stats/latency?hours=24`
+Перцентили latency `/search`: `{count, p50, p95, p99, max, avg}`.
+
+#### `GET /api/stats/timeline?hours=24&bucket=hour`
+Распределение запросов по времени с разбивкой по source. `bucket`: `hour` или `day`.
+Пример: `[{ts, total, cache, network, partial, errors, avg_ms}]`.
+
+#### `GET /api/stats/cache-timeline?hours=168&bucket=hour`
+Динамика cache hit rate: `[{ts, total, cache_hit_rate}]`.
+
+#### `GET /api/stats/store-distribution?hours=24`
+Распределение нагрузки по магазинам: `[{store_slug, calls, successes, success_rate, avg_results, avg_ms, share_pct}]`.
+
+#### `GET /api/stats/empty-responses?hours=24&limit=50`
+Успешные вызовы с 0 товаров — потенциально «тихие» сбои парсера.
+
+#### `GET /api/stats/latency-histogram?hours=24`
+Гистограмма latency с фиксированными бинами (`<100мс`, `100-300мс`, `300мс-1с`, `1-3с`, `>3с`).
+
+#### `GET /api/stats/field-coverage`
+Data Quality — % товаров с заполненными полями per-store:
+```json
+[{"store_slug": "hobbygames", "total": 412,
+  "coverage": {"description": 92.0, "image_url": 100.0, "image_url_hd": 95.4,
+               "players": 0, "age_min": 0, "playtime": 0, "rules_url": 78.5}}]
+```
+
+#### `GET /api/stats/raw-keys?top_n=15`
+Топ ключей в `price_observations.raw_json` per-store — фактический контракт каждого парсера.
+
+#### `GET /api/stats/parser-breakdown?hours=24`
+Search vs Enrich latency per-store: `[{store_slug, calls, successes, avg_search_ms, avg_enrich_ms, avg_total_ms, avg_http_requests}]`.
+
+#### `GET /api/stats/parser-breakdown-timeline?hours=24&bucket=hour`
+То же самое во времени: `{store_slug: [{ts, calls, search_ms, enrich_ms}]}`.
+
+### Database Explorer (`/api/db/*`)
+
+#### `GET /api/db/meta`
+```json
+{
+  "db_size_bytes": 4823040, "db_size_mb": 4.6,
+  "tables": {"stores": 4, "products": 1234, "price_observations": 8901,
+             "request_log": 156, "parser_log": 624},
+  "oldest_observation": "2026-04-15T08:23:11+00:00",
+  "newest_observation": "2026-05-07T11:45:32+00:00"
+}
+```
+
+#### `GET /api/db/stores-inventory`
+Per-store: `[{store_slug, products_count, observations_count, oldest_obs, newest_obs, min_price_rub, max_price_rub, mean_price_rub}]`.
+
+#### `GET /api/db/products?store=&q=&sort=&limit=50&offset=0`
+Список товаров с пагинацией. `sort`: `newest|oldest|price_asc|price_desc|title`.
+Возвращает `{items: [...], total, limit, offset}`.
+
+#### `GET /api/db/product/{id}`
+Полная карточка товара + последние 50 точек истории цен.
+
+#### `GET /api/db/price-distribution?store=`
+Перцентили цены (рубли): `{count, min, p25, p50, p75, max}`.
+
+### Debug API (`/api/debug/*`)
+
+> ⚠ Эти endpoints без auth. В production защищать через reverse proxy или удалять из роутинга.
+
+#### `GET /api/debug/features`
+Какие диагностические фичи включены: `{raw_snapshots: bool}`.
+
+#### `GET /api/debug/parse?q=Каркассон&stores=hobbygames,gaga&limit=5`
+**Live Test** — запускает парсеры мимо кеша и **не сохраняет** результаты в БД. Возвращает per-store результат с метриками:
+
+```json
+{
+  "query": "Каркассон",
+  "results": {
+    "hobbygames": {
+      "count": 5, "duration_ms": 10813, "error": null,
+      "metrics": {"search_ms": 7320, "enrich_ms": 3465, "http_requests": 3, "result_after_enrich": 5},
+      "products": [{
+        "store_slug": "hobbygames", "external_id": "...", "title": "Каркассон",
+        "price": 199000, "price_rub": 1990.0,
+        "url": "...", "image_url": "...", "image_url_hd": "...",
+        "description": "...", "players": null, "age_min": null,
+        "playtime": null, "rules_url": "...",
+        "raw": {"availability": "InStock", "gallery": [...], "rules": [...]}
+      }]
+    },
+    "gaga": {"count": 5, "duration_ms": 3524, ... }
+  }
+}
+```
+
+Live Test пишет в `parser_log` с `is_test=1` — все аналитические запросы это игнорируют, чтобы UI-эксперименты не искажали production-метрики.
+
+#### `GET /api/debug/snapshots?store=&query=&hours=72&limit=50`
+Список raw HTTP-snapshot'ов парсеров (требует `ENABLE_RAW_SNAPSHOTS=1` при старте сервера). Без body.
+
+#### `GET /api/debug/snapshots/{id}`
+Полный snapshot с декодированным `body_text` (cp1251 GaGa автоматически в UTF-8).
+
+#### `GET /api/debug/snapshots/{id}/raw`
+Сырое тело как `text/plain`, для скачивания и просмотра в браузере.
+
+#### `DELETE /api/debug/snapshots/{id}`
+Удалить snapshot.
