@@ -22,6 +22,7 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from catalog.auth import require_scope
 from catalog.db import get_session
 from catalog.matching.matcher import (
     AUTO_MATCH_THRESHOLD,
@@ -42,7 +43,11 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-@router.post("/offers", response_model=IngestResult)
+@router.post(
+    "/offers",
+    response_model=IngestResult,
+    dependencies=[Depends(require_scope("ingest"))],
+)
 async def ingest_offers(
     payload: IngestRequest, session: AsyncSession = Depends(get_session)
 ) -> IngestResult:

@@ -44,6 +44,23 @@ python3.12 -m venv .venv
 | `DATABASE_URL` | `postgresql+asyncpg://catalog:catalog@localhost:5433/catalog` | async DSN |
 | `LOG_LEVEL` | `INFO` | |
 
+## API ключи (опционально)
+
+```bash
+# Включить требование ключа
+echo 'REQUIRE_AUTH=1' >> .env
+
+# Сгенерировать ключ (показывается один раз)
+.venv/bin/python -m catalog.cli create-key --owner parsers --scopes ingest
+
+# Просмотр / отзыв
+.venv/bin/python -m catalog.cli list-keys
+.venv/bin/python -m catalog.cli revoke 1
+```
+
+Scope'ы: `ingest` (POST /ingest/*), `read` (GET /games, /matching/queue),
+`admin` (POST/PATCH /games, /matching/{id}/link|reject, /import/{bgg,tesera}).
+
 ## Alembic
 
 ```bash

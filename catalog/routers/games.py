@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from catalog.auth import require_scope
 from catalog.db import get_session
 from catalog.models import Game, GameAlias
 from catalog.schemas import (
@@ -29,7 +30,9 @@ from catalog.schemas import (
 router = APIRouter(prefix="/games", tags=["games"])
 
 
-@router.get("", response_model=GameListOut)
+@router.get(
+    "", response_model=GameListOut, dependencies=[Depends(require_scope("read"))]
+)
 async def list_games(
     q: str | None = Query(None, description="fuzzy-search по title (pg_trgm)"),
     designer: str | None = Query(None),
@@ -70,7 +73,11 @@ async def list_games(
     )
 
 
-@router.get("/{game_id}", response_model=GameDetailOut)
+@router.get(
+    "/{game_id}",
+    response_model=GameDetailOut,
+    dependencies=[Depends(require_scope("read"))],
+)
 async def get_game(
     game_id: int, session: AsyncSession = Depends(get_session)
 ) -> GameDetailOut:
@@ -84,7 +91,12 @@ async def get_game(
     )
 
 
-@router.post("", response_model=GameOut, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=GameOut,
+    status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("admin"))],
+)
 async def create_game(
     payload: GameCreate, session: AsyncSession = Depends(get_session)
 ) -> GameOut:
@@ -100,7 +112,11 @@ async def create_game(
     return GameOut.model_validate(game)
 
 
-@router.patch("/{game_id}", response_model=GameOut)
+@router.patch(
+    "/{game_id}",
+    response_model=GameOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
 async def patch_game(
     game_id: int,
     payload: GamePatch,
@@ -121,6 +137,7 @@ async def patch_game(
     "/{game_id}/aliases",
     response_model=GameAliasOut,
     status_code=status.HTTP_201_CREATED,
+    dependencies=[Depends(require_scope("admin"))],
 )
 async def add_alias(
     game_id: int,

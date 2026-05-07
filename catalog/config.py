@@ -23,6 +23,11 @@ class Settings(BaseSettings):
     service_name: str = "boardgames-catalog"
     log_level: str = "INFO"
 
+    # X-API-Key auth. По умолчанию выключена для удобства dev/CI; в prod
+    # включается через REQUIRE_AUTH=1. Когда выключена, scope-зависимости
+    # пропускают всех (см. catalog/auth.py).
+    require_auth: bool = False
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

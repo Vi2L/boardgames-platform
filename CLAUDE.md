@@ -83,6 +83,31 @@ X-API-Key: <ingest scope>
 
 Все GET-эндпоинты `/games`, `/games/{id}/offers`, `/games/{id}/price-history` — за `X-API-Key` со scope `read`.
 
+## Auth (этап 7)
+
+X-API-Key с разделением scope'ов. По умолчанию **выключена** (`REQUIRE_AUTH=False`),
+чтобы не ломать dev/CI. В prod включается через `REQUIRE_AUTH=1`.
+
+Scope'ы:
+- `ingest` — только `POST /ingest/*` (для `parsers`)
+- `read` — все `GET /games`, `GET /matching/queue`, `GET /import/jobs/*`
+  (для `parsers_web_test` и других read-only клиентов)
+- `admin` — суперскоуп: всё, что выше + `POST/PATCH /games`, `POST /matching/*/link|reject`,
+  `POST /import/{bgg,tesera}` (для оператора)
+
+`/health` и `/health/db` — **без auth** (нужно для compose-healthcheck).
+
+Управление ключами через CLI:
+
+```bash
+.venv/bin/python -m catalog.cli create-key --owner parsers --scopes ingest
+.venv/bin/python -m catalog.cli list-keys
+.venv/bin/python -m catalog.cli revoke 5
+```
+
+В БД хранится только `sha256(plaintext)`. Plaintext показывается один раз при
+создании — потом восстановить нельзя, нужно сгенерировать новый.
+
 ## Подводные камни
 
 - **Цены в копейках** (как в `parsers`). Конвертация в рубли — на стороне клиента.

@@ -19,6 +19,8 @@ from typing import Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
+
+from catalog.auth import require_scope
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -245,7 +247,11 @@ async def _run_tesera_import_job(
         await session.commit()
 
 
-@router.post("/bgg", response_model=ImportJobOut)
+@router.post(
+    "/bgg",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
 async def import_bgg(
     payload: BggImportRequest,
     wait: bool = Query(False, description="дождаться завершения (для тестов)"),
@@ -271,7 +277,11 @@ async def import_bgg(
     return ImportJobOut.model_validate(job)
 
 
-@router.post("/tesera", response_model=ImportJobOut)
+@router.post(
+    "/tesera",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
 async def import_tesera(
     payload: TeseraImportRequest,
     wait: bool = Query(False, description="дождаться завершения (для тестов)"),
@@ -301,7 +311,11 @@ async def import_tesera(
     return ImportJobOut.model_validate(job)
 
 
-@router.get("/jobs/{job_id}", response_model=ImportJobOut)
+@router.get(
+    "/jobs/{job_id}",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("read"))],
+)
 async def get_job(
     job_id: int, session: AsyncSession = Depends(get_session)
 ) -> ImportJobOut:

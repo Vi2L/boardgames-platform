@@ -15,6 +15,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from catalog.auth import require_scope
 from catalog.db import get_session
 from catalog.models import Game, GameAlias, Offer
 from catalog.schemas import MatchingQueueOut, MatchLinkRequest, OfferOut
@@ -22,7 +23,11 @@ from catalog.schemas import MatchingQueueOut, MatchLinkRequest, OfferOut
 router = APIRouter(prefix="/matching", tags=["matching"])
 
 
-@router.get("/queue", response_model=MatchingQueueOut)
+@router.get(
+    "/queue",
+    response_model=MatchingQueueOut,
+    dependencies=[Depends(require_scope("read"))],
+)
 async def queue(
     store: str | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
@@ -53,7 +58,11 @@ async def queue(
     )
 
 
-@router.post("/{offer_id}/link", response_model=OfferOut)
+@router.post(
+    "/{offer_id}/link",
+    response_model=OfferOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
 async def link(
     offer_id: int,
     payload: MatchLinkRequest,
@@ -86,7 +95,11 @@ async def link(
     return OfferOut.model_validate(offer)
 
 
-@router.post("/{offer_id}/reject", response_model=OfferOut)
+@router.post(
+    "/{offer_id}/reject",
+    response_model=OfferOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
 async def reject(
     offer_id: int, session: AsyncSession = Depends(get_session)
 ) -> OfferOut:
