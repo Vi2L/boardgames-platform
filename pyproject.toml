@@ -55,13 +55,14 @@ extend-exclude = [
 select = ["F", "E", "W", "I"]
 
 # === Тесты — корневой pytest ===
-# Позволяет запустить `uv run pytest` из корня и прогнать все members разом.
-# Per-service pyproject.toml имеют свои `testpaths` — они работают
-# независимо при `uv run --package <name> pytest`.
+# Без `testpaths` — каждый сервис запускает свои тесты явно через
+# `uv run --package <name> pytest` (per-service pyproject задаёт свой
+# testpaths). Корневой запуск с явным путём:
+#   uv run pytest services/catalog/tests
+#
+# `importmode = "importlib"` обязателен, чтобы одноимённые модули
+# (`tests.conftest` в каждом сервисе) не конфликтовали при сборе из
+# нескольких папок. См. https://docs.pytest.org/en/stable/explanation/goodpractices.html#tests-as-part-of-application-code
 [tool.pytest.ini_options]
-testpaths = [
-    "services/catalog/tests",
-    "services/parsers/tests",
-    "services/web-test/tests",
-]
 asyncio_mode = "strict"
+addopts = "--import-mode=importlib"
