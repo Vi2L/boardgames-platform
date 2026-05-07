@@ -25,6 +25,62 @@ router = APIRouter(prefix="/matching", tags=["matching"])
 
 
 @router.get(
+    "/stats",
+    dependencies=[Depends(require_scope("read"))],
+)
+async def stats(session: AsyncSession = Depends(get_session)) -> dict:
+    """Сводка очереди матчинга: общий total, breakdown по магазинам и
+    score-buckets.
+
+    Bucket'ы зеркалят пороги матчера:
+      - good     — score >= 0.6 (auto-threshold; почти match, оператор
+                   просто подтверждает);
+      - candidate — 0.3 <= score < 0.6 (показывается в очереди как
+                   «есть кандидат, надо проверить»);
+      - cold     — score < 0.3 OR NULL (нет кандидатов вообще).
+    """
+    from sqlalchemy import case
+    bucket = case(
+        (Offer.match_score >= 0.6, "good"),
+        (Offer.match_score >= 0.3, "candidate"),
+        else_="cold",
+    ).label("bucket")
+
+    by_store = (await session.execute(
+        select(
+            Offer.store_slug,
+            func.count().label("total"),
+            func.avg(Offer.match_score).label("avg_score"),
+        )
+        .where(Offer.match_status == "unmatched")
+        .group_by(Offer.store_slug)
+        .order_by(func.count().desc())
+    )).all()
+
+    by_bucket = (await session.execute(
+        select(bucket, func.count().label("total"))
+        .where(Offer.match_status == "unmatched")
+        .group_by(bucket)
+    )).all()
+
+    total = sum(r.total for r in by_store)
+
+    return {
+        "total_unmatched": total,
+        "by_store": [
+            {
+                "store_slug": r.store_slug,
+                "total": r.total,
+                "avg_score": float(r.avg_score) if r.avg_score is not None else None,
+            }
+            for r in by_store
+        ],
+        "by_bucket": {r.bucket: r.total for r in by_bucket},
+        "thresholds": {"auto": 0.6, "candidate": 0.3},
+    }
+
+
+@router.get(
     "/candidates",
     dependencies=[Depends(require_scope("read"))],
 )

@@ -46,6 +46,16 @@ async def get_game(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.get("/matching/stats")
+async def matching_stats(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.matching_stats()
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.get("/matching/candidates")
 async def match_candidates(
     title: str = Query(..., min_length=1),

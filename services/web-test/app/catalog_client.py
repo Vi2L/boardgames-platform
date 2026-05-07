@@ -60,6 +60,11 @@ class CatalogClient:
         resp = await self._client.get(f"/games/{game_id}")
         return _ok_or_raise(resp)
 
+    async def matching_stats(self) -> dict[str, Any]:
+        """GET /matching/stats → breakdown unmatched по магазинам и score-buckets."""
+        resp = await self._client.get("/matching/stats")
+        return _ok_or_raise(resp)
+
     async def match_candidates(
         self, title: str, limit: int = 10,
     ) -> dict[str, Any]:

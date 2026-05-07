@@ -149,6 +149,16 @@ export type MatchCandidatesResponse = {
   items: MatchCandidate[]
 }
 
+export type MatchingStats = {
+  total_unmatched: number
+  by_store: Array<{ store_slug: string; total: number; avg_score: number | null }>
+  by_bucket: { good?: number; candidate?: number; cold?: number }
+  thresholds: { auto: number; candidate: number }
+}
+
+export const fetchMatchingStats = () =>
+  fetch(`${BASE}/matching/stats`).then(r => json<MatchingStats>(r))
+
 export const fetchMatchCandidates = (title: string, limit = 10) => {
   const params = new URLSearchParams({ title, limit: String(limit) })
   return fetch(`${BASE}/matching/candidates?${params}`)

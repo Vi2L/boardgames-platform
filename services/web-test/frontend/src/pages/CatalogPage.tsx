@@ -25,6 +25,7 @@ import {
 import { GameDetailDrawer } from '../components/catalog/GameDetailDrawer'
 import { ImportWizard } from '../components/catalog/ImportWizard'
 import { GameEditor } from '../components/catalog/GameEditor'
+import { MatchingStatsHeader } from '../components/catalog/MatchingStatsHeader'
 import { Download, Plus } from 'lucide-react'
 
 type Tab = 'catalog' | 'matching'
@@ -193,12 +194,14 @@ function MatchingSection() {
     onSuccess: () => {
       toast.success('Оффер отклонён')
       queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-stats'] })
     },
     onError: (e) => toast.error(`Не удалось отклонить: ${e}`),
   })
 
   return (
     <div className="space-y-3">
+      <MatchingStatsHeader />
       <div className="text-xs text-gray-500">
         {queue.data
           ? `${queue.data.total} unmatched-оффер'ов в очереди (сортировка по match_score)`
