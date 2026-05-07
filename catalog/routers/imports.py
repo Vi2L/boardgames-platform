@@ -30,8 +30,13 @@ from catalog.importers.bgg import (
     parse_bgg_xml,
     slug_from_title,
 )
+from catalog.importers.tesera import (
+    TeseraGame,
+    fetch_tesera_thing,
+    parse_tesera_json,
+)
 from catalog.models import Game, GameAlias, ImportJob
-from catalog.schemas import BggImportRequest, ImportJobOut
+from catalog.schemas import BggImportRequest, ImportJobOut, TeseraImportRequest
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/import", tags=["import"])
@@ -141,6 +146,105 @@ async def _run_bgg_import_job(
         await session.commit()
 
 
+async def _upsert_game_from_tesera(
+    session: AsyncSession, tg: TeseraGame
+) -> int:
+    """Идемпотентный upsert по tesera_id.
+
+    Если игра уже существует с таким же tesera_id — обновляем; иначе создаём.
+    Если игра уже была импортирована из BGG (тот же объект, но без tesera_id) —
+    Tesera создаст дубль; merge между источниками — задача этапа 5+ (matcher).
+    """
+    # slug должен быть уникальным; используем alias Tesera + tesera_id как фоллбэк.
+    base_slug = tg.alias if tg.alias else f"tesera-{tg.tesera_id}"
+    # alias уже похож на slug, но защитимся от верхнего регистра.
+    slug = base_slug.lower().replace("_", "-")
+
+    stmt = pg_insert(Game.__table__).values(
+        slug=slug,
+        title=tg.title,
+        year=tg.year,
+        players_min=tg.players_min,
+        players_max=tg.players_max,
+        age_min=tg.age_min,
+        playtime_min=tg.playtime_min,
+        playtime_max=tg.playtime_max,
+        tesera_id=tg.tesera_id,
+        cover_url=tg.cover_url,
+        description=tg.description,
+        meta=tg.to_meta(),
+        source="tesera",
+        status="published",
+    ).on_conflict_do_update(
+        index_elements=["tesera_id"],
+        set_={
+            "title": tg.title,
+            "year": tg.year,
+            "players_min": tg.players_min,
+            "players_max": tg.players_max,
+            "age_min": tg.age_min,
+            "playtime_min": tg.playtime_min,
+            "playtime_max": tg.playtime_max,
+            "cover_url": tg.cover_url,
+            "description": tg.description,
+            "meta": tg.to_meta(),
+            "updated_at": _utcnow(),
+        },
+    ).returning(Game.id)
+    game_id = (await session.execute(stmt)).scalar_one()
+
+    for alias in tg.aliases:
+        await session.execute(
+            pg_insert(GameAlias.__table__)
+            .values(game_id=game_id, alias=alias, source="tesera")
+            .on_conflict_do_nothing(constraint="uq_alias_per_game")
+        )
+    return game_id
+
+
+async def _run_tesera_import_job(
+    job_id: int, items: list[str | int]
+) -> None:
+    """Background-таск для batched-импорта из Tesera."""
+    engine = get_engine()
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with SessionFactory() as session:
+        job = (await session.execute(select(ImportJob).where(ImportJob.id == job_id))).scalar_one()
+        job.status = "running"
+        job.started_at = _utcnow()
+        await session.commit()
+
+    imported: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for item in items:
+            try:
+                payload = await fetch_tesera_thing(item, client=client)
+                tg = parse_tesera_json(payload)
+                if tg is None:
+                    errors.append({"item": item, "error": "not found"})
+                    continue
+                async with SessionFactory() as session:
+                    gid = await _upsert_game_from_tesera(session, tg)
+                    await session.commit()
+                imported.append(
+                    {"item": item, "game_id": gid, "title": tg.title, "tesera_id": tg.tesera_id}
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("Tesera import failed for %s", item)
+                errors.append({"item": item, "error": str(exc)})
+
+    async with SessionFactory() as session:
+        job = (await session.execute(select(ImportJob).where(ImportJob.id == job_id))).scalar_one()
+        job.status = "failed" if errors and not imported else "done"
+        job.finished_at = _utcnow()
+        job.result = {"imported": imported, "errors": errors}
+        if errors and not imported:
+            job.error = errors[0]["error"]
+        await session.commit()
+
+
 @router.post("/bgg", response_model=ImportJobOut)
 async def import_bgg(
     payload: BggImportRequest,
@@ -163,6 +267,36 @@ async def import_bgg(
         # Fire-and-forget. Сама задача создаёт свою сессию — текущая dep-сессия
         # будет закрыта по завершении HTTP-запроса.
         asyncio.create_task(_run_bgg_import_job(job.id, ids))
+
+    return ImportJobOut.model_validate(job)
+
+
+@router.post("/tesera", response_model=ImportJobOut)
+async def import_tesera(
+    payload: TeseraImportRequest,
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    items: list[str | int] = list(payload.items or [])
+    if payload.alias:
+        items.append(payload.alias)
+    if payload.tesera_id:
+        items.append(payload.tesera_id)
+    if not items:
+        raise HTTPException(
+            status_code=400, detail="alias, tesera_id или items обязателен"
+        )
+
+    job = ImportJob(type="tesera", payload={"items": items}, status="pending")
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await _run_tesera_import_job(job.id, items)
+        await session.refresh(job)
+    else:
+        asyncio.create_task(_run_tesera_import_job(job.id, items))
 
     return ImportJobOut.model_validate(job)
 

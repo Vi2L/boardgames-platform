@@ -1,0 +1,20 @@
+{
+  "game": {
+    "id": 822,
+    "alias": "carcassonne",
+    "title": "Carcassonne",
+    "title2": "Каркассон",
+    "year": 2000,
+    "descriptionShort": "Классическая игра-укладка плиток.",
+    "photoUrl": "https://tesera.ru/images/items/carcassonne.jpg",
+    "playersMin": 2,
+    "playersMax": 5,
+    "playersMinRecommend": 2,
+    "playersMaxRecommend": 5,
+    "playtimeMin": 30,
+    "playtimeMax": 45,
+    "playersAgeMin": 7,
+    "ratingUser": 8.1,
+    "ratingTesera": 7.9
+  }
+}

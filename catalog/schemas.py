@@ -111,6 +111,13 @@ class BggImportRequest(BaseModel):
     ids: list[int] | None = None
 
 
+class TeseraImportRequest(BaseModel):
+    """Tesera принимает alias (slug) или числовой id. Можно батчем."""
+    alias: str | None = None
+    tesera_id: int | None = None
+    items: list[str | int] | None = None
+
+
 class ImportJobOut(_ORMBase):
     id: int
     type: str
