@@ -124,6 +124,20 @@ curl "http://127.0.0.1:8001/stores"
 | `CACHE_TTL_HOURS` | `4` | TTL кеша в часах |
 | `PROXY` | — | SOCKS5/HTTP-прокси |
 | `ENABLE_RAW_SNAPSHOTS` | — | `1` → каждый HTTP-ответ парсера сохраняется в `parser_snapshot` для отладки. По умолчанию выключено. |
+| `CATALOG_INGEST_URL` | — | URL `POST /ingest/offers` сервиса [`boardgames-catalog`](https://github.com/Vi2L/boardgames-catalog). Если задан — после успешного парсинга offers fire-and-forget пушатся в каталог; ошибки не влияют на `/search`. |
+| `CATALOG_API_KEY` | — | API-ключ со scope `ingest` (если catalog запущен с `REQUIRE_AUTH=1`). |
+
+## Связь с другими сервисами
+
+`parsers` — один из четырёх репозиториев в стеке настольных игр:
+
+```
+parsers (этот) ──offers──▶ boardgames-catalog ◀──read── parsers_web_test
+                                  │
+                                  └── будущие апп: партии, скидки, мобайл
+```
+
+Карта стека и порядок запуска: [`boardgames-infra/README.md`](https://github.com/Vi2L/boardgames-infra/blob/main/README.md).
 
 ## Тесты
 

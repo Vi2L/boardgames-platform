@@ -57,6 +57,37 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
 | `CACHE_TTL_HOURS` | `4` | Время жизни кеша в часах |
 | `PROXY` | — | SOCKS5/HTTP-прокси для HTTP-парсеров |
 | `ENABLE_RAW_SNAPSHOTS` | — | `1` → каждый HTTP-ответ парсера пишется в `parser_snapshot` (для отладки через /dashboard). По умолчанию выключено, нулевой оверхед. |
+| `CATALOG_INGEST_URL` | — | URL webhook'а `boardgames-catalog`. Если задан — после успешного парсинга батча offers пушатся туда (fire-and-forget). Не задан → publisher отключён, нулевой оверхед. См. секцию «Интеграция с boardgames-catalog». |
+| `CATALOG_API_KEY` | — | API-ключ для `boardgames-catalog` со scope `ingest`. Используется publisher'ом, если `boardgames-catalog` запущен с `REQUIRE_AUTH=1`. |
+
+## Соседи (multi-repo стек)
+
+`parsers` — один из четырёх репозиториев. Полная карта стека:
+[`~/Projects/boardgames-infra/README.md`](../boardgames-infra/README.md).
+
+| Сервис | Роль | URL в dev |
+|---|---|---|
+| `~/Projects/boardgames-catalog` | канонический каталог + матчинг offers | `http://localhost:8002` |
+| `~/Projects/parsers_web_test` | дебаг-портал, UI ручного матчинга | `http://localhost:8000` (backend) / `5173` (frontend) |
+| `~/Projects/boardgames-infra` | docker-compose, Postgres | — |
+
+## Интеграция с boardgames-catalog
+
+`parsers/catalog_publisher.py` — opt-in side-channel: после успешного парсинга
+батча `PriceService` шлёт `POST /ingest/offers` на `CATALOG_INGEST_URL`.
+
+- **Fire-and-forget** через `asyncio.create_task` — ошибки не влияют на ответ
+  `/search` (см. `service.py` рядом с `_save_observations`).
+- **No-op без env**: если `CATALOG_INGEST_URL` не задан, publisher выключен,
+  нулевой оверхед.
+- **Single shared client**: `CatalogPublisher` держит один `httpx.AsyncClient`
+  на процесс — переиспользует TCP/TLS-соединения.
+- **Контракт webhook'а** — стабильный, **single source of truth**:
+  [`~/Projects/boardgames-catalog/CLAUDE.md`](../boardgames-catalog/CLAUDE.md)
+  секция «Контракты с соседями».
+- **При изменении формата** в `catalog_publisher.py` — синхронно править
+  `~/Projects/boardgames-catalog/catalog/routers/ingest.py` и общую схему в
+  `boardgames-catalog/catalog/schemas.py:IngestRequest`.
 
 ## Архитектура
 
