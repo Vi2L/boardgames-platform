@@ -176,6 +176,25 @@ export const rejectOffer = (offerId: number) =>
   fetch(`${BASE}/matching/${offerId}/reject`, { method: 'POST' })
     .then(r => json<CatalogOffer>(r))
 
+export const reassessOffer = (offerId: number) =>
+  fetch(`${BASE}/matching/${offerId}/reassess`, { method: 'POST' })
+    .then(r => json<CatalogOffer>(r))
+
+export type ReassessAllResult = {
+  scanned: number
+  promoted_to_auto: number
+  score_improved: number
+  unchanged: number
+}
+
+export const reassessAll = (params: { store?: string; max_score?: number } = {}) => {
+  const sp = new URLSearchParams()
+  if (params.store) sp.set('store', params.store)
+  if (params.max_score != null) sp.set('max_score', String(params.max_score))
+  return fetch(`${BASE}/matching/reassess-all?${sp}`, { method: 'POST' })
+    .then(r => json<ReassessAllResult>(r))
+}
+
 // ── Game merge ─────────────────────────────────────────────────────
 
 export type GameMergeResult = {

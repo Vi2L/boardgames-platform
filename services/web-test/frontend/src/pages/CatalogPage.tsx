@@ -17,6 +17,8 @@ import {
   fetchMatchingQueue,
   linkOffer,
   listCatalogGames,
+  reassessAll,
+  reassessOffer,
   rejectOffer,
   type CatalogGame,
   type CatalogOffer,
@@ -189,23 +191,60 @@ function MatchingSection() {
     queryFn: () => fetchMatchingQueue(undefined, 100, 0),
   })
 
+  const invalidateQueueAndStats = () => {
+    queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })
+    queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-stats'] })
+  }
+
   const reject = useMutation({
     mutationFn: rejectOffer,
-    onSuccess: () => {
-      toast.success('Оффер отклонён')
-      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })
-      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-stats'] })
-    },
+    onSuccess: () => { toast.success('Оффер отклонён'); invalidateQueueAndStats() },
     onError: (e) => toast.error(`Не удалось отклонить: ${e}`),
+  })
+
+  const reassess = useMutation({
+    mutationFn: reassessOffer,
+    onSuccess: (o) => {
+      const status = o.match_status === 'auto' ? 'auto-сматчен ✓' : 'остался unmatched'
+      toast.success(`#${o.id}: ${status} (score ${o.match_score?.toFixed(2) ?? '—'})`)
+      invalidateQueueAndStats()
+    },
+    onError: (e) => toast.error(`Reassess failed: ${e}`),
+  })
+
+  const reassessBatch = useMutation({
+    mutationFn: () => reassessAll(),
+    onSuccess: (r) => {
+      toast.success(
+        `Пересчитано ${r.scanned}: → auto ${r.promoted_to_auto}, ` +
+        `улучшено ${r.score_improved}, без изменений ${r.unchanged}`,
+      )
+      invalidateQueueAndStats()
+    },
+    onError: (e) => toast.error(`Batch reassess failed: ${e}`),
   })
 
   return (
     <div className="space-y-3">
       <MatchingStatsHeader />
-      <div className="text-xs text-gray-500">
-        {queue.data
-          ? `${queue.data.total} unmatched-оффер'ов в очереди (сортировка по match_score)`
-          : 'загрузка...'}
+      <div className="flex items-center justify-between">
+        <div className="text-xs text-gray-500">
+          {queue.data
+            ? `${queue.data.total} unmatched-оффер'ов в очереди (сортировка по match_score)`
+            : 'загрузка...'}
+        </div>
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm(
+              'Запустить batch-reassess для всех unmatched?\nЭто перепрогонит find_best_match по каждому offer и может «продвинуть» некоторые в auto.',
+            )) reassessBatch.mutate()
+          }}
+          disabled={reassessBatch.isPending}
+          className="px-3 py-1 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
+        >
+          {reassessBatch.isPending ? 'Пересчёт…' : 'Reassess всё'}
+        </button>
       </div>
       <div className="border border-gray-800 rounded overflow-hidden">
         <table className="w-full text-sm">
@@ -223,8 +262,9 @@ function MatchingSection() {
               <OfferRow
                 key={o.id}
                 o={o}
-                onLinked={() => queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })}
+                onLinked={invalidateQueueAndStats}
                 onReject={() => reject.mutate(o.id)}
+                onReassess={() => reassess.mutate(o.id)}
               />
             ))}
             {queue.data?.items.length === 0 && (
@@ -240,11 +280,12 @@ function MatchingSection() {
 }
 
 function OfferRow({
-  o, onLinked, onReject,
+  o, onLinked, onReject, onReassess,
 }: {
   o: CatalogOffer
   onLinked: () => void
   onReject: () => void
+  onReassess: () => void
 }) {
   const [linkOpen, setLinkOpen] = useState(false)
   return (
@@ -269,6 +310,14 @@ function OfferRow({
             className="px-2 py-1 text-xs bg-violet-900/50 text-violet-200 rounded hover:bg-violet-900"
           >
             Связать
+          </button>
+          <button
+            type="button"
+            onClick={onReassess}
+            title="Пересчитать score (после правки алиасов / импорта BGG)"
+            className="px-2 py-1 text-xs bg-amber-900/50 text-amber-200 rounded hover:bg-amber-900"
+          >
+            ↻
           </button>
           <button
             type="button"

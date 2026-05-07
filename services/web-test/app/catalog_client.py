@@ -60,6 +60,23 @@ class CatalogClient:
         resp = await self._client.get(f"/games/{game_id}")
         return _ok_or_raise(resp)
 
+    async def reassess_offer(self, offer_id: int) -> dict[str, Any]:
+        """POST /matching/{id}/reassess → пересчитать score для offer."""
+        resp = await self._client.post(f"/matching/{offer_id}/reassess")
+        return _ok_or_raise(resp)
+
+    async def reassess_all(
+        self, store: str | None = None, max_score: float | None = None,
+    ) -> dict[str, Any]:
+        """POST /matching/reassess-all → batch-пересчёт unmatched."""
+        params: dict[str, Any] = {}
+        if store:
+            params["store"] = store
+        if max_score is not None:
+            params["max_score"] = max_score
+        resp = await self._client.post("/matching/reassess-all", params=params)
+        return _ok_or_raise(resp)
+
     async def matching_stats(self) -> dict[str, Any]:
         """GET /matching/stats → breakdown unmatched по магазинам и score-buckets."""
         resp = await self._client.get("/matching/stats")

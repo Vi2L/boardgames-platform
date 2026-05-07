@@ -107,6 +107,28 @@ async def reject_offer(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.post("/matching/{offer_id}/reassess")
+async def reassess_offer(
+    offer_id: int, client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.reassess_offer(offer_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/reassess-all")
+async def reassess_all(
+    store: str | None = Query(None),
+    max_score: float | None = Query(None),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.reassess_all(store=store, max_score=max_score)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 # ── Game CRUD (manual create / edit) ───────────────────────────────────────
 
 

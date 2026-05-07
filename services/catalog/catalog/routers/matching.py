@@ -17,7 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.auth import require_scope
 from catalog.db import get_session
-from catalog.matching.matcher import find_match_candidates
+from catalog.matching.matcher import (
+    AUTO_MATCH_THRESHOLD,
+    classify,
+    find_best_match,
+    find_match_candidates,
+)
 from catalog.models import Game, GameAlias, Offer
 from catalog.schemas import MatchingQueueOut, MatchLinkRequest, OfferOut
 
@@ -173,6 +178,110 @@ async def link(
     await session.commit()
     await session.refresh(offer)
     return OfferOut.model_validate(offer)
+
+
+@router.post(
+    "/{offer_id}/reassess",
+    response_model=OfferOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def reassess_offer(
+    offer_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> OfferOut:
+    """Пересчитать матчинг для одного offer — после правки алиасов или
+    добавления BGG-импорта score у offer мог вырасти.
+
+    Не трогает manual / rejected — оператор уже принял решение.
+    Если новый score ≥ AUTO_MATCH_THRESHOLD — статус становится 'auto',
+    иначе остаётся 'unmatched' с обновлённым score.
+    """
+    offer = (
+        await session.execute(select(Offer).where(Offer.id == offer_id))
+    ).scalar_one_or_none()
+    if offer is None:
+        raise HTTPException(status_code=404, detail="offer not found")
+    if offer.match_status in ("manual", "rejected"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"offer already {offer.match_status}; reassess only "
+                   "unmatched/auto",
+        )
+
+    cand = await find_best_match(session, offer.title_raw)
+    if cand is None:
+        offer.game_id = None
+        offer.match_score = None
+        offer.match_status = "unmatched"
+    else:
+        offer.match_score = cand.score
+        offer.match_status = classify(cand.score)
+        offer.game_id = cand.game_id if cand.score >= AUTO_MATCH_THRESHOLD else None
+
+    await session.commit()
+    await session.refresh(offer)
+    return OfferOut.model_validate(offer)
+
+
+@router.post(
+    "/reassess-all",
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def reassess_all(
+    store: str | None = Query(None, description="ограничить магазином"),
+    max_score: float | None = Query(
+        None,
+        description="только оффер'ы со score < max_score (или NULL)",
+    ),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Batch-reassess: прогоняет find_best_match по всем unmatched.
+
+    Полезно после массового импорта BGG/Tesera или ручной правки алиасов.
+    Не трогает manual / rejected — там уже есть решение оператора.
+    """
+    stmt = select(Offer).where(Offer.match_status == "unmatched")
+    if store:
+        stmt = stmt.where(Offer.store_slug == store)
+    if max_score is not None:
+        # NULL включаем (offer без score = ещё не матчился)
+        from sqlalchemy import or_
+        stmt = stmt.where(or_(Offer.match_score < max_score, Offer.match_score.is_(None)))
+
+    offers = (await session.execute(stmt)).scalars().all()
+
+    promoted = 0
+    improved = 0
+    unchanged = 0
+    for offer in offers:
+        prev_score = offer.match_score
+        prev_status = offer.match_status
+        cand = await find_best_match(session, offer.title_raw)
+        if cand is None:
+            new_score, new_status, new_gid = None, "unmatched", None
+        else:
+            new_score = cand.score
+            new_status = classify(cand.score)
+            new_gid = cand.game_id if new_status == "auto" else None
+
+        offer.match_score = new_score
+        offer.match_status = new_status
+        offer.game_id = new_gid
+
+        if prev_status == "unmatched" and new_status == "auto":
+            promoted += 1
+        elif new_score and (prev_score is None or new_score > prev_score):
+            improved += 1
+        else:
+            unchanged += 1
+
+    await session.commit()
+    return {
+        "scanned": len(offers),
+        "promoted_to_auto": promoted,
+        "score_improved": improved,
+        "unchanged": unchanged,
+    }
 
 
 @router.post(
