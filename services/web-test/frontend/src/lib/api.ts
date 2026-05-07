@@ -2,6 +2,7 @@ import type {
   CompareResponse, ContractResponse,
   DebugFeatures, DebugFetchUrlResult, DebugParseResponse,
   DiffResult, FavoriteOut, FieldCoverageRow,
+  HealthAllResponse,
   HealthOut, ParserSnapshotFull, ParserSnapshotMeta, ParserStatsOut, PriceDeltaOut, PricePointOut,
   ProductDetailOut, ProductsPage, SearchesPage,
   SnapshotFull, SnapshotsPage, StoreOut, StoreStatsResponse,
@@ -26,6 +27,9 @@ export const fetchHistory = (id: number) =>
 
 export const fetchHealth = () =>
   fetch(`${BASE}/health`).then(r => json<HealthOut>(r))
+
+export const fetchHealthAll = () =>
+  fetch(`${BASE}/health/all`).then(r => json<HealthAllResponse>(r))
 
 export const fetchRecentDeltas = (ids: number[]) => {
   if (ids.length === 0) return Promise.resolve([] as PriceDeltaOut[])

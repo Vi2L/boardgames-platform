@@ -137,6 +137,30 @@ export interface HealthOut {
   error?: string
 }
 
+export interface HealthAllResponse {
+  app: 'ok'
+  checked_at: string
+  parsers: {
+    status: string
+    url: string
+    error?: string
+    meta?: {
+      size_bytes?: number | null
+      product_count?: number | null
+      observation_count?: number | null
+      newest_observation?: string | null
+    } | null
+  }
+  catalog: {
+    status: string
+    url: string
+    error?: string
+    total_games?: number | null
+    unmatched_offers?: number | null
+    unmatched_good?: number | null
+  }
+}
+
 // ── DatabasePage / Stats ────────────────────────────────────────────────
 export interface ProductsPage {
   items: ProductOut[]
