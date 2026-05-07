@@ -21,6 +21,24 @@ class ParsersSearchResponse:
     products: list[ProductOut]
 
 
+class ParsersServiceError(RuntimeError):
+    """Структурированная ошибка от parsers /search.
+
+    parsers возвращает 503 с `{"detail": "..."}`, например при «всё пусто и
+    кеша нет». Без этого исключения портал получал бы httpx.HTTPStatusError
+    и в UI попадало бы технарское «Server error '503 …' for url '…'».
+
+    Поле detail — то, что parsers положил в JSON-тело; status_code — код
+    ответа, чтобы вызывающий мог различить 5xx vs 4xx, если потребуется.
+    """
+
+    def __init__(self, status_code: int, detail: str, *, query: str | None = None) -> None:
+        self.status_code = status_code
+        self.detail = detail
+        self.query = query
+        super().__init__(detail or f"parsers HTTP {status_code}")
+
+
 class ParsersClient:
     """Тонкий клиент для parsers FastAPI-сервиса."""
 
@@ -63,7 +81,15 @@ class ParsersClient:
             params["refresh"] = "true"
 
         resp = await self._client.get("/search", params=params)
-        resp.raise_for_status()
+
+        # Структурированная ошибка от parsers (503 «всё пусто и кеша нет»,
+        # 422 от FastAPI на невалидные параметры и т. п.) приходит как
+        # `{"detail": "..."}`. Распаковываем сами — иначе httpx бросит
+        # HTTPStatusError со стандартным «Server error '503 ...' for url ...»,
+        # которое неинформативно во фронте.
+        if resp.is_error:
+            detail = _extract_detail(resp) or f"HTTP {resp.status_code}"
+            raise ParsersServiceError(resp.status_code, detail, query=q)
 
         data = resp.json()
         products = [_product_from_api(p) for p in data.get("products", [])]
@@ -133,6 +159,22 @@ class ParsersClient:
 
         results = await asyncio.gather(*(_safe(pid) for pid in product_ids))
         return dict(results)
+
+
+def _extract_detail(resp: httpx.Response) -> str | None:
+    """Достаёт `detail` из JSON-ошибки FastAPI; падает мягко при не-JSON."""
+    try:
+        body = resp.json()
+    except ValueError:
+        text = resp.text.strip()
+        return text[:500] if text else None
+    if isinstance(body, dict):
+        detail = body.get("detail")
+        if isinstance(detail, str):
+            return detail
+        if detail is not None:
+            return str(detail)
+    return None
 
 
 def _product_from_api(data: dict[str, Any]) -> ProductOut:

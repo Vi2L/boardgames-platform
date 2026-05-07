@@ -23,7 +23,7 @@ import app.db_local as db_local_module
 import app.deps as deps_module
 from app.db_local import PortalDB
 from app.main import app
-from app.parsers_client import ParsersSearchResponse
+from app.parsers_client import ParsersSearchResponse, ParsersServiceError
 from app.schemas import PricePointOut, ProductOut, StoreOut
 
 
@@ -61,6 +61,9 @@ class FakeParsersClient:
         )
         self.should_fail_stores: bool = False
         self.should_fail_search: bool = False
+        # Если установлено (status_code, detail) — search() поднимет
+        # ParsersServiceError; используется в тестах 503-сценария.
+        self.service_error: tuple[int, str] | None = None
         # История цен per-product. Тесты могут пополнять напрямую.
         self.histories: dict[int, list[PricePointOut]] = {}
 
@@ -71,6 +74,9 @@ class FakeParsersClient:
 
     async def search(self, q: str, stores: list[str] | None = None,
                      limit: int = 10, refresh: bool = False) -> ParsersSearchResponse:
+        if self.service_error is not None:
+            status, detail = self.service_error
+            raise ParsersServiceError(status, detail, query=q)
         if self.should_fail_search:
             raise RuntimeError("parsers search failed")
         return self.search_response

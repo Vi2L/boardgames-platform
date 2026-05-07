@@ -21,6 +21,7 @@ from fastapi.responses import StreamingResponse
 
 from app.db_local import get_portal_db
 from app.deps import get_parsers_client
+from app.parsers_client import ParsersServiceError
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +136,37 @@ async def _run_search(
             error_count=len(result.errors), errors=result.errors,
         )
 
+    except ParsersServiceError as exc:
+        # Структурированный 5xx/4xx от parsers — у нас уже есть человекочитаемое
+        # detail. Магазины тут не «упали» — это решение parsers «нет данных по
+        # этому запросу», поэтому в store-done error не пишем (бейджи не
+        # окрасятся в красный, что точнее отражает причину).
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        message = exc.detail or f"parsers HTTP {exc.status_code}"
+
+        for store in active_stores:
+            await queue.put(("store-done", {
+                "slug": store.slug, "name": store.name,
+                "count": 0, "elapsed_ms": elapsed_ms, "error": None,
+            }))
+
+        await queue.put(("api-error", {
+            "error": message,
+            "status_code": exc.status_code,
+            "elapsed_ms": elapsed_ms,
+        }))
+
+        await _log_to_portal_db(
+            query=q, stores=store_slugs, source=None,
+            total_ms=elapsed_ms, products=[],
+            error_count=0,
+            errors={"_parsers_status": f"{exc.status_code}: {message}"},
+        )
+
     except Exception as exc:
+        # Сетевые/неожиданные ошибки (httpx.ConnectError, TimeoutException,
+        # KeyError при битом JSON и т. п.) — действительно «сломались
+        # магазины», красим бейджи в красный.
         elapsed_ms = int((time.monotonic() - t0) * 1000)
 
         for store in active_stores:

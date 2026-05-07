@@ -65,3 +65,34 @@ async def test_search_emits_api_error_when_parsers_fail(
     parsed = json.loads(error_payload)
     assert "parsers search failed" in parsed["error"]
     assert "elapsed_ms" in parsed
+    # Сетевая ошибка — store-done должен пометить магазины как упавшие
+    store_done = [json.loads(d) for n, d in events if n == "store-done"]
+    assert all(s["error"] == "parsers search failed" for s in store_done)
+
+
+@pytest.mark.asyncio
+async def test_search_503_from_parsers_emits_typed_api_error(
+    http_client: AsyncClient, fake_client: FakeParsersClient,
+) -> None:
+    """503 от parsers («нет данных и кеша нет») → понятный api-error и
+    магазины НЕ помечаются как упавшие — это решение parsers, а не сбой."""
+    fake_client.service_error = (
+        503,
+        "Все магазины вернули ошибку и кеша нет. Ошибки: {}",
+    )
+    events = await collect_sse_events(http_client, "/api/search?q=Геркулес")
+
+    names = [n for n, _ in events]
+    assert "api-error" in names
+    assert "results" not in names
+
+    error_payload = json.loads(next(d for n, d in events if n == "api-error"))
+    assert error_payload["status_code"] == 503
+    assert "Все магазины вернули ошибку" in error_payload["error"]
+    # Технические HTTPStatusError-сообщения не должны просачиваться
+    assert "Server error" not in error_payload["error"]
+
+    # store-done без error: магазины не виноваты
+    store_done = [json.loads(d) for n, d in events if n == "store-done"]
+    assert store_done, "ожидаем хотя бы один store-done"
+    assert all(s.get("error") is None for s in store_done)

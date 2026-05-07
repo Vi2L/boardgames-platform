@@ -151,22 +151,29 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
             }],
           }
 
-        case 'api-error':
-          // Тост, чтобы пользователь увидел ошибку даже не глядя на API Log.
-          toast.error('parsers API недоступен', {
-            description: d.error as string,
-          })
+        case 'api-error': {
+          // Backend различает «нет данных» (status_code=503 от parsers) и
+          // настоящую сетевую ошибку. UI выводит разные тосты, чтобы
+          // пользователь не путал «ничего не нашлось» с «всё сломалось».
+          const status = d.status_code as number | undefined
+          const message = d.error as string
+          if (status === 503) {
+            toast.warning('Нет данных по запросу', { description: message })
+          } else {
+            toast.error('Ошибка parsers API', { description: message })
+          }
           return {
             apiLogs: [...s.apiLogs, {
               id: ++logId,
               type: 'error' as const,
-              error: d.error as string,
+              error: message,
               elapsed_ms: d.elapsed_ms as number,
               timestamp: Date.now(),
             }],
             isSearching: false,
             sseUrl: null,
           }
+        }
 
         case 'results':
           return {
