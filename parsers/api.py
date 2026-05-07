@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 
+from .catalog_publisher import CatalogPublisher
 from .db import PriceDatabase
 from .service import PriceService
 from .stats_api import router as stats_router
@@ -24,11 +25,12 @@ from .stores.lavkaigr import LavkaIgrParser
 
 _db: PriceDatabase
 _service: PriceService
+_catalog_publisher: CatalogPublisher
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db, _service
+    global _db, _service, _catalog_publisher
 
     db_path = os.getenv("DB_PATH", "data/prices.sqlite")
     ttl = float(os.getenv("CACHE_TTL_HOURS", "4"))
@@ -36,6 +38,15 @@ async def lifespan(app: FastAPI):
 
     _db = PriceDatabase(db_path)
     await _db.init()
+
+    # Опциональный publisher оффер'ов в boardgames-catalog. Если URL не задан —
+    # no-op, search работает как раньше. Подключение из infra-репо:
+    # CATALOG_INGEST_URL=http://catalog:8002/ingest/offers
+    _catalog_publisher = CatalogPublisher(
+        url=os.getenv("CATALOG_INGEST_URL"),
+        api_key=os.getenv("CATALOG_API_KEY"),
+    )
+    await _catalog_publisher.start()
 
     parsers = [
         HobbyGamesParser(proxy=proxy),
@@ -51,12 +62,14 @@ async def lifespan(app: FastAPI):
         await _db.upsert_store(p.store)
         p._db = _db
 
-    _service = PriceService(_db, parsers, cache_ttl_hours=ttl)
+    _service = PriceService(
+        _db, parsers, cache_ttl_hours=ttl, catalog_publisher=_catalog_publisher
+    )
     stats_set_db(_db)
 
     yield  # приложение работает
 
-    # Cleanup при остановке (если нужен)
+    await _catalog_publisher.close()
 
 
 app = FastAPI(title="Board Game Price Parser", lifespan=lifespan)

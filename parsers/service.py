@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 
 from .base import StoreParser
+from .catalog_publisher import CatalogPublisher
 from .db import PriceDatabase
 from .models import SearchResult
 
@@ -24,10 +25,14 @@ class PriceService:
         db: PriceDatabase,
         parsers: list[StoreParser],
         cache_ttl_hours: float = 4.0,
+        catalog_publisher: CatalogPublisher | None = None,
     ) -> None:
         self._db = db
         self._parsers: dict[str, StoreParser] = {p.store.slug: p for p in parsers}
         self._ttl = cache_ttl_hours
+        # Опциональный канал отправки оффер'ов в boardgames-catalog. None или
+        # disabled — search работает без изменений.
+        self._catalog_publisher = catalog_publisher
 
     async def search(
         self,
@@ -109,6 +114,13 @@ class PriceService:
                     saved_count += 1
                 except Exception as e:
                     logger.error("Ошибка сохранения товара из %s: %s", slug, e)
+
+            # Side-channel: пушим батч в boardgames-catalog. Fire-and-forget,
+            # ошибки не влияют на ответ /search (см. CatalogPublisher.publish).
+            if self._catalog_publisher is not None and self._catalog_publisher.enabled:
+                asyncio.create_task(
+                    self._catalog_publisher.publish(slug, list(products))
+                )
 
         # 4. Читаем итоговый результат из БД
         products = await self._db.search_cached(query, target_slugs, self._ttl)
