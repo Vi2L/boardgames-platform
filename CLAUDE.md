@@ -97,6 +97,9 @@ docker compose --profile full down -v           # ⚠ ОПАСНО — удал�
   - `migrate_meta_to_satellites.py` — миграция данных из старой `games.meta` в satellite-таблицы.
   - Инструкция запуска — в `README.md` секция «Наполнение catalog данными».
 - `bin/test-all.sh` — прогон тестов всех сервисов отдельными процессами pytest.
+- `bin/backup-catalog.sh` — backup/restore Postgres catalog'а через pg_dump/pg_restore.
+  Хранит дампы в `.scratch/backups/` (gitignored), ротация — оставляет 10 свежих.
+  Можно повесить на cron хоста для регулярного бэкапа.
 
 ## Запреты (для всего монорепо)
 
@@ -131,6 +134,11 @@ docker compose --profile full down -v           # ⚠ ОПАСНО — удал�
   build daemon — `.dockerignore` обязателен.
 - **Порты:** catalog 8002, parsers 8001, web-test 8000, postgres 5433 (хост),
   Vite dev 5173 (только при `npm run dev`).
+- **`log_statement=mod` в bg-postgres**: все INSERT/UPDATE/DELETE/TRUNCATE/DDL
+  попадают в `docker logs bg-postgres`. Это даёт audit-trail на случай неожиданных
+  потерь данных (`docker logs bg-postgres | grep -E 'TRUNCATE|DELETE FROM'`).
+  SELECT не логируется, поэтому шум умеренный. Прописано через `command:` в
+  `docker-compose.yml`.
 
 ## Roadmap
 

@@ -14,6 +14,17 @@ services:
   postgres:
     image: postgres:16-alpine
     container_name: bg-postgres
+    # `command:` пробрасывается в entrypoint postgres-image: для arg'а 'postgres'
+    # docker-entrypoint.sh вызывает 'postgres "$@"', и `-c key=value` ставит
+    # параметры конфигурации. log_statement=mod пишет в логи все INSERT/UPDATE/
+    # DELETE/TRUNCATE/CREATE/DROP/ALTER (но НЕ SELECT — поэтому шум умеренный).
+    # Это даёт audit-trail на случай неожиданных потерь данных.
+    # Альтернативные значения: 'none' (default), 'ddl' (только DDL),
+    # 'all' (включая SELECT — очень шумно).
+    command:
+      - postgres
+      - -c
+      - log_statement=mod
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-catalog}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-catalog}
