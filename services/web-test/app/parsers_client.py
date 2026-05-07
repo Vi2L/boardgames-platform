@@ -116,6 +116,49 @@ class ParsersClient:
 
     # ── Debug (диагностические endpoint'ы parsers) ──────────────────────
 
+    async def debug_features(self) -> dict:
+        """GET /api/debug/features → какие debug-возможности активны на parsers."""
+        resp = await self._client.get("/api/debug/features")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def list_raw_snapshots(
+        self,
+        store: str | None = None,
+        query: str | None = None,
+        hours: int = 72,
+        limit: int = 50,
+    ) -> list[dict]:
+        """GET /api/debug/snapshots → метаданные сохранённых HTTP-снепшотов."""
+        params: dict[str, Any] = {"hours": hours, "limit": limit}
+        if store:
+            params["store"] = store
+        if query:
+            params["query"] = query
+        resp = await self._client.get("/api/debug/snapshots", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_raw_snapshot(self, snapshot_id: int) -> dict | None:
+        """GET /api/debug/snapshots/{id} → snapshot c body_text (decoded)."""
+        resp = await self._client.get(f"/api/debug/snapshots/{snapshot_id}")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_raw_snapshot_text(self, snapshot_id: int) -> tuple[str, str] | None:
+        """GET /api/debug/snapshots/{id}/raw → сырое тело как text/plain.
+
+        Возвращает (text, content_type) либо None если 404. Используется для
+        выгрузки/просмотра в DOM (parsers сам декодирует cp1251 и пр.).
+        """
+        resp = await self._client.get(f"/api/debug/snapshots/{snapshot_id}/raw")
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        return resp.text, resp.headers.get("content-type", "text/plain")
+
     async def debug_parse(
         self,
         q: str,

@@ -1,7 +1,8 @@
 import type {
-  DebugParseResponse,
+  CompareResponse,
+  DebugFeatures, DebugParseResponse,
   DiffResult, FavoriteOut,
-  HealthOut, ParserStatsOut, PriceDeltaOut, PricePointOut,
+  HealthOut, ParserSnapshotFull, ParserSnapshotMeta, ParserStatsOut, PriceDeltaOut, PricePointOut,
   ProductDetailOut, ProductsPage, SearchesPage,
   SnapshotFull, SnapshotsPage, StoreOut, StoreStatsResponse,
   SuiteOut, SuiteQuery, SuiteRunMeta, SummaryStatsResponse,
@@ -81,6 +82,32 @@ export const debugParse = (params: { q: string; stores?: string[]; limit?: numbe
   if (params.limit) sp.set('limit', String(params.limit))
   return fetch(`${BASE}/debug/parse?${sp}`).then(r => json<DebugParseResponse>(r))
 }
+
+export const debugCompare = (params: { q: string; stores?: string[]; limit?: number }) => {
+  const sp = new URLSearchParams({ q: params.q })
+  if (params.stores && params.stores.length > 0) sp.set('stores', params.stores.join(','))
+  if (params.limit) sp.set('limit', String(params.limit))
+  return fetch(`${BASE}/debug/compare?${sp}`).then(r => json<CompareResponse>(r))
+}
+
+export const fetchDebugFeatures = () =>
+  fetch(`${BASE}/debug/features`).then(r => json<DebugFeatures>(r))
+
+export const fetchRawSnapshots = (params: {
+  store?: string; query?: string; hours?: number; limit?: number
+} = {}) => {
+  const sp = new URLSearchParams()
+  if (params.store) sp.set('store', params.store)
+  if (params.query) sp.set('query', params.query)
+  if (params.hours) sp.set('hours', String(params.hours))
+  if (params.limit) sp.set('limit', String(params.limit))
+  return fetch(`${BASE}/debug/snapshots?${sp}`).then(r => json<ParserSnapshotMeta[]>(r))
+}
+
+export const fetchRawSnapshot = (id: number) =>
+  fetch(`${BASE}/debug/snapshots/${id}`).then(r => json<ParserSnapshotFull>(r))
+
+export const rawSnapshotTextUrl = (id: number) => `${BASE}/debug/snapshots/${id}/raw`
 
 // ── Snapshots / Suites / Favorites ─────────────────────────────────────
 

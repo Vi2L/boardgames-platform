@@ -339,6 +339,70 @@ export interface DebugParseResponse {
   results: Record<string, DebugStoreResult>
 }
 
+export interface DebugFeatures {
+  raw_snapshots: boolean
+  [k: string]: unknown
+}
+
+export interface ParserSnapshotMeta {
+  id: number
+  store_slug: string
+  query: string | null
+  url: string | null
+  method: string | null
+  status_code: number | null
+  encoding: string | null
+  content_type: string | null
+  body_size: number | null
+  truncated: number | boolean | null
+  duration_ms: number | null
+  ts: string
+  kind: string
+}
+
+export interface ParserSnapshotFull extends ParserSnapshotMeta {
+  body_text: string
+}
+
+/**
+ * Один cache↔live diff per-store. Ключ для diff — url продукта.
+ *
+ * - only_cache / only_live — массивы url, которых нет в другой стороне.
+ * - changed — записи, где тот же url, но title/price_rub отличается.
+ * - same_count — сколько url'ов идентичны (не показываем поштучно).
+ */
+export interface CompareStoreResult {
+  cache: {
+    count: number
+    error: string | null
+    products: ProductOut[]
+  }
+  live: {
+    count: number
+    error: string | null
+    duration_ms: number | null
+    metrics: DebugMetrics | null
+    products: DebugProduct[]
+  }
+  diff: {
+    only_cache: string[]
+    only_live: string[]
+    changed: Array<{
+      url: string
+      cache: { title: string | null; price_rub: number | null }
+      live: { title: string | null; price_rub: number | null }
+    }>
+    same_count: number
+  }
+}
+
+export interface CompareResponse {
+  query: string
+  cache_source: string | null
+  results: Record<string, CompareStoreResult>
+  errors: { cache: string | null; live: string | null }
+}
+
 /** Маркер недоступности parsers — приходит вместо реального ответа. */
 export interface UnavailableMarker {
   _unavailable: true
