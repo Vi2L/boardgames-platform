@@ -475,6 +475,49 @@ export const fetchPromotionLog = (limit = 50, offset = 0) => {
     .then(r => json<PromotionLogList>(r))
 }
 
+// ── PR-5: batch auto-link ────────────────────────────────────────────────
+
+export type BatchLinkRequest = {
+  threshold?: number          // default 0.95
+  max_items?: number          // default 100
+  dry_run?: boolean           // default true (UX «preview сначала»)
+  skip_with_satellite?: boolean  // default true
+}
+
+export type BatchLinkItemPreview = {
+  raw_id: number
+  slug: string
+  raw_title: string | null
+  game_id: number
+  game_title: string
+  score: number
+  via: string
+}
+
+export type BatchLinkSkipped = {
+  raw_id: number
+  slug: string
+  // 'low_score' | 'already_linked' | 'no_candidates' | 'promote_failed:N'
+  reason: string
+  top_score: number | null
+}
+
+export type BatchLinkResult = {
+  scanned: number
+  linked: number              // 0 при dry_run
+  would_link: number
+  skipped: BatchLinkSkipped[]
+  items: BatchLinkItemPreview[]   // топ-50 для preview
+  dry_run: boolean
+}
+
+export const batchAutoLinkPromotion = (body: BatchLinkRequest) =>
+  fetch(`${BASE}/promotion/${PROVIDER}/batch-link`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(r => json<BatchLinkResult>(r))
+
 // ── Aliases CRUD ──────────────────────────────────────────────────────
 
 export type AliasInput = {

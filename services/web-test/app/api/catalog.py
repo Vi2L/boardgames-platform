@@ -268,6 +268,21 @@ async def promotion_candidates(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.post("/promotion/{provider}/batch-link")
+async def promotion_batch_link(
+    provider: str, body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Batch auto-link уверенных совпадений (PR-5).
+
+    body: {threshold?: 0.95, max_items?: 100, dry_run?: true, skip_with_satellite?: true}
+    """
+    try:
+        return await client.promotion_batch_link(provider, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.post("/promotion/{provider}/{raw_id:int}/apply")
 async def promotion_apply(
     provider: str, raw_id: int, body: dict,

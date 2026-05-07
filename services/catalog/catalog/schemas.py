@@ -417,3 +417,44 @@ class PromotionRevertResult(BaseModel):
     revert_log_id: int
     original_log_id: int
     status_after_revert: str
+
+
+# ---------- batch auto-link (PR-5) ----------
+
+class BatchLinkRequest(BaseModel):
+    """Параметры batch auto-link.
+
+    threshold — минимальный score для безопасного авто-link (по умолчанию 0.95
+    «почти точное совпадение»). dry_run по умолчанию True для UX «preview сначала».
+    """
+
+    threshold: float = 0.95
+    max_items: int = 100
+    dry_run: bool = True
+    skip_with_satellite: bool = True
+
+
+class BatchLinkItemPreview(BaseModel):
+    raw_id: int
+    slug: str
+    raw_title: str | None = None
+    game_id: int
+    game_title: str
+    score: float
+    via: str
+
+
+class BatchLinkSkipped(BaseModel):
+    raw_id: int
+    slug: str
+    reason: str       # 'low_score' | 'already_linked' | 'no_candidates' | 'promote_failed:N'
+    top_score: float | None = None
+
+
+class BatchLinkResult(BaseModel):
+    scanned: int
+    linked: int                          # сколько реально записано (0 при dry_run)
+    would_link: int                      # сколько было бы записано
+    skipped: list[BatchLinkSkipped]
+    items: list[BatchLinkItemPreview]    # топ-50 для preview
+    dry_run: bool

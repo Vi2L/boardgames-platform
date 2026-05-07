@@ -20,6 +20,8 @@ from catalog.db import get_session
 from catalog.models import DicefestRawGame, ImportPromotionLog
 from catalog.promotion import dicefest as dicefest_promo
 from catalog.schemas import (
+    BatchLinkRequest,
+    BatchLinkResult,
     DicefestRawGameOut,
     DicefestRawListOut,
     PromotionApplyRequest,
@@ -140,6 +142,33 @@ async def apply(
         performed_by=payload.performed_by or "operator",
     )
     return PromotionApplyResult.model_validate(result)
+
+
+@router.post(
+    "/{provider}/batch-link",
+    response_model=BatchLinkResult,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def batch_link(
+    provider: str,
+    payload: BatchLinkRequest,
+    session: AsyncSession = Depends(get_session),
+) -> BatchLinkResult:
+    """Batch auto-link уверенных совпадений (PR-5).
+
+    Идёт по raw status='new', находит топ-1 кандидата через pg_trgm и линкует
+    тех, у кого score ≥ threshold. По умолчанию dry_run=True — UX «preview
+    сначала», оператор подтверждает перед реальным запуском.
+    """
+    _check_provider(provider)
+    result = await dicefest_promo.batch_auto_link(
+        session,
+        threshold=payload.threshold,
+        max_items=payload.max_items,
+        dry_run=payload.dry_run,
+        skip_with_satellite=payload.skip_with_satellite,
+    )
+    return BatchLinkResult.model_validate(result)
 
 
 @router.post(

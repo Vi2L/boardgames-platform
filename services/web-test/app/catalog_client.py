@@ -205,6 +205,15 @@ class CatalogClient:
         resp = await self._client.get("/promotion/log", params=params)
         return _ok_or_raise(resp)
 
+    async def promotion_batch_link(
+        self, provider: str, payload: dict,
+    ) -> dict[str, Any]:
+        """POST /promotion/{provider}/batch-link — auto-link высокий-score raw."""
+        resp = await self._client.post(
+            f"/promotion/{provider}/batch-link", json=payload,
+        )
+        return _ok_or_raise(resp)
+
     async def get_import_job(self, job_id: int) -> dict[str, Any]:
         """GET /import/jobs/{id} → polling статуса (pending/running/done/failed)."""
         resp = await self._client.get(f"/import/jobs/{job_id}")

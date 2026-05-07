@@ -469,3 +469,127 @@ async def revert(
         "original_log_id": log.id,
         "status_after_revert": raw.status,
     }
+
+
+# ─── Batch auto-link (PR-5) ───────────────────────────────────────────────────
+
+# Сколько preview-строк отдаём в `items` ответе. Полный список skipped — в
+# `skipped[]`, чтобы UI мог показать аккуратно. items=top-50 не дублируется
+# в skipped (skipped содержит ТОЛЬКО пропущенные).
+_BATCH_PREVIEW_LIMIT = 50
+
+
+async def batch_auto_link(
+    session: AsyncSession,
+    *,
+    threshold: float = 0.95,
+    max_items: int = 100,
+    dry_run: bool = True,
+    skip_with_satellite: bool = True,
+    performed_by: str = "operator-batch",
+) -> dict:
+    """Авто-link raw → canonical Game для уверенных совпадений (PR-5).
+
+    Алгоритм:
+      1. SELECT raw WHERE status='new' ORDER BY id LIMIT max_items.
+      2. Для каждой raw: match_candidates(threshold=threshold, limit=1).
+      3. Если top-1 score ≥ threshold:
+         - skip_with_satellite=True и has_satellite_for_provider → skip
+         - dry_run=True: добавляем в items (без записи в БД)
+         - dry_run=False: promote(action='link', notes='auto-batch threshold=…')
+      4. Иначе → skipped[reason='low_score' | 'no_candidates'].
+
+    Возвращает dict, который сериализуется в BatchLinkResult (см. schemas.py).
+    """
+    if not (0.0 <= threshold <= 1.0):
+        raise HTTPException(400, detail="threshold должен быть в [0, 1]")
+    if max_items <= 0:
+        raise HTTPException(400, detail="max_items должен быть > 0")
+
+    # 1) Берём пачку raw в статусе new.
+    raw_ids = (
+        await session.execute(
+            select(DicefestRawGame.id)
+            .where(DicefestRawGame.status == "new")
+            .order_by(DicefestRawGame.id)
+            .limit(max_items)
+        )
+    ).scalars().all()
+
+    items: list[dict] = []          # preview топ-N для UI
+    skipped: list[dict] = []
+    linked = 0
+    would_link = 0
+    notes = f"auto-batch threshold={threshold:.2f}"
+
+    for rid in raw_ids:
+        # match_candidates сам читает raw из БД и возвращает топ-1.
+        raw, cands = await match_candidates(
+            session, rid, threshold=threshold, limit=1,
+        )
+        if not cands:
+            skipped.append({
+                "raw_id": rid, "slug": raw.slug,
+                "reason": "no_candidates", "top_score": None,
+            })
+            continue
+        top = cands[0]
+        if top["score"] < threshold:
+            # Не должно случаться — match_candidates уже фильтрует по threshold,
+            # но защищаемся явно (на случай float rounding edge).
+            skipped.append({
+                "raw_id": rid, "slug": raw.slug,
+                "reason": "low_score", "top_score": float(top["score"]),
+            })
+            continue
+        if skip_with_satellite and top["has_satellite_for_provider"]:
+            skipped.append({
+                "raw_id": rid, "slug": raw.slug,
+                "reason": "already_linked", "top_score": float(top["score"]),
+            })
+            continue
+
+        # Кандидат подходит. В preview включаем ВСЕ (до limit) — оператору
+        # удобно видеть, что batch нашёл.
+        if len(items) < _BATCH_PREVIEW_LIMIT:
+            items.append({
+                "raw_id": rid,
+                "slug": raw.slug,
+                "raw_title": raw.title_ru or raw.title_en,
+                "game_id": top["game_id"],
+                "game_title": top["title"],
+                "score": float(top["score"]),
+                "via": top["via"],
+            })
+
+        if dry_run:
+            would_link += 1
+            continue
+
+        try:
+            await promote(
+                session, rid,
+                action="link",
+                target_game_id=top["game_id"],
+                notes=notes,
+                performed_by=performed_by,
+            )
+            linked += 1
+        except HTTPException as e:
+            # Идемпотентность: если raw перешёл из 'new' между нашим SELECT
+            # и UPDATE — promote вернёт 409. Это норма при гонке, добавляем в
+            # skipped с понятным reason.
+            skipped.append({
+                "raw_id": rid, "slug": raw.slug,
+                "reason": f"promote_failed:{e.status_code}",
+                "top_score": float(top["score"]),
+            })
+
+    return {
+        "scanned": len(raw_ids),
+        "linked": linked,
+        "would_link": would_link,
+        "skipped": skipped,
+        "items": items,
+        "dry_run": dry_run,
+    }

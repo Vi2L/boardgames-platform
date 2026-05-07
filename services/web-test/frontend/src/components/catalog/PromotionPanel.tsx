@@ -17,13 +17,14 @@
 import { useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, AlertTriangle, RotateCcw, X, Plus, Loader2 } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, RotateCcw, X, Plus, Loader2, Bot } from 'lucide-react'
 import clsx from 'clsx'
 import {
   fetchPromotionQueue, fetchPromotionCandidates,
   applyPromotion, revertPromotion, fetchPromotionLog,
+  batchAutoLinkPromotion,
   type DicefestRawGame, type ExternalLink, type PromotionCandidate,
-  type PromotionLogEntry,
+  type PromotionLogEntry, type BatchLinkResult, type BatchLinkRequest,
 } from '../../lib/catalog'
 
 // Цены везде в проекте хранятся в копейках. Форматируем в рубли с разделителем.
@@ -117,6 +118,7 @@ function PromotionQueue({
   setStatusFilter: (s: StatusFilter) => void
   onOpenRaw: (id: number) => void
 }) {
+  const [autoLinkOpen, setAutoLinkOpen] = useState(false)
   const queue = useInfiniteQuery({
     queryKey: ['catalog', 'promotion-queue', statusFilter],
     queryFn: ({ pageParam }) => fetchPromotionQueue(statusFilter, PAGE_SIZE, pageParam),
@@ -146,7 +148,19 @@ function PromotionQueue({
         <span className="text-xs text-gray-500">
           {queue.isLoading ? 'загрузка...' : `${items.length} из ${total}`}
         </span>
+        <div className="flex-1" />
+        {statusFilter === 'new' && (
+          <button
+            type="button"
+            onClick={() => setAutoLinkOpen(true)}
+            className="px-3 py-1 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded flex items-center gap-1"
+          >
+            <Bot size={12} /> Auto-link
+          </button>
+        )}
       </div>
+
+      {autoLinkOpen && <AutoLinkModal onClose={() => setAutoLinkOpen(false)} />}
 
       <div className="border border-gray-800 rounded overflow-hidden">
         <table className="w-full text-sm">
@@ -638,5 +652,210 @@ function Modal({ onClose, children }: { onClose: () => void; children: React.Rea
         {children}
       </div>
     </div>
+  )
+}
+
+// ─── Auto-link модалка (PR-5) ────────────────────────────────────────────────
+
+function AutoLinkModal({ onClose }: { onClose: () => void }) {
+  const queryClient = useQueryClient()
+  const [threshold, setThreshold] = useState(0.95)
+  const [maxItems, setMaxItems] = useState(100)
+  const [skipWithSatellite, setSkipWithSatellite] = useState(true)
+  // Result последнего запроса. Если dry_run=true — это «preview» (linked=0, would_link=N).
+  // Если dry_run=false — это «applied» (linked=N).
+  const [result, setResult] = useState<BatchLinkResult | null>(null)
+
+  const run = useMutation({
+    mutationFn: (body: BatchLinkRequest) => batchAutoLinkPromotion(body),
+    onSuccess: (res) => {
+      setResult(res)
+      if (!res.dry_run) {
+        toast.success(`Привязано: ${res.linked}, пропущено: ${res.skipped.length}`)
+        queryClient.invalidateQueries({ queryKey: ['catalog', 'promotion-queue'] })
+        queryClient.invalidateQueries({ queryKey: ['catalog', 'promotion-log'] })
+      }
+    },
+    onError: (e: Error) => toast.error(`Не удалось: ${e.message}`),
+  })
+
+  const inPreview = result?.dry_run === true
+  const inApplied = result !== null && result.dry_run === false
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+        <h2 className="text-sm font-semibold text-gray-100 flex items-center gap-2">
+          <Bot size={14} /> Auto-link по высоким score
+        </h2>
+        <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-200 rounded">
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {/* Форма параметров */}
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">
+              Минимальный score (≥)
+            </label>
+            <input
+              type="number"
+              min={0.5} max={1} step={0.01}
+              value={threshold}
+              onChange={e => setThreshold(parseFloat(e.target.value) || 0.95)}
+              disabled={run.isPending}
+              className="w-full px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-100 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-xs text-gray-500 mb-1 block">
+              Max items
+            </label>
+            <input
+              type="number"
+              min={1} max={1000}
+              value={maxItems}
+              onChange={e => setMaxItems(parseInt(e.target.value, 10) || 100)}
+              disabled={run.isPending}
+              className="w-full px-2 py-1 text-sm bg-gray-800 border border-gray-700 rounded text-gray-100 font-mono"
+            />
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-gray-200 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={skipWithSatellite}
+            onChange={e => setSkipWithSatellite(e.target.checked)}
+            disabled={run.isPending}
+            className="accent-violet-500"
+          />
+          Пропускать игры с уже привязанной dicefest-страницей
+        </label>
+
+        {/* Кнопки действий */}
+        <div className="flex gap-2 pt-2">
+          {!inPreview && !inApplied && (
+            <button
+              type="button"
+              onClick={() => run.mutate({
+                threshold, max_items: maxItems, dry_run: true,
+                skip_with_satellite: skipWithSatellite,
+              })}
+              disabled={run.isPending}
+              className="flex-1 px-3 py-1.5 text-sm bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded flex items-center justify-center gap-1"
+            >
+              {run.isPending
+                ? <><Loader2 size={12} className="animate-spin" /> Запускаю dry-run…</>
+                : <>👁 Preview (dry-run)</>}
+            </button>
+          )}
+          {inPreview && result && (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.confirm(`Привязать ${result.would_link} raw-записей?`)) {
+                    run.mutate({
+                      threshold, max_items: maxItems, dry_run: false,
+                      skip_with_satellite: skipWithSatellite,
+                    })
+                  }
+                }}
+                disabled={run.isPending || result.would_link === 0}
+                className="flex-1 px-3 py-1.5 text-sm bg-emerald-700 hover:bg-emerald-600 disabled:opacity-40 text-white rounded flex items-center justify-center gap-1"
+              >
+                {run.isPending
+                  ? <><Loader2 size={12} className="animate-spin" /> Применяю…</>
+                  : <>✓ Применить ({result.would_link})</>}
+              </button>
+              <button
+                type="button"
+                onClick={() => setResult(null)}
+                className="px-3 py-1.5 text-sm bg-gray-800 hover:bg-gray-700 text-gray-200 rounded"
+              >
+                Сбросить
+              </button>
+            </>
+          )}
+          {inApplied && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="flex-1 px-3 py-1.5 text-sm bg-violet-700 hover:bg-violet-600 text-white rounded"
+            >
+              Готово, закрыть
+            </button>
+          )}
+        </div>
+
+        {/* Result preview */}
+        {result && (
+          <div className="border-t border-gray-800 pt-3 space-y-2">
+            <div className={clsx(
+              'text-xs',
+              result.dry_run ? 'text-amber-300' : 'text-emerald-300',
+            )}>
+              {result.dry_run
+                ? `Будет привязано: ${result.would_link} из ${result.scanned}.`
+                : `Привязано: ${result.linked} из ${result.scanned}.`}
+              {' Пропущено: '}{result.skipped.length}.
+            </div>
+
+            {result.items.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  {result.dry_run ? 'Кандидаты' : 'Привязанные'} (топ-{result.items.length})
+                </div>
+                <div className="bg-gray-950 rounded p-2 space-y-1 max-h-48 overflow-y-auto">
+                  {result.items.map((it, i) => (
+                    <div key={i} className="text-xs flex items-center gap-2">
+                      <span className="font-mono text-gray-500 flex-shrink-0">
+                        {it.score.toFixed(2)}
+                      </span>
+                      <span className="text-gray-300 truncate flex-1" title={it.raw_title ?? it.slug}>
+                        {it.raw_title ?? it.slug}
+                      </span>
+                      <span className="text-gray-500 flex-shrink-0">→</span>
+                      <span className="font-mono text-[10px] text-gray-600 flex-shrink-0">
+                        #{it.game_id}
+                      </span>
+                      <span className="text-gray-200 truncate flex-shrink-0 max-w-[40%]">
+                        {it.game_title}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {result.skipped.length > 0 && (
+              <div>
+                <div className="text-xs text-gray-500 mb-1">
+                  Пропущено ({result.skipped.length})
+                </div>
+                <div className="bg-gray-950 rounded p-2 space-y-1 max-h-32 overflow-y-auto">
+                  {result.skipped.slice(0, 50).map((s, i) => (
+                    <div key={i} className="text-xs flex items-center gap-2">
+                      <span className="font-mono text-[10px] text-gray-600 flex-shrink-0">
+                        #{s.raw_id}
+                      </span>
+                      <span className="text-gray-400 truncate flex-1">{s.slug}</span>
+                      <span className="text-amber-300 flex-shrink-0">{s.reason}</span>
+                      {s.top_score != null && (
+                        <span className="font-mono text-gray-500 flex-shrink-0">
+                          {s.top_score.toFixed(2)}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    </Modal>
   )
 }
