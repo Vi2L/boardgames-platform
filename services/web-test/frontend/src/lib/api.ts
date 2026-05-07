@@ -306,6 +306,41 @@ export const deleteSuite = (id: number) =>
 export const fetchSuiteRuns = (suiteId: number, limit = 10) =>
   fetch(`${BASE}/suites/${suiteId}/runs?limit=${limit}`).then(r => json<SuiteRunMeta[]>(r))
 
+// ── Suite baselines (F4.4) ──────────────────────────────────────────
+
+export type SuiteBaselineSpec = {
+  min_count?: number
+  expected_stores?: string[]
+  min_field_coverage?: Record<string, number>  // field -> percent (0..100)
+  notes?: string
+}
+
+export type SuiteBaseline = {
+  id: number
+  suite_id: number
+  query: string
+  baseline: SuiteBaselineSpec
+  created_at: string
+  updated_at: string
+}
+
+export const fetchSuiteBaselines = (suiteId: number) =>
+  fetch(`${BASE}/suites/${suiteId}/baselines`).then(r => json<SuiteBaseline[]>(r))
+
+export const upsertSuiteBaseline = (
+  suiteId: number, payload: { query: string; baseline: SuiteBaselineSpec },
+) =>
+  fetch(`${BASE}/suites/${suiteId}/baselines`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<SuiteBaseline>(r))
+
+export const deleteSuiteBaseline = async (suiteId: number, baselineId: number) => {
+  const r = await fetch(`${BASE}/suites/${suiteId}/baselines/${baselineId}`, { method: 'DELETE' })
+  if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
+}
+
 export const fetchFavorites = () =>
   fetch(`${BASE}/favorites`).then(r => json<FavoriteOut[]>(r))
 

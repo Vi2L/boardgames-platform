@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, CheckCircle2, XCircle, AlertTriangle, Play, Trash2 } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
+import {
+  Loader2, CheckCircle2, XCircle, AlertTriangle, Play, Trash2, Pin, X,
+} from 'lucide-react'
 import clsx from 'clsx'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
 import type { SuiteOut, SuiteRunMeta } from '../../types/api'
-import { deleteSuite, fetchSuiteRuns } from '../../lib/api'
+import {
+  deleteSuite, deleteSuiteBaseline, fetchSuiteBaselines, fetchSuiteRuns,
+  upsertSuiteBaseline,
+  type SuiteBaseline,
+} from '../../lib/api'
 import { useSSE } from '../../lib/sse'
 
 interface ItemState {
@@ -38,6 +45,32 @@ export function SuiteRunner({ suite, onDeleted }: Props) {
   const { data: runs = [], refetch } = useQuery({
     queryKey: ['suite-runs', suite.id],
     queryFn: () => fetchSuiteRuns(suite.id, 10),
+  })
+
+  // Baselines (F4.4) — мапа query → baseline для быстрого lookup в строках.
+  const baselinesQ = useQuery({
+    queryKey: ['suite-baselines', suite.id],
+    queryFn: () => fetchSuiteBaselines(suite.id),
+  })
+  const baselineMap = new Map<string, SuiteBaseline>()
+  for (const b of baselinesQ.data ?? []) baselineMap.set(b.query, b)
+
+  const upsertBL = useMutation({
+    mutationFn: (payload: { query: string; baseline: SuiteBaseline['baseline'] }) =>
+      upsertSuiteBaseline(suite.id, payload),
+    onSuccess: () => {
+      toast.success('Baseline сохранён')
+      void queryClient.invalidateQueries({ queryKey: ['suite-baselines', suite.id] })
+    },
+    onError: (e) => toast.error(`Не сохранён: ${e}`),
+  })
+  const deleteBL = useMutation({
+    mutationFn: (id: number) => deleteSuiteBaseline(suite.id, id),
+    onSuccess: () => {
+      toast.success('Baseline удалён')
+      void queryClient.invalidateQueries({ queryKey: ['suite-baselines', suite.id] })
+    },
+    onError: (e) => toast.error(`Не удалён: ${e}`),
   })
 
   const handleEvent = useCallback((event: string, data: unknown) => {
@@ -132,7 +165,14 @@ export function SuiteRunner({ suite, onDeleted }: Props) {
         <p className="text-xs text-gray-500">{suite.description}</p>
       )}
 
-      {items.length > 0 && <ItemsTable items={items} />}
+      {items.length > 0 && (
+        <ItemsTable
+          items={items}
+          baselines={baselineMap}
+          onSetBaseline={(q, baseline) => upsertBL.mutate({ query: q, baseline })}
+          onClearBaseline={(id) => deleteBL.mutate(id)}
+        />
+      )}
 
       {summary && (
         <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
@@ -158,31 +198,112 @@ function Cell({ label, value, accent }: { label: string; value: number | string;
   )
 }
 
-function ItemsTable({ items }: { items: ItemState[] }) {
+function ItemsTable({
+  items, baselines, onSetBaseline, onClearBaseline,
+}: {
+  items: ItemState[]
+  baselines: Map<string, SuiteBaseline>
+  onSetBaseline: (query: string, baseline: SuiteBaseline['baseline']) => void
+  onClearBaseline: (id: number) => void
+}) {
   return (
     <div className="border border-gray-800 rounded overflow-hidden">
-      {items.map(it => (
-        <div
-          key={it.idx}
-          className={clsx(
-            'flex items-center gap-3 px-3 py-2 text-sm border-b border-gray-800/50 last:border-b-0',
-            it.status === 'running' && 'bg-blue-950/20',
-            it.status === 'ok'      && 'bg-green-950/10',
-            it.status === 'partial' && 'bg-orange-950/15',
-            it.status === 'error'   && 'bg-red-950/20',
-          )}
-        >
-          <span className="w-8 text-xs text-gray-500 font-mono">{it.idx}/{it.total}</span>
-          <StatusIcon status={it.status} />
-          <span className="flex-1 text-gray-200 truncate">{it.query}</span>
-          {it.ms != null && <span className="text-xs text-gray-400 font-mono">{it.ms}ms</span>}
-          {it.error && (
-            <span className="text-xs text-red-400 max-w-[40%] truncate" title={it.error}>
-              {it.error}
-            </span>
-          )}
-        </div>
-      ))}
+      {items.map(it => {
+        const bl = baselines.get(it.query)
+        return (
+          <BaselineRow
+            key={it.idx} item={it}
+            baseline={bl}
+            onSetBaseline={onSetBaseline}
+            onClearBaseline={onClearBaseline}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+function BaselineRow({
+  item, baseline, onSetBaseline, onClearBaseline,
+}: {
+  item: ItemState
+  baseline?: SuiteBaseline
+  onSetBaseline: (query: string, baseline: SuiteBaseline['baseline']) => void
+  onClearBaseline: (id: number) => void
+}) {
+  // Локальная оценка pass/fail для UI: если у строки есть baseline и
+  // прогон закончился, сравним min_count vs ms_total ничего не даст —
+  // нам надо счётчик товаров. У ItemState счётчика нет, но у baseline
+  // есть min_count и UI хочет хотя бы показать «было N, ожидаем ≥M».
+  // Для MVP просто показываем «есть baseline» / «нет baseline»,
+  // фактический pass/fail — когда добавим product_count в ItemState.
+
+  const hasBaseline = !!baseline
+
+  return (
+    <div
+      className={clsx(
+        'flex items-center gap-3 px-3 py-2 text-sm border-b border-gray-800/50 last:border-b-0',
+        item.status === 'running' && 'bg-blue-950/20',
+        item.status === 'ok'      && 'bg-green-950/10',
+        item.status === 'partial' && 'bg-orange-950/15',
+        item.status === 'error'   && 'bg-red-950/20',
+      )}
+    >
+      <span className="w-8 text-xs text-gray-500 font-mono">{item.idx}/{item.total}</span>
+      <StatusIcon status={item.status} />
+      <span className="flex-1 text-gray-200 truncate">{item.query}</span>
+      {item.ms != null && <span className="text-xs text-gray-400 font-mono">{item.ms}ms</span>}
+      {item.error && (
+        <span className="text-xs text-red-400 max-w-[40%] truncate" title={item.error}>
+          {item.error}
+        </span>
+      )}
+
+      {/* Baseline-controls */}
+      {hasBaseline ? (
+        <span className="flex items-center gap-1.5 text-xs">
+          <span className="flex items-center gap-1 px-1.5 py-0.5 bg-violet-900/40 text-violet-200 rounded" title="есть baseline">
+            <Pin size={10} />
+            {baseline!.baseline.min_count != null && `≥${baseline!.baseline.min_count}`}
+            {!baseline!.baseline.min_count && 'baseline'}
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              if (window.confirm(`Удалить baseline для «${item.query}»?`))
+                onClearBaseline(baseline!.id)
+            }}
+            className="p-0.5 text-gray-500 hover:text-red-400 hover:bg-red-950/30 rounded"
+            title="удалить baseline"
+          >
+            <X size={11} />
+          </button>
+        </span>
+      ) : (
+        item.status !== 'pending' && item.status !== 'running' && (
+          <button
+            type="button"
+            onClick={() => {
+              const minCountStr = window.prompt(
+                `Baseline для «${item.query}»\n\nМинимальное число товаров (целое):`,
+                '5',
+              )
+              if (minCountStr == null) return
+              const minCount = parseInt(minCountStr, 10)
+              if (Number.isNaN(minCount)) {
+                toast.error('Нужно целое число')
+                return
+              }
+              onSetBaseline(item.query, { min_count: minCount })
+            }}
+            className="p-1 text-gray-500 hover:text-violet-300 hover:bg-violet-950/40 rounded"
+            title="зафиксировать как baseline"
+          >
+            <Pin size={12} />
+          </button>
+        )
+      )}
     </div>
   )
 }

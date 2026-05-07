@@ -76,6 +76,51 @@ async def update_suite(
     return _suite_to_schema(suite)
 
 
+@router.get("/{suite_id}/baselines")
+async def list_baselines(
+    suite_id: int,
+    db: Annotated[PortalDB, Depends(get_portal_db)],
+) -> list[dict]:
+    """Все baseline'ы сьюта. UI помечает запросы, для которых baseline есть."""
+    suite = await db.get_suite(suite_id)
+    if not suite:
+        raise HTTPException(status_code=404, detail="suite not found")
+    return await db.list_baselines(suite_id)
+
+
+@router.put("/{suite_id}/baselines")
+async def upsert_baseline(
+    suite_id: int,
+    body: dict,  # {query, baseline: {min_count?, expected_stores?, min_field_coverage?, notes?}}
+    db: Annotated[PortalDB, Depends(get_portal_db)],
+) -> dict:
+    """Сохранить/обновить baseline для (suite, query).
+
+    UNIQUE по (suite_id, query) — повторный вызов перезаписывает baseline.
+    """
+    suite = await db.get_suite(suite_id)
+    if not suite:
+        raise HTTPException(status_code=404, detail="suite not found")
+    query = body.get("query")
+    baseline = body.get("baseline")
+    if not isinstance(query, str) or not query.strip():
+        raise HTTPException(status_code=400, detail="query (str) required")
+    if not isinstance(baseline, dict):
+        raise HTTPException(status_code=400, detail="baseline (dict) required")
+    return await db.upsert_baseline(suite_id, query, baseline)
+
+
+@router.delete("/{suite_id}/baselines/{baseline_id}", status_code=204)
+async def delete_baseline(
+    suite_id: int,
+    baseline_id: int,
+    db: Annotated[PortalDB, Depends(get_portal_db)],
+) -> None:
+    ok = await db.delete_baseline(baseline_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="baseline not found")
+
+
 @router.delete("/{suite_id}")
 async def delete_suite(
     suite_id: int,

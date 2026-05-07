@@ -128,6 +128,21 @@ _MIGRATIONS: list[str] = [
         created_at      TEXT NOT NULL
     );
     """,
+    # F4.4: baselines на конкретный (suite, query). Хранят expected-метрики:
+    # min_count, expected_stores, min_field_coverage. UI помечает запуски
+    # как pass/fail сравнивая фактический результат с baseline.
+    """
+    CREATE TABLE IF NOT EXISTS suite_baselines (
+        id              INTEGER PRIMARY KEY AUTOINCREMENT,
+        suite_id        INTEGER NOT NULL,
+        query           TEXT NOT NULL,
+        baseline_json   TEXT NOT NULL,
+        created_at      TEXT NOT NULL,
+        updated_at      TEXT NOT NULL,
+        UNIQUE(suite_id, query)
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_suite_baselines ON suite_baselines(suite_id);",
 ]
 
 
@@ -537,7 +552,69 @@ class PortalDB:
             (suite_id,),
         )
         await self.conn.execute("DELETE FROM suite_runs WHERE suite_id = ?", (suite_id,))
+        await self.conn.execute("DELETE FROM suite_baselines WHERE suite_id = ?", (suite_id,))
         cur = await self.conn.execute("DELETE FROM test_suites WHERE id = ?", (suite_id,))
+        await self.conn.commit()
+        return cur.rowcount > 0
+
+    # ── Suite baselines (F4.4) ─────────────────────────────────────────────
+
+    async def upsert_baseline(
+        self, suite_id: int, query: str, baseline: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Сохранить или обновить baseline для (suite, query).
+
+        baseline: {min_count, expected_stores[], min_field_coverage{},
+                   notes}. Хранится сериализованным — проверять структуру
+        будем в compare на чтении.
+        """
+        now = _utc_now_iso()
+        # ON CONFLICT по UNIQUE(suite_id, query) — апдейтим baseline_json
+        # и updated_at, created_at не трогаем.
+        cur = await self.conn.execute(
+            """
+            INSERT INTO suite_baselines (suite_id, query, baseline_json, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(suite_id, query) DO UPDATE SET
+                baseline_json = excluded.baseline_json,
+                updated_at = excluded.updated_at
+            RETURNING id, created_at, updated_at
+            """,
+            (suite_id, query, json.dumps(baseline, ensure_ascii=False), now, now),
+        )
+        row = await cur.fetchone()
+        await self.conn.commit()
+        return {
+            "id": int(row["id"]) if row else 0,
+            "suite_id": suite_id,
+            "query": query,
+            "baseline": baseline,
+            "created_at": row["created_at"] if row else now,
+            "updated_at": row["updated_at"] if row else now,
+        }
+
+    async def list_baselines(self, suite_id: int) -> list[dict[str, Any]]:
+        cur = await self.conn.execute(
+            "SELECT * FROM suite_baselines WHERE suite_id = ? ORDER BY query",
+            (suite_id,),
+        )
+        rows = await cur.fetchall()
+        return [_row_to_baseline(r) for r in rows]
+
+    async def get_baseline(
+        self, suite_id: int, query: str,
+    ) -> dict[str, Any] | None:
+        cur = await self.conn.execute(
+            "SELECT * FROM suite_baselines WHERE suite_id = ? AND query = ?",
+            (suite_id, query),
+        )
+        row = await cur.fetchone()
+        return _row_to_baseline(row) if row else None
+
+    async def delete_baseline(self, baseline_id: int) -> bool:
+        cur = await self.conn.execute(
+            "DELETE FROM suite_baselines WHERE id = ?", (baseline_id,),
+        )
         await self.conn.commit()
         return cur.rowcount > 0
 
@@ -711,6 +788,17 @@ def _row_to_suite(row: aiosqlite.Row) -> dict[str, Any]:
         "name": row["name"],
         "description": row["description"],
         "queries": json.loads(row["queries_json"] or "[]"),
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def _row_to_baseline(row: aiosqlite.Row) -> dict[str, Any]:
+    return {
+        "id": row["id"],
+        "suite_id": row["suite_id"],
+        "query": row["query"],
+        "baseline": json.loads(row["baseline_json"] or "{}"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
