@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import os
 import re
 import sys
 import time
@@ -30,7 +31,12 @@ from typing import Any
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-DATABASE_URL = "postgresql+asyncpg://catalog:catalog@localhost:5433/catalog"
+from catalog.models import Game, GameBgg
+
+# Дефолт для запуска с хоста (через port mapping bg-postgres :5433 → :5432).
+# Переопределяется ENV `DATABASE_URL`, что позволяет запускать скрипт и
+# внутри docker-контейнера (где DATABASE_URL=postgresql+asyncpg://catalog:catalog@postgres:5432/catalog).
+DEFAULT_DSN = "postgresql+asyncpg://catalog:catalog@localhost:5433/catalog"
 BATCH = 1000
 
 
@@ -108,11 +114,8 @@ def split_row(row: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]] | No
 
 
 async def main(csv_path: str) -> None:
-    engine = create_async_engine(DATABASE_URL)
+    engine = create_async_engine(os.getenv("DATABASE_URL", DEFAULT_DSN))
     SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
-
-    sys.path.insert(0, "/Users/vitaliy/Projects/boardgames-catalog")
-    from catalog.models import Game, GameBgg  # noqa: E402
 
     total_seen = 0
     total_upserted = 0
