@@ -17,10 +17,9 @@ from sqlalchemy import pool
 from catalog.config import get_settings
 from catalog.db import Base
 
-# Импортируем модели здесь, чтобы они зарегистрировались в Base.metadata
-# до того, как Alembic будет автогенерировать миграции. На этапе skeleton'а
-# моделей ещё нет — добавятся на этапе 2.
-# from catalog import models  # noqa: F401
+# Импортируем модели, чтобы они зарегистрировались в Base.metadata
+# до того, как Alembic будет автогенерировать миграции.
+from catalog import models  # noqa: F401
 
 config = context.config
 
