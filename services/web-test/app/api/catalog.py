@@ -1,0 +1,84 @@
+"""Прокси к boardgames-catalog для UI ручного матчинга.
+
+Все эндпоинты живут под /api/catalog. Контракт идентичен upstream'у — мы
+лишь форвардим запросы, чтобы фронту не нужно было ходить cross-origin.
+"""
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.catalog_client import CatalogClient, CatalogServiceError
+from app.deps import get_catalog_client
+
+router = APIRouter(prefix="/catalog", tags=["catalog"])
+
+
+@router.get("/health")
+async def catalog_health(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.health()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"catalog unreachable: {e}") from e
+
+
+@router.get("/games")
+async def list_games(
+    q: str | None = Query(None),
+    limit: int = Query(20, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.list_games(q=q, limit=limit, offset=offset)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/games/{game_id}")
+async def get_game(
+    game_id: int, client: CatalogClient = Depends(get_catalog_client)
+) -> dict:
+    try:
+        return await client.get_game(game_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/queue")
+async def matching_queue(
+    store: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.matching_queue(store=store, limit=limit, offset=offset)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/{offer_id}/link")
+async def link_offer(
+    offer_id: int,
+    body: dict,  # {"game_id": int}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    game_id = body.get("game_id")
+    if not isinstance(game_id, int):
+        raise HTTPException(status_code=400, detail="game_id (int) required")
+    try:
+        return await client.link_offer(offer_id, game_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/{offer_id}/reject")
+async def reject_offer(
+    offer_id: int, client: CatalogClient = Depends(get_catalog_client)
+) -> dict:
+    try:
+        return await client.reject_offer(offer_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
