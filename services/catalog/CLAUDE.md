@@ -37,8 +37,23 @@ uv sync --all-packages --group dev
 # Из корня монорепо:
 uv run --package boardgames-catalog uvicorn catalog.api:app --reload --port 8002
 
-# Тесты — запускать из services/catalog/, иначе pytest сталкивается с conftest'ами других сервисов
+# Тесты — запускать из services/catalog/, иначе pytest сталкивается с conftest'ами других сервисов.
+# Conftest защищён от запуска на prod БД: имя БД должно содержать 'test'.
+# Дефолт = catalog_test (создаётся отдельно — см. ниже).
 cd services/catalog && uv run pytest -v
+
+# Создать тестовую БД и накатить миграции (один раз):
+docker exec bg-postgres createdb -U catalog catalog_test
+docker exec bg-postgres psql -U catalog -d catalog_test \
+  -c "CREATE EXTENSION IF NOT EXISTS pg_trgm; CREATE EXTENSION IF NOT EXISTS unaccent;"
+cd services/catalog && \
+  DATABASE_URL='postgresql+asyncpg://catalog:catalog@localhost:5433/catalog_test' \
+  uv run --package boardgames-catalog alembic upgrade head
+
+# Если в .env стоит DATABASE_URL=...catalog (prod) — pytest упадёт с понятным
+# сообщением. Решение: явно прокинуть TEST_DATABASE_URL:
+TEST_DATABASE_URL='postgresql+asyncpg://catalog:catalog@localhost:5433/catalog_test' \
+  cd services/catalog && uv run pytest
 
 # Миграции — alembic.ini лежит в services/catalog/, запускать оттуда
 cd services/catalog && uv run --package boardgames-catalog alembic revision --autogenerate -m "..."
@@ -272,6 +287,7 @@ docker compose exec catalog python -m catalog.cli create-key --owner parsers --s
 - **Merge games не удаляет source**: после `POST /games/merge` source-игра помечается `status='merged'` и пишет `meta.merged_into=target_id`. Для трассировки auto-match'ей, которые могли сослаться на старый id. Реальные offers и aliases переезжают на target. UI (`web-test`) фильтрует merged-игры через `status` колонку.
 - **`reassess` уважает `manual`/`rejected`**: операторские решения не пересчитываются — single-reassess отвечает 409, batch-reassess их игнорирует через WHERE `match_status='unmatched'`. Чтобы пересмотреть manual-связку — сначала reject/unlink вручную.
 - **`find_match_candidates` группирует per-game**: одна игра может всплыть и через `title`, и через `alias` одновременно — берём `MAX(score)` и `via` от лучшего. Иначе UI показывал бы дубль одной игры со score 0.85 и 0.72.
+- **Conftest защита от prod БД** (`tests/conftest.py:38-83`): фикстура `clean_db` делает `TRUNCATE ... CASCADE`. Чтобы не уничтожить prod, conftest падает при загрузке, если имя БД не содержит `test`. Резолвит URL по приоритету `TEST_DATABASE_URL` → `DATABASE_URL` → дефолт `catalog_test`. Прецедент: 2026-05-07 случайный pytest на prod БД с `DATABASE_URL=...catalog` обнулил 162K игр.
 
 ## Запреты
 

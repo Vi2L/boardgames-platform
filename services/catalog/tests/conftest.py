@@ -5,6 +5,12 @@ DB-зависимые тесты автоматически пропускают
 
 Стратегия: каждый тест получает соединение, оборачивает в SAVEPOINT и
 откатывает в конце — чтобы не загрязнять БД и не зависеть от порядка.
+
+⚠ ЗАЩИТА ОТ TRUNCATE prod БД ⚠
+Фикстура `clean_db` в test_games_api.py делает TRUNCATE с CASCADE — на
+prod БД это разрушительно. Поэтому модуль на старте проверяет, что URL
+указывает на тестовую БД (имя содержит 'test'). Иначе pytest падает
+сразу, не запустив ни одного теста. Прецедент: 2026-05-07.
 """
 from __future__ import annotations
 
@@ -14,18 +20,76 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.ext.asyncio import (
     AsyncConnection,
     AsyncEngine,
     create_async_engine,
 )
 
+# Дефолт — отдельная тестовая БД. Если её ещё нет, создать командой:
+#   docker exec bg-postgres createdb -U catalog catalog_test
+#   cd services/catalog && DATABASE_URL='postgresql+asyncpg://catalog:catalog@localhost:5433/catalog_test' \
+#     uv run --package boardgames-catalog alembic upgrade head
+_DEFAULT_TEST_URL = "postgresql+asyncpg://catalog:catalog@localhost:5433/catalog_test"
+
+
+def _resolve_test_url() -> str:
+    """Выбирает URL тестовой БД с приоритетом: TEST_DATABASE_URL → DATABASE_URL → дефолт.
+
+    TEST_DATABASE_URL — явное указание тестовой БД. Используется в первую
+    очередь, чтобы можно было держать DATABASE_URL=...prod в .env (для
+    docker-compose / alembic), а тесты направить на отдельную БД.
+    """
+    return (
+        os.getenv("TEST_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or _DEFAULT_TEST_URL
+    )
+
+
+def _assert_test_db(url: str) -> None:
+    """Падает, если URL не похож на тестовую БД.
+
+    Why: фикстура clean_db делает TRUNCATE TABLE games, ... CASCADE.
+    На prod БД (~162K игр) это уничтожит данные за миллисекунды.
+    Простое правило 'имя БД содержит test' — дешёвый и эффективный guard.
+    """
+    db_name = make_url(url).database or ""
+    if "test" not in db_name.lower():
+        raise RuntimeError(
+            "\n"
+            "╔══════════════════════════════════════════════════════════════════╗\n"
+            "║  ОТКАЗ ЗАПУСТИТЬ ТЕСТЫ: БД '{name}' не похожа на тестовую\n"
+            "╠══════════════════════════════════════════════════════════════════╣\n"
+            "║  Conftest использует TRUNCATE с CASCADE — на prod БД это\n"
+            "║  уничтожит данные. Имя БД должно содержать 'test'.\n"
+            "║\n"
+            "║  Решение: создать отдельную тестовую БД (один раз):\n"
+            "║    docker exec bg-postgres createdb -U catalog catalog_test\n"
+            "║    cd services/catalog && \\\n"
+            "║      DATABASE_URL='postgresql+asyncpg://catalog:catalog@localhost:5433/catalog_test' \\\n"
+            "║      uv run --package boardgames-catalog alembic upgrade head\n"
+            "║\n"
+            "║  И запускать pytest с переменной TEST_DATABASE_URL:\n"
+            "║    export TEST_DATABASE_URL='postgresql+asyncpg://catalog:catalog@localhost:5433/catalog_test'\n"
+            "║    uv run pytest\n"
+            "╚══════════════════════════════════════════════════════════════════╝\n"
+            .format(name=db_name)
+        )
+
+
+# Выполняется один раз при загрузке conftest — до любых импортов из catalog.api,
+# которые читают DATABASE_URL через pydantic-settings.
+_TEST_URL = _resolve_test_url()
+_assert_test_db(_TEST_URL)
+# Прокидываем в env, чтобы catalog.api.app (импортируется в test_games_api.py)
+# создавал свой engine на тестовой БД, а не на той, что в .env.
+os.environ["DATABASE_URL"] = _TEST_URL
+
 
 def _db_url() -> str:
-    return os.getenv(
-        "DATABASE_URL",
-        "postgresql+asyncpg://catalog:catalog@localhost:5433/catalog",
-    )
+    return _TEST_URL
 
 
 def _db_available() -> bool:
