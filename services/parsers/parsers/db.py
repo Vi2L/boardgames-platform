@@ -87,6 +87,19 @@ CREATE TABLE IF NOT EXISTS parser_snapshot (
     kind         TEXT    NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_snapshot_lookup ON parser_snapshot (store_slug, ts DESC);
+
+-- F5.1: Dead-Letter Queue для неудачных POST в catalog/ingest. Когда
+-- catalog недоступен, payload не теряется — попадает сюда. Позже
+-- админ может через UI запустить replay-all (parsers сам POST'ит из DLQ).
+CREATE TABLE IF NOT EXISTS catalog_dlq (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    payload_json    TEXT    NOT NULL,
+    attempt_count   INTEGER NOT NULL DEFAULT 1,
+    last_error      TEXT,
+    created_at      TEXT    NOT NULL,
+    last_attempt_at TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_dlq_created ON catalog_dlq (created_at DESC);
 """
 
 # Колонки добавлены после начального деплоя — применяем как миграцию
@@ -303,6 +316,87 @@ class PriceDatabase:
                  json.dumps(errors, ensure_ascii=False), ts),
             )
             await db.commit()
+
+    # ── Catalog DLQ (F5.1) ────────────────────────────────────────────
+
+    async def dlq_save(
+        self, payload_json: str, error: str,
+    ) -> int:
+        """Сохранить failed-payload в DLQ."""
+        ts = _utcnow().isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute(
+                """
+                INSERT INTO catalog_dlq
+                  (payload_json, attempt_count, last_error, created_at, last_attempt_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (payload_json, 1, error, ts, ts),
+            )
+            await db.commit()
+            return int(cur.lastrowid or 0)
+
+    async def dlq_list(
+        self, limit: int = 100, offset: int = 0,
+    ) -> dict:
+        """Метаданные элементов DLQ (без payload)."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT COUNT(*) FROM catalog_dlq",
+            ) as cur:
+                total_row = await cur.fetchone()
+            total = int(total_row[0]) if total_row else 0
+
+            async with db.execute(
+                """
+                SELECT id, attempt_count, last_error, created_at, last_attempt_at,
+                       length(payload_json) AS payload_size
+                FROM catalog_dlq
+                ORDER BY created_at DESC
+                LIMIT ? OFFSET ?
+                """,
+                (limit, offset),
+            ) as cur:
+                rows = await cur.fetchall()
+        return {
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+            "items": [dict(r) for r in rows],
+        }
+
+    async def dlq_get(self, dlq_id: int) -> dict | None:
+        """Полный DLQ-элемент с payload (для replay)."""
+        async with aiosqlite.connect(self._path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM catalog_dlq WHERE id = ?", (dlq_id,),
+            ) as cur:
+                row = await cur.fetchone()
+        return dict(row) if row else None
+
+    async def dlq_mark_attempt(self, dlq_id: int, error: str | None) -> None:
+        """Обновить attempt_count и last_error после попытки replay."""
+        ts = _utcnow().isoformat()
+        async with aiosqlite.connect(self._path) as db:
+            await db.execute(
+                """
+                UPDATE catalog_dlq
+                SET attempt_count = attempt_count + 1,
+                    last_attempt_at = ?,
+                    last_error = ?
+                WHERE id = ?
+                """,
+                (ts, error, dlq_id),
+            )
+            await db.commit()
+
+    async def dlq_delete(self, dlq_id: int) -> bool:
+        async with aiosqlite.connect(self._path) as db:
+            cur = await db.execute("DELETE FROM catalog_dlq WHERE id = ?", (dlq_id,))
+            await db.commit()
+            return cur.rowcount > 0
 
     async def delete_observation(self, observation_id: int) -> bool:
         """Удалить одну ошибочную price-observation.

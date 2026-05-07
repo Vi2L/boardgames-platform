@@ -194,6 +194,50 @@ export const deleteParsersObservation = async (id: number) => {
   if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
 }
 
+// ── DLQ (F5.1) ───────────────────────────────────────────────────────
+
+export type DlqItem = {
+  id: number
+  attempt_count: number
+  last_error: string | null
+  created_at: string
+  last_attempt_at: string
+  payload_size: number
+}
+
+export type DlqListResponse = {
+  total: number
+  limit: number
+  offset: number
+  items: DlqItem[]
+}
+
+export type DlqReplayResult = {
+  status: 'ok' | 'failed'
+  deleted?: boolean
+  error?: string | null
+}
+
+export type DlqReplayAllResult = {
+  replayed: number
+  success: number
+  failed: number
+}
+
+export const fetchDlq = (limit = 100, offset = 0) =>
+  fetch(`${BASE}/dlq?limit=${limit}&offset=${offset}`).then(r => json<DlqListResponse>(r))
+
+export const replayDlq = (id: number) =>
+  fetch(`${BASE}/dlq/${id}/replay`, { method: 'POST' }).then(r => json<DlqReplayResult>(r))
+
+export const replayDlqAll = (limit = 50) =>
+  fetch(`${BASE}/dlq/replay-all?limit=${limit}`, { method: 'POST' }).then(r => json<DlqReplayAllResult>(r))
+
+export const deleteDlq = async (id: number) => {
+  const r = await fetch(`${BASE}/dlq/${id}`, { method: 'DELETE' })
+  if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
+}
+
 // ── Cache invalidation ──────────────────────────────────────────────────
 
 export interface CacheInvalidateResult {

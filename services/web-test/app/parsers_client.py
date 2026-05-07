@@ -209,6 +209,32 @@ class ParsersClient:
         resp.raise_for_status()
         return resp.json()
 
+    # ── DLQ (F5.1) ──────────────────────────────────────────────────────
+
+    async def dlq_list(self, limit: int = 100, offset: int = 0) -> dict:
+        resp = await self._client.get(
+            "/api/dlq", params={"limit": limit, "offset": offset},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def dlq_replay(self, dlq_id: int) -> dict:
+        resp = await self._client.post(f"/api/dlq/{dlq_id}/replay")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def dlq_replay_all(self, limit: int = 50) -> dict:
+        resp = await self._client.post("/api/dlq/replay-all", params={"limit": limit})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def dlq_delete(self, dlq_id: int) -> bool:
+        resp = await self._client.request("DELETE", f"/api/dlq/{dlq_id}")
+        if resp.status_code == 404:
+            return False
+        resp.raise_for_status()
+        return True
+
     async def delete_parsers_observation(self, observation_id: int) -> bool:
         """DELETE /api/db/observations/{id} → удалить одну точку истории."""
         resp = await self._client.request(

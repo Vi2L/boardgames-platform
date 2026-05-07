@@ -46,6 +46,8 @@ async def lifespan(app: FastAPI):
         url=os.getenv("CATALOG_INGEST_URL"),
         api_key=os.getenv("CATALOG_API_KEY"),
     )
+    # F5.1: при сбое отправки payload фолбэкается в DLQ (catalog_dlq table).
+    _catalog_publisher.attach_db(_db)
     await _catalog_publisher.start()
 
     parsers = [
@@ -226,6 +228,62 @@ async def debug_fetch_url(
             for h in resp.history
         ],
     }
+
+
+# ---------------------------------------------------------------------------
+# DLQ для catalog ingest (F5.1)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/dlq")
+async def dlq_list(limit: int = Query(100, ge=1, le=500), offset: int = Query(0, ge=0)):
+    """Список DLQ-записей без payload (для UI-таблицы)."""
+    return await _db.dlq_list(limit=limit, offset=offset)
+
+
+@app.post("/api/dlq/{dlq_id}/replay")
+async def dlq_replay(dlq_id: int):
+    """Повторить отправку одного DLQ-payload в catalog.
+
+    При успехе запись удаляется из DLQ. При повторной ошибке — обновляются
+    attempt_count и last_error, payload остаётся для следующих попыток.
+    """
+    item = await _db.dlq_get(dlq_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="DLQ item not found")
+    ok, err = await _catalog_publisher.replay(item["payload_json"])
+    if ok:
+        await _db.dlq_delete(dlq_id)
+        return {"status": "ok", "deleted": True}
+    await _db.dlq_mark_attempt(dlq_id, err)
+    return {"status": "failed", "error": err}
+
+
+@app.post("/api/dlq/replay-all")
+async def dlq_replay_all(limit: int = Query(50, ge=1, le=200)):
+    """Batch-replay: попытать первые N записей по created_at."""
+    page = await _db.dlq_list(limit=limit, offset=0)
+    success = 0
+    failed = 0
+    for meta in page["items"]:
+        item = await _db.dlq_get(meta["id"])
+        if item is None:
+            continue
+        ok, err = await _catalog_publisher.replay(item["payload_json"])
+        if ok:
+            await _db.dlq_delete(item["id"])
+            success += 1
+        else:
+            await _db.dlq_mark_attempt(item["id"], err)
+            failed += 1
+    return {"replayed": success + failed, "success": success, "failed": failed}
+
+
+@app.delete("/api/dlq/{dlq_id}", status_code=204)
+async def dlq_delete(dlq_id: int):
+    ok = await _db.dlq_delete(dlq_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="DLQ item not found")
 
 
 @app.delete("/api/cache")
