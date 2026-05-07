@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Query
 
 from app.deps import get_parsers_client
-from app.schemas import PriceDeltaOut, PricePointOut
+from app.schemas import PriceDeltaOut, PricePointOut, PriceStatsOut
 
 router = APIRouter(prefix="/products", tags=["history"])
 
@@ -81,6 +81,62 @@ async def get_recent_deltas(
             curr_price_rub=curr.price_rub,
             delta_pct=delta_pct,
             days_between=days_between,
+        ))
+
+    return out
+
+
+@router.get("/price-stats", response_model=list[PriceStatsOut])
+async def get_price_stats(
+    ids: str = Query(..., description="ID товаров через запятую"),
+) -> list[PriceStatsOut]:
+    """Min цены: за 30 дней и за всё время — пакетно.
+
+    Берём те же точки `price_observations`, что и `/history`, но считаем
+    агрегаты на стороне web-test, чтобы не плодить новые endpoints в
+    parsers. Один запрос вместо N — экономия round-trip-ов в ResultsTable.
+    """
+    raw_ids: list[int] = []
+    for part in ids.split(","):
+        part = part.strip()
+        if part.isdigit():
+            raw_ids.append(int(part))
+    if not raw_ids:
+        return []
+
+    client = get_parsers_client()
+    histories = await client.get_history_batch(raw_ids)
+
+    cutoff_30d = datetime.now(timezone.utc) - timedelta(days=30)
+
+    out: list[PriceStatsOut] = []
+    for pid in raw_ids:
+        history = histories.get(pid, [])
+        if not history:
+            out.append(PriceStatsOut(product_id=pid))
+            continue
+
+        prices_all: list[float] = []
+        prices_30d: list[float] = []
+        for p in history:
+            if p.price_rub <= 0:
+                continue
+            prices_all.append(p.price_rub)
+            ts = _parse_iso(p.fetched_at)
+            if ts is None:
+                continue
+            # ISO без tzinfo трактуем как UTC, чтобы сравнение не падало.
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts >= cutoff_30d:
+                prices_30d.append(p.price_rub)
+
+        out.append(PriceStatsOut(
+            product_id=pid,
+            min_30d_rub=min(prices_30d) if prices_30d else None,
+            min_all_rub=min(prices_all) if prices_all else None,
+            points_30d=len(prices_30d),
+            points_all=len(prices_all),
         ))
 
     return out

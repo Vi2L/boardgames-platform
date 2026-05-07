@@ -65,6 +65,19 @@ class PriceDeltaOut(BaseModel):
     days_between: float | None = None
 
 
+class PriceStatsOut(BaseModel):
+    """Агрегаты цены по истории — min за 30 дней и за всё время.
+
+    Считается по тем же точкам price_observations, что и /history. None,
+    если истории нет (товар увидели впервые в этом запуске).
+    """
+    product_id: int
+    min_30d_rub: float | None = None
+    min_all_rub: float | None = None
+    points_30d: int = 0
+    points_all: int = 0
+
+
 # ── DatabasePage схемы (фаза 3) ─────────────────────────────────────────────
 
 class ProductsPage(BaseModel):

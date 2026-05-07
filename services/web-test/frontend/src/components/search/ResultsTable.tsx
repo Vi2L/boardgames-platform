@@ -4,8 +4,9 @@ import {
   ArrowDownRight, ArrowUpRight, Minus,
 } from 'lucide-react'
 import clsx from 'clsx'
-import type { PriceDeltaOut, ProductOut } from '../../types/api'
+import type { PriceDeltaOut, PriceStatsOut, ProductOut } from '../../types/api'
 import { getStoreBadgeColor, getStoreLabel } from '../../lib/stores'
+import { isInStock } from '../../lib/offer'
 import type { AdjustedPrice } from '../../lib/loyalty'
 import { DiscountCell } from './DiscountCell'
 
@@ -15,6 +16,11 @@ interface Props {
   deltas?: Map<number, PriceDeltaOut>
   /** Скидки лояльности (id → AdjustedPrice). Пустой Map = нет личных скидок. */
   adjusted?: Map<number, AdjustedPrice>
+  /** Min цены (30д / всё время) пакетом. */
+  priceStats?: Map<number, PriceStatsOut>
+  /** Включён ли фильтр «Показать товары не в наличии». Если включён — рисуем
+   *  бейдж «не в наличии» у тех строк, где availability=false. */
+  showOutOfStock?: boolean
   onSelect: (product: ProductOut) => void
 }
 
@@ -83,7 +89,23 @@ function effectivePrice(p: ProductOut, adjusted?: Map<number, AdjustedPrice>): n
   return adjusted?.get(p.id)?.finalRub ?? p.price_rub
 }
 
-export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
+function formatRubShort(rub: number | null | undefined): string {
+  if (rub == null) return '—'
+  return `${Math.round(rub).toLocaleString('ru-RU')} ₽`
+}
+
+function OutOfStockBadge() {
+  return (
+    <span
+      title="Товар сейчас не в наличии в магазине"
+      className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase bg-gray-800 text-gray-400 border border-gray-700"
+    >
+      не в наличии
+    </span>
+  )
+}
+
+export function ResultsTable({ products, deltas, adjusted, priceStats, showOutOfStock, onSelect }: Props) {
   // Дефолт — цена по возрастанию (сохраняем прежнее поведение). По клику на
   // тот же ключ — флипаем направление; на другой ключ — переключаем ключ и
   // сбрасываем dir в asc, чтобы интерфейс был предсказуем.
@@ -188,6 +210,8 @@ export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden lg:table-cell">Параметры</th>
               <SortableTh keyName="price" label="Цена" />
               <th className="px-2 py-2.5 text-left text-xs text-gray-500 font-medium whitespace-nowrap" title="Скидки и личные программы лояльности">♢</th>
+              <th className="px-3 py-2.5 text-right text-xs text-gray-500 font-medium hidden xl:table-cell whitespace-nowrap" title="Минимальная цена за последние 30 дней по истории price_observations">Min 30д</th>
+              <th className="px-3 py-2.5 text-right text-xs text-gray-500 font-medium hidden xl:table-cell whitespace-nowrap" title="Минимальная цена за всё время наблюдений">Min всё</th>
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden xl:table-cell whitespace-nowrap" title="Изменение цены между двумя последними точками истории">Δ</th>
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden lg:table-cell">Дата</th>
             </tr>
@@ -213,7 +237,10 @@ export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
                 </td>
                 <td className="px-3 py-2.5">{renderStoreBadge(p.store_slug)}</td>
                 <td className="px-3 py-2.5 max-w-xs">
-                  <div className="font-medium text-gray-200 truncate" title={p.title}>{p.title}</div>
+                  <div className="flex items-center gap-1.5">
+                    <div className="font-medium text-gray-200 truncate" title={p.title}>{p.title}</div>
+                    {showOutOfStock && !isInStock(p) && <OutOfStockBadge />}
+                  </div>
                   {p.description && (
                     <div className="text-xs text-gray-500 truncate mt-0.5" title={p.description}>
                       {p.description}
@@ -226,6 +253,12 @@ export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
                 </td>
                 <td className="px-2 py-2.5 whitespace-nowrap">
                   <DiscountCell p={p} adjusted={adjusted?.get(p.id)} />
+                </td>
+                <td className="px-3 py-2.5 hidden xl:table-cell text-right text-xs text-gray-300 whitespace-nowrap">
+                  {formatRubShort(priceStats?.get(p.id)?.min_30d_rub)}
+                </td>
+                <td className="px-3 py-2.5 hidden xl:table-cell text-right text-xs text-gray-300 whitespace-nowrap">
+                  {formatRubShort(priceStats?.get(p.id)?.min_all_rub)}
                 </td>
                 <td className="px-3 py-2.5 hidden xl:table-cell">
                   <PriceDelta delta={deltas?.get(p.id)} />
@@ -289,8 +322,9 @@ export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
               <div className="w-14 h-14 flex-shrink-0 rounded bg-gray-800" />
             )}
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2 mb-1">
+              <div className="flex items-center gap-2 mb-1 flex-wrap">
                 {renderStoreBadge(p.store_slug)}
+                {showOutOfStock && !isInStock(p) && <OutOfStockBadge />}
                 <span className="text-xs text-gray-500">{timeAgo(p.fetched_at)}</span>
               </div>
               <div className="font-medium text-gray-200 line-clamp-2 mb-1">{p.title}</div>
@@ -304,6 +338,16 @@ export function ResultsTable({ products, deltas, adjusted, onSelect }: Props) {
                 </div>
                 {renderParams(p)}
               </div>
+              {priceStats?.get(p.id) && (
+                <div className="mt-1 flex items-center gap-3 text-[10px] text-gray-500">
+                  <span title="Минимум за 30 дней">
+                    Min 30д: <span className="text-gray-300">{formatRubShort(priceStats.get(p.id)!.min_30d_rub)}</span>
+                  </span>
+                  <span title="Минимум за всё время">
+                    Min всё: <span className="text-gray-300">{formatRubShort(priceStats.get(p.id)!.min_all_rub)}</span>
+                  </span>
+                </div>
+              )}
             </div>
           </button>
         ))}

@@ -5,7 +5,7 @@ import { Clock, Zap, AlertCircle, CheckCircle2, Save, Star, Eye, EyeOff, Downloa
 import clsx from 'clsx'
 import { toast } from 'sonner'
 import {
-  createFavorite, createSnapshot, fetchRecentDeltas, fetchStores,
+  createFavorite, createSnapshot, fetchPriceStats, fetchRecentDeltas, fetchStores,
 } from '../lib/api'
 import { downloadCsv, downloadJson } from '../lib/export'
 import { useSSE } from '../lib/sse'
@@ -17,7 +17,7 @@ import { SearchForm } from '../components/search/SearchForm'
 import { StoreProgressBadge } from '../components/search/StoreProgressBadge'
 import { ResultsTable } from '../components/search/ResultsTable'
 import { ProductDrawer } from '../components/search/ProductDrawer'
-import type { PriceDeltaOut, ProductOut } from '../types/api'
+import type { PriceDeltaOut, PriceStatsOut, ProductOut } from '../types/api'
 
 type Tab = 'results' | 'api-log'
 
@@ -127,6 +127,20 @@ export function SearchPage() {
   const deltas = useMemo<Map<number, PriceDeltaOut>>(() =>
     new Map(deltasArray.map(d => [d.product_id, d])),
     [deltasArray],
+  )
+
+  // Min цена за 30д / всё время — отдельным запросом параллельно delta.
+  // Делим запросы, чтобы 1) кеш TanStack по разным ключам, 2) дельта
+  // часто требуется в hot-path-е, статистика — реже.
+  const { data: priceStatsArray = [] } = useQuery({
+    queryKey: ['price-stats', productIds.join(',')],
+    queryFn: () => fetchPriceStats(productIds),
+    enabled: productIds.length > 0,
+    staleTime: 60_000,
+  })
+  const priceStats = useMemo<Map<number, PriceStatsOut>>(() =>
+    new Map(priceStatsArray.map(s => [s.product_id, s])),
+    [priceStatsArray],
   )
 
   // Параметры для кнопок «Snapshot» и «В избранное» — берём напрямую из стора.
@@ -390,6 +404,8 @@ export function SearchPage() {
                   products={visibleResults}
                   deltas={deltas}
                   adjusted={adjusted}
+                  priceStats={priceStats}
+                  showOutOfStock={showOutOfStock}
                   onSelect={setSelectedProduct}
                 />
               </>

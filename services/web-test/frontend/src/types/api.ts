@@ -74,6 +74,14 @@ export interface PriceDeltaOut {
   days_between: number | null
 }
 
+export interface PriceStatsOut {
+  product_id: number
+  min_30d_rub: number | null
+  min_all_rub: number | null
+  points_30d: number
+  points_all: number
+}
+
 export interface ParserStatsOut {
   slug: string
   name: string

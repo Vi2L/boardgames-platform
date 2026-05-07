@@ -3,7 +3,7 @@ import type {
   DebugFeatures, DebugFetchUrlResult, DebugParseResponse,
   DiffResult, FavoriteOut, FieldCoverageRow,
   HealthAllResponse,
-  HealthOut, ParserSnapshotFull, ParserSnapshotMeta, ParserStatsOut, PriceDeltaOut, PricePointOut,
+  HealthOut, ParserSnapshotFull, ParserSnapshotMeta, ParserStatsOut, PriceDeltaOut, PricePointOut, PriceStatsOut,
   ProductDetailOut, ProductsPage, SearchesPage,
   SnapshotFull, SnapshotsPage, StoreOut, StoreStatsResponse,
   SuiteOut, SuiteQuery, SuiteRunMeta, SummaryStatsResponse,
@@ -35,6 +35,12 @@ export const fetchRecentDeltas = (ids: number[]) => {
   if (ids.length === 0) return Promise.resolve([] as PriceDeltaOut[])
   const q = ids.join(',')
   return fetch(`${BASE}/products/recent-deltas?ids=${q}`).then(r => json<PriceDeltaOut[]>(r))
+}
+
+export const fetchPriceStats = (ids: number[]) => {
+  if (ids.length === 0) return Promise.resolve([] as PriceStatsOut[])
+  const q = ids.join(',')
+  return fetch(`${BASE}/products/price-stats?ids=${q}`).then(r => json<PriceStatsOut[]>(r))
 }
 
 // ── DatabasePage / ProductPage ─────────────────────────────────────────
