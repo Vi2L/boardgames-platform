@@ -23,11 +23,13 @@ from fastapi import APIRouter, HTTPException
 router = APIRouter(prefix="/catalog", tags=["catalog-backup"])
 
 
-def _resolve_repo_root() -> Path:
-    """Поднимаемся вверх по дереву пока не найдём `bin/backup-catalog.sh`.
+def _resolve_repo_root() -> Path | None:
+    """Ищем родителя, в котором лежит `bin/backup-catalog.sh`.
 
-    Так робастнее, чем хардкод `parents[3]` — если файл переедет, ошибка
-    станет явной (и легко чинится через env override).
+    Возвращаем None если не нашли — endpoint сам отдаст 500 с понятным
+    сообщением. Раньше фолбэк был на `parents[4]`, но в контейнере
+    `/app/app/api/backup.py` имеет всего 4 уровня → IndexError на импорте.
+    Резолвим лениво и безопасно.
     """
     override = os.getenv("BOARDGAMES_REPO_ROOT")
     if override:
@@ -36,13 +38,14 @@ def _resolve_repo_root() -> Path:
     for parent in here.parents:
         if (parent / "bin" / "backup-catalog.sh").exists():
             return parent
-    # fallback — будет ясно по сообщению
-    return here.parents[4]
+    return None
 
 
-REPO_ROOT = _resolve_repo_root()
-SCRIPT = REPO_ROOT / "bin" / "backup-catalog.sh"
-BACKUP_DIR = REPO_ROOT / ".scratch" / "backups"
+def _paths() -> tuple[Path | None, Path | None]:
+    root = _resolve_repo_root()
+    if root is None:
+        return None, None
+    return root / "bin" / "backup-catalog.sh", root / ".scratch" / "backups"
 
 
 def _file_info(path: Path) -> dict:
@@ -64,16 +67,21 @@ async def create_backup() -> dict:
     держим клиента на проводе и возвращаем результат синхронно. Таймаут
     10 минут — pg_dump custom format на большом каталоге всё равно укладывается.
     """
-    if not SCRIPT.exists():
+    script, backup_dir = _paths()
+    if script is None or not script.exists():
         raise HTTPException(
             status_code=500,
-            detail=f"Скрипт не найден: {SCRIPT}. Установите BOARDGAMES_REPO_ROOT.",
+            detail=(
+                "bin/backup-catalog.sh не найден. На хосте ставится автоматически; "
+                "в Docker-контейнере пробросьте репо в volume и установите "
+                "BOARDGAMES_REPO_ROOT (плюс /var/run/docker.sock для pg_dump)."
+            ),
         )
 
     proc = await asyncio.create_subprocess_exec(
         "bash",
-        str(SCRIPT),
-        cwd=str(REPO_ROOT),
+        str(script),
+        cwd=str(script.parent.parent),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
@@ -93,11 +101,12 @@ async def create_backup() -> dict:
         )
 
     # Берём самый свежий файл в каталоге — скрипт создаёт catalog_<TS>.dump
-    dumps = sorted(BACKUP_DIR.glob("catalog_*.dump"), key=lambda p: p.stat().st_mtime, reverse=True)
+    assert backup_dir is not None  # script найден ⇒ backup_dir тоже
+    dumps = sorted(backup_dir.glob("catalog_*.dump"), key=lambda p: p.stat().st_mtime, reverse=True)
     if not dumps:
         raise HTTPException(
             status_code=500,
-            detail=f"Backup завершился ok, но файл не найден в {BACKUP_DIR}",
+            detail=f"Backup завершился ok, но файл не найден в {backup_dir}",
         )
     latest = dumps[0]
     return {
@@ -110,14 +119,15 @@ async def create_backup() -> dict:
 @router.get("/backups")
 async def list_backups() -> dict:
     """Список существующих backup'ов (новые сверху)."""
-    if not BACKUP_DIR.exists():
-        return {"items": [], "dir": str(BACKUP_DIR)}
+    _, backup_dir = _paths()
+    if backup_dir is None or not backup_dir.exists():
+        return {"items": [], "dir": str(backup_dir) if backup_dir else None}
     items = [
         _file_info(p)
         for p in sorted(
-            BACKUP_DIR.glob("catalog_*.dump"),
+            backup_dir.glob("catalog_*.dump"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,
         )
     ]
-    return {"items": items, "dir": str(BACKUP_DIR)}
+    return {"items": items, "dir": str(backup_dir)}
