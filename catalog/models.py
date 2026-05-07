@@ -20,6 +20,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Computed,
     DateTime,
     Float,
@@ -94,6 +95,14 @@ class Game(Base):
         back_populates="game", cascade="all, delete-orphan"
     )
     offers: Mapped[list["Offer"]] = relationship(back_populates="game")
+    # Satellite-таблицы (1:1). Источник-специфичные данные. Загружаются по запросу
+    # через selectinload(Game.bgg, Game.wikidata).
+    bgg: Mapped["GameBgg | None"] = relationship(
+        back_populates="game", cascade="all, delete-orphan", uselist=False
+    )
+    wikidata: Mapped["GameWikidata | None"] = relationship(
+        back_populates="game", cascade="all, delete-orphan", uselist=False
+    )
 
 
 class GameAlias(Base):
@@ -114,8 +123,14 @@ class GameAlias(Base):
         Text,
         Computed("lower(immutable_unaccent(alias))", persisted=True),
     )
-    # 'manual', 'auto-match' (от матчера), 'bgg' (название из BGG как alias).
+    # 'manual', 'auto-match' (от матчера), 'bgg', 'wikidata', 'tesera'.
     source: Mapped[str] = mapped_column(String(32), default="manual")
+    # ISO-код языка для алиасов с известной локалью ('ru', 'en', 'de', ...).
+    # NULL для магазинных названий (auto-match) и manual без явной локали.
+    language: Mapped[str | None] = mapped_column(String(8))
+    # True — алиас подтверждён человеком/доверенным источником (manual link).
+    # False — авто-источник (pg_trgm match, Wikidata import).
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=_now
@@ -207,6 +222,94 @@ class ImportJob(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=_now
     )
+
+
+class GameBgg(Base):
+    """Satellite-таблица BGG-данных (1:1 с games).
+
+    Заполняется двумя источниками:
+    - `source='csv-ranks'` — лёгкая выгрузка boardgames_ranks.csv: rank, scores,
+      is_expansion, subtype_ranks. Описаний/механик/дизайнеров нет.
+    - `source='xml-api'` — полноценный XML API через `/import/bgg`: обогащает
+      description, designers, mechanics и т.д. ON CONFLICT обновляет поля,
+      `source` поднимается до 'xml-api' (не понижается обратно).
+    """
+
+    __tablename__ = "game_bgg"
+
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("games.id", ondelete="CASCADE"), primary_key=True
+    )
+    bgg_id: Mapped[int] = mapped_column(Integer, unique=True, nullable=False)
+
+    # ranks-выгрузка
+    rank: Mapped[int | None] = mapped_column(Integer, index=True)
+    bayes_average: Mapped[float | None] = mapped_column(Float)
+    average: Mapped[float | None] = mapped_column(Float)
+    users_rated: Mapped[int | None] = mapped_column(Integer)
+    is_expansion: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # {strategygames: 1, thematic: 5, ...} — bucket-ranks по жанрам.
+    subtype_ranks: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    # XML API дополнительно (заполняется по факту /import/bgg)
+    description: Mapped[str | None] = mapped_column(Text)
+    designers: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    artists: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    publishers: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    mechanics: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    categories: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    min_players: Mapped[int | None] = mapped_column(Integer)
+    max_players: Mapped[int | None] = mapped_column(Integer)
+    min_age: Mapped[int | None] = mapped_column(Integer)
+    playtime_min: Mapped[int | None] = mapped_column(Integer)
+    playtime_max: Mapped[int | None] = mapped_column(Integer)
+    image_url: Mapped[str | None] = mapped_column(Text)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text)
+
+    # Аудит и raw
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    source: Mapped[str | None] = mapped_column(String(32))  # 'csv-ranks' | 'xml-api'
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+    game: Mapped[Game] = relationship(back_populates="bgg")
+
+
+class GameWikidata(Base):
+    """Satellite-таблица Wikidata (1:1 с games).
+
+    Источник: SPARQL-запрос по property P2339 (BGG ID) → entity-payload.
+    Главная ценность для catalog'а — labels[ru]/aliases[ru] для матчинга
+    оффер'ов из российских магазинов.
+    """
+
+    __tablename__ = "game_wikidata"
+
+    game_id: Mapped[int] = mapped_column(
+        ForeignKey("games.id", ondelete="CASCADE"), primary_key=True
+    )
+    bgg_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
+    entity_id: Mapped[str | None] = mapped_column(String(32), index=True)
+    found: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    # {ru: 'Каркассон', en: 'Carcassonne', ...}
+    labels: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict, nullable=False)
+    # {ru: ['Каркасон', ...], en: [...]}
+    aliases: Mapped[dict[str, list[str]]] = mapped_column(
+        JSONB, default=dict, nullable=False
+    )
+    descriptions: Mapped[dict[str, str]] = mapped_column(
+        JSONB, default=dict, nullable=False
+    )
+    # Если SPARQL вернул несколько Q-id — пишем все, выбираем первый по
+    # числовому порядку. Для аудита.
+    matched_entities: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+    game: Mapped[Game] = relationship(back_populates="wikidata")
 
 
 class ApiKey(Base):
