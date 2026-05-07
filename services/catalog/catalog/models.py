@@ -202,22 +202,32 @@ class OfferPrice(Base):
 
 
 class ImportJob(Base):
-    """Асинхронные импорты из BGG/Tesera (этапы 3-4).
+    """Асинхронные импорты из BGG/Tesera/Dicefest (этапы 3-4 + dicefest).
 
     payload — параметры запуска (например, {'bgg_id': 822}); status —
     pending/running/done/failed; error — стектрейс/сообщение в случае failed.
+
+    progress / log_lines добавлены в миграции 0003 для long-running импортёров
+    (особенно dicefest на ~900 игр × 1с = 15+ минут). Обновляются батчами через
+    catalog.importers._log_buffer.LogBuffer (раз в ~20 строк или 2 секунды),
+    иначе UPDATE на каждый item даёт row-level lock + WAL-bloat.
     """
 
     __tablename__ = "import_jobs"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    type: Mapped[str] = mapped_column(String(32), index=True)  # 'bgg', 'tesera'
+    type: Mapped[str] = mapped_column(String(32), index=True)  # 'bgg', 'tesera', 'dicefest'
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     status: Mapped[str] = mapped_column(String(16), default="pending", index=True)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     error: Mapped[str | None] = mapped_column(Text)
     result: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    # {phase, current, total, current_title} — shape зафиксирован контрактом.
+    progress: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Ring-buffer ~200 последних строк лога. Tail для UI через polling.
+    log_lines: Mapped[list[str] | None] = mapped_column(JSONB)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=_now
@@ -329,3 +339,53 @@ class ApiKey(Base):
         DateTime(timezone=True), server_default=func.now(), default=_now
     )
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class DicefestRawGame(Base):
+    """Staging-таблица сырых данных с dicefest.ru (миграция 0003).
+
+    Двухстадийная схема обогащения: парсер пишет ТОЛЬКО сюда, основная games/
+    game_aliases не трогается. Промоушен (перенос данных в canonical БД с
+    pg_trgm-матчингом и журналом для отката) — отдельная операция через UI
+    в PR-2.
+
+    raw_html хранится отдельно от raw JSONB — чтобы можно было перепарсить
+    карточку при изменении селекторов БЕЗ повторного запроса к dicefest.
+    raw JSONB — структурированный дамп вытащенных полей (страховка от
+    потери данных при изменении парсера).
+    """
+
+    __tablename__ = "dicefest_raw_games"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    slug: Mapped[str] = mapped_column(Text, unique=True, nullable=False)
+    page_url: Mapped[str] = mapped_column(Text, nullable=False)
+
+    # Извлечённые поля — все nullable, потому что сайт может менять структуру
+    # или вообще не отдавать поле для конкретной игры.
+    title_ru: Mapped[str | None] = mapped_column(Text)
+    title_en: Mapped[str | None] = mapped_column(Text)
+    publisher: Mapped[str | None] = mapped_column(Text)
+    release_year: Mapped[int | None] = mapped_column(Integer)
+    release_month: Mapped[int | None] = mapped_column(Integer)
+    release_status: Mapped[str | None] = mapped_column(Text)  # data-status code
+    description: Mapped[str | None] = mapped_column(Text)
+    cover_url: Mapped[str | None] = mapped_column(Text)
+
+    raw_html: Mapped[str | None] = mapped_column(Text)
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+    source_listing: Mapped[str | None] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+    # Workflow для промоушена (PR-2):
+    #   new (default) → promoted | skipped | rejected
+    # `promoted_to_game_id` — денормализованная ссылка для quick-glance в админке.
+    status: Mapped[str] = mapped_column(Text, default="new", nullable=False)
+    promoted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    promoted_to_game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="SET NULL")
+    )
+    notes: Mapped[str | None] = mapped_column(Text)

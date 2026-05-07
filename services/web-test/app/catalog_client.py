@@ -141,6 +141,11 @@ class CatalogClient:
         resp = await self._client.post("/import/tesera", json=payload)
         return _ok_or_raise(resp)
 
+    async def import_dicefest(self, payload: dict) -> dict[str, Any]:
+        """POST /import/dicefest → парсер dicefest.ru → пишет в staging."""
+        resp = await self._client.post("/import/dicefest", json=payload)
+        return _ok_or_raise(resp)
+
     async def get_import_job(self, job_id: int) -> dict[str, Any]:
         """GET /import/jobs/{id} → polling статуса (pending/running/done/failed)."""
         resp = await self._client.get(f"/import/jobs/{job_id}")

@@ -160,6 +160,39 @@ Cloudflare блокирует tesera.ru / api.tesera.ru с большинств�
 Когда появится прокси — добавим `game_tesera` (схема готова в плане
 `~/.claude/plans/woolly-wobbling-simon.md`) и `import_tesera_html.py`.
 
+### Dicefest (русские локализации, издатели, даты выхода в РФ)
+
+```bash
+# Запуск через UI (Catalog → Импорт → Dicefest), либо curl:
+curl -X POST http://localhost:8002/import/dicefest -H 'content-type: application/json' \
+     -d '{"max_items": 10}'    # пробный прогон 10 игр
+curl http://localhost:8002/import/jobs/{id}   # polling progress + log_lines
+```
+
+Парсер обходит листинги `?year=2024|2025|2026` (sitemap.xml у dicefest почти
+пустой), парсит карточки `/game/{slug}/` через BeautifulSoup. Полный прогон —
+~900 slug'ов × 1 req/sec ≈ 15 минут.
+
+**Двухстадийность:** парсер пишет ТОЛЬКО в staging-таблицу
+`dicefest_raw_games` (миграция 0003). Основная `games`/`game_aliases` НЕ
+трогается — этим обеспечивается изоляция от инцидентов парсинга. Перенос в
+canonical БД — отдельный управляемый процесс через UI с pg_trgm-матчингом и
+журналом для отката (PR-2: `/promotion/dicefest/...`).
+
+**Idempotency:** `slug` UNIQUE → ON CONFLICT DO UPDATE. При повторном запуске
+парсер пропускает slug'и, скачанные за последние 7 дней (resume after crash).
+
+**Прогресс/лог в UI:** `ImportJob.progress` (`{phase, current, total, current_title}`)
++ `log_lines` (ring-buffer 200 строк) обновляются батчами через
+`catalog.importers._log_buffer.LogBuffer` (раз в ~20 строк или 2с) — на 1000
+итераций это ~150 UPDATE'ов вместо 3000.
+
+Поля в staging: `title_ru`, `title_en`, `publisher`, `release_year`,
+`release_month`, `release_status` (data-status code типа `v-prodazhe` /
+`buduschie-predzakazy`), `description`, `cover_url`. Сырой HTML карточки
+сохранён в `raw_html` — позволяет перепарсить без повторного запроса при
+изменении селекторов. Структурированный дамп всего вытащенного — в `raw` JSONB.
+
 ## Контракты с соседями
 
 ### Webhook от `parsers` — `POST /ingest/offers`

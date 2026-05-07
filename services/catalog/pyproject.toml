@@ -12,6 +12,9 @@ dependencies = [
     "pydantic>=2.6",
     "pydantic-settings>=2.2",
     "httpx>=0.27",
+    # Парсинг HTML карточек dicefest.ru. html.parser stdlib backend (без lxml)
+    # — достаточно быстрый для ~1K страниц при rate-limit 1 req/sec.
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]

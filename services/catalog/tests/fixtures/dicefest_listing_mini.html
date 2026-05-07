@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html><head><title>Dicefest mini listing (test fixture)</title></head>
+<body>
+<!--
+Минимальный листинг для unit-тестов parse_listing_html.
+Реальный листинг (например ?year=2026) — 1.8MB, в фикстурах не нужен:
+парсинг-логика та же, объём не влияет на корректность, а добавление мега-файла
+в git раздуло бы repo впустую.
+-->
+<div class="games-list">
+  <a href="/game/mythologies/" class="game-card">Mythologies</a>
+  <a href="/game/a-gest-of-robin-hood/" class="game-card">A Gest of Robin Hood</a>
+  <a href="/game/claustrophobia-1692/" class="game-card">Claustrophobia 1692</a>
+  <!-- Дубль на той же странице — должен быть отфильтрован -->
+  <a href="/game/mythologies/">Mythologies (повтор)</a>
+  <!-- Не-игровая ссылка — должна игнорироваться -->
+  <a href="/blog/something/">Блог</a>
+  <!-- Без trailing slash — должна найтись -->
+  <a href="/game/azuleo">Azuleo no slash</a>
+</div>
+</body></html>

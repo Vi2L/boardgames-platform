@@ -200,6 +200,18 @@ async def import_tesera(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.post("/import/dicefest")
+async def import_dicefest(
+    body: dict,  # {max_items?: int, only_year?: int}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Запуск парсера dicefest.ru. Пишет в staging dicefest_raw_games (PR-1)."""
+    try:
+        return await client.import_dicefest(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.get("/import/jobs/{job_id}")
 async def get_import_job(
     job_id: int, client: CatalogClient = Depends(get_catalog_client),

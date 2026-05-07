@@ -250,24 +250,43 @@ export const patchGame = (gameId: number, payload: GamePatchPayload) =>
     body: JSON.stringify(payload),
   }).then(r => json<CatalogGame>(r))
 
-// ── Imports (BGG / Tesera) ──────────────────────────────────────────
+// ── Imports (BGG / Tesera / Dicefest) ──────────────────────────────────
 
 export type ImportJobStatus = 'pending' | 'running' | 'done' | 'failed'
 
 export type ImportJobResult = {
-  imported?: Array<{ bgg_id?: number; tesera_id?: number; item?: string|number; game_id: number; title: string }>
-  errors?: Array<{ bgg_id?: number; item?: string|number; error: string }>
+  // BGG/Tesera импортёры (одна игра — один объект):
+  imported?: Array<{
+    bgg_id?: number; tesera_id?: number; item?: string | number; slug?: string
+    game_id?: number; title?: string; title_ru?: string
+  }>
+  errors?: Array<{ bgg_id?: number; item?: string | number; slug?: string; error: string }>
+  // Dicefest-специфичные счётчики:
+  total_slugs?: number
+  skipped_fresh?: number
 } | null
+
+// Прогресс long-running job'а — обновляется батчами на бэке (LogBuffer).
+// `phase`: collecting → parsing → done. `current_title` обновляется per-item.
+export type ImportProgress = {
+  phase: 'collecting' | 'parsing' | 'done' | string
+  current: number
+  total: number
+  current_title: string | null
+}
 
 export type ImportJob = {
   id: number
-  type: 'bgg' | 'tesera'
+  type: 'bgg' | 'tesera' | 'dicefest'
   status: ImportJobStatus
   payload: Record<string, unknown>
   started_at: string | null
   finished_at: string | null
   error: string | null
   result: ImportJobResult
+  // Поля из миграции 0003 — могут быть null до первого flush'а.
+  progress: ImportProgress | null
+  log_lines: string[] | null
   created_at: string
 }
 
@@ -280,6 +299,13 @@ export const importBgg = (payload: { bgg_id?: number; ids?: number[] }) =>
 
 export const importTesera = (payload: { alias?: string; tesera_id?: number; items?: (string|number)[] }) =>
   fetch(`${BASE}/import/tesera`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<ImportJob>(r))
+
+export const importDicefest = (payload: { max_items?: number; only_year?: number }) =>
+  fetch(`${BASE}/import/dicefest`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(payload),

@@ -37,8 +37,14 @@ from catalog.importers.tesera import (
     fetch_tesera_thing,
     parse_tesera_json,
 )
+from catalog.importers.dicefest import _run_dicefest_import_job
 from catalog.models import Game, GameAlias, ImportJob
-from catalog.schemas import BggImportRequest, ImportJobOut, TeseraImportRequest
+from catalog.schemas import (
+    BggImportRequest,
+    DicefestImportRequest,
+    ImportJobOut,
+    TeseraImportRequest,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/import", tags=["import"])
@@ -307,6 +313,45 @@ async def import_tesera(
         await session.refresh(job)
     else:
         asyncio.create_task(_run_tesera_import_job(job.id, items))
+
+    return ImportJobOut.model_validate(job)
+
+
+@router.post(
+    "/dicefest",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_dicefest(
+    payload: DicefestImportRequest,
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    """Парсит каталог dicefest.ru → пишет в staging-таблицу dicefest_raw_games.
+
+    Двухстадийная схема: эта операция НЕ трогает основные games/game_aliases.
+    Перенос в canonical БД — отдельный процесс через UI промоушена (PR-2).
+
+    payload:
+      - max_items=N — для пробного прогона (только первые N slug'ов)
+      - only_year=2026 — ограничить обход одним годом
+
+    Прогресс/логи доступны через GET /import/jobs/{id} (poll каждые 1.5с).
+    """
+    job = ImportJob(
+        type="dicefest",
+        payload=payload.model_dump(exclude_none=True),
+        status="pending",
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await _run_dicefest_import_job(job.id, job.payload)
+        await session.refresh(job)
+    else:
+        asyncio.create_task(_run_dicefest_import_job(job.id, job.payload))
 
     return ImportJobOut.model_validate(job)
 

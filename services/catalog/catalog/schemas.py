@@ -251,6 +251,19 @@ class MatchLinkRequest(BaseModel):
 
 # ---------- import jobs (uses datetime, defined above) ----------
 
+class ImportProgress(BaseModel):
+    """Прогресс импорт-job'а (зафиксированный shape для UI).
+
+    Обновляется батчами через catalog.importers._log_buffer.LogBuffer —
+    polling-frontend читает одной порцией с progress-bar и tail-логом.
+    """
+
+    phase: str  # 'collecting' | 'parsing' | 'done'
+    current: int = 0
+    total: int = 0
+    current_title: str | None = None
+
+
 class ImportJobOut(_ORMBase):
     id: int
     type: str
@@ -260,4 +273,43 @@ class ImportJobOut(_ORMBase):
     finished_at: datetime | None = None
     error: str | None = None
     result: dict[str, Any] | None = None
+    progress: ImportProgress | None = None
+    log_lines: list[str] | None = None
     created_at: datetime
+
+
+# ---------- dicefest ----------
+
+class DicefestImportRequest(BaseModel):
+    """Запрос на запуск парсера dicefest.
+
+    max_items=N полезен для пробных прогонов: парсим только первые N slug'ов.
+    only_year ограничивает обход листингов одним годом (2024/2025/2026).
+    """
+
+    max_items: int | None = None
+    only_year: int | None = None
+
+
+class DicefestRawGameOut(_ORMBase):
+    id: int
+    slug: str
+    page_url: str
+    title_ru: str | None = None
+    title_en: str | None = None
+    publisher: str | None = None
+    release_year: int | None = None
+    release_month: int | None = None
+    release_status: str | None = None
+    description: str | None = None
+    cover_url: str | None = None
+    raw: dict[str, Any]
+    source_listing: str | None = None
+    fetched_at: datetime
+    status: str
+    promoted_at: datetime | None = None
+    promoted_to_game_id: int | None = None
+    notes: str | None = None
+    # raw_html намеренно НЕ в Out — слишком большой для типового списка/детали;
+    # запрашивается отдельным эндпоинтом при необходимости (например, для
+    # просмотра «исходник» в debug-портале).
