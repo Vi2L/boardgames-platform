@@ -15,6 +15,7 @@ from app.api import db as db_router_module
 from app.api import debug as debug_router_module
 from app.api import favorites as favorites_router_module
 from app.api import health, history, parsers as parsers_router_module
+from app.api import parsers_db as parsers_db_router_module
 from app.api import search as search_router_module
 from app.api import snapshots as snapshots_router_module
 from app.api import stats as stats_router_module
@@ -63,6 +64,7 @@ app.include_router(suites_router_module.router, prefix="/api")
 app.include_router(favorites_router_module.router, prefix="/api")
 app.include_router(catalog_router_module.router, prefix="/api")
 app.include_router(debug_router_module.router, prefix="/api")
+app.include_router(parsers_db_router_module.router, prefix="/api")
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.exists():

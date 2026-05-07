@@ -152,6 +152,63 @@ class ParsersClient:
         resp.raise_for_status()
         return resp.json()
 
+    # ── Parsers DB explorer (F4.1) ──────────────────────────────────────
+
+    async def get_db_metadata(self) -> dict:
+        resp = await self._client.get("/api/db/meta")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_stores_inventory(self) -> list[dict]:
+        resp = await self._client.get("/api/db/stores-inventory")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_parsers_db_products(
+        self, store: str | None = None, q: str | None = None,
+        limit: int = 50, offset: int = 0,
+    ) -> dict:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if store:
+            params["store"] = store
+        if q:
+            params["q"] = q
+        resp = await self._client.get("/api/db/products", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_parsers_db_product(self, product_id: int) -> dict:
+        resp = await self._client.get(f"/api/db/product/{product_id}")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_top_queries(self, hours: int = 168, limit: int = 20) -> list[dict]:
+        resp = await self._client.get(
+            "/api/stats/top-queries", params={"hours": hours, "limit": limit},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_latency_percentiles(self, hours: int = 24) -> dict:
+        resp = await self._client.get("/api/stats/latency", params={"hours": hours})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_empty_responses(self, hours: int = 24, limit: int = 50) -> list[dict]:
+        resp = await self._client.get(
+            "/api/stats/empty-responses", params={"hours": hours, "limit": limit},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_price_distribution(self, store: str | None = None) -> dict:
+        params: dict[str, Any] = {}
+        if store:
+            params["store"] = store
+        resp = await self._client.get("/api/db/price-distribution", params=params)
+        resp.raise_for_status()
+        return resp.json()
+
     async def debug_fetch_url(
         self,
         url: str,

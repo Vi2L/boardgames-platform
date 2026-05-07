@@ -74,6 +74,98 @@ export const fetchStatsStores = () =>
 export const fetchStatsErrors = (limit = 20) =>
   fetch(`${BASE}/stats/errors?limit=${limit}`).then(r => json<unknown[]>(r))
 
+// ── Parsers DB explorer (F4.1) ──────────────────────────────────────────
+
+export type ParsersDbMeta = {
+  size_bytes: number
+  product_count: number
+  observation_count: number
+  oldest_observation: string | null
+  newest_observation: string | null
+  [k: string]: unknown
+}
+
+export type ParsersStoreInventory = {
+  store_slug: string
+  product_count: number
+  observation_count: number
+  min_price: number | null
+  avg_price: number | null
+  max_price: number | null
+  last_seen: string | null
+  [k: string]: unknown
+}
+
+export type ParsersDbProductRow = {
+  id: number
+  store_slug: string
+  external_id: string
+  title: string
+  url: string
+  last_price: number | null
+  last_fetched_at: string | null
+  [k: string]: unknown
+}
+
+export type ParsersDbProductsPage = {
+  items: ParsersDbProductRow[]
+  total: number
+  limit: number
+  offset: number
+  [k: string]: unknown
+}
+
+export type ParsersTopQuery = {
+  query: string
+  hits: number
+  avg_ms: number | null
+  [k: string]: unknown
+}
+
+export type ParsersLatency = {
+  p50: number | null
+  p95: number | null
+  p99: number | null
+  max: number | null
+  avg: number | null
+  count: number
+  [k: string]: unknown
+}
+
+export type ParsersEmptyResponse = {
+  store_slug: string
+  query: string
+  ts: string
+  duration_ms: number | null
+  [k: string]: unknown
+}
+
+export const fetchParsersDbMeta = () =>
+  fetch(`${BASE}/parsers-db/meta`).then(r => json<ParsersDbMeta>(r))
+
+export const fetchParsersStoresInventory = () =>
+  fetch(`${BASE}/parsers-db/stores-inventory`).then(r => json<ParsersStoreInventory[]>(r))
+
+export const fetchParsersDbProducts = (params: {
+  store?: string; q?: string; limit?: number; offset?: number
+} = {}) => {
+  const sp = new URLSearchParams()
+  if (params.store) sp.set('store', params.store)
+  if (params.q) sp.set('q', params.q)
+  if (params.limit) sp.set('limit', String(params.limit))
+  if (params.offset) sp.set('offset', String(params.offset))
+  return fetch(`${BASE}/parsers-db/products?${sp}`).then(r => json<ParsersDbProductsPage>(r))
+}
+
+export const fetchParsersTopQueries = (hours = 168, limit = 20) =>
+  fetch(`${BASE}/parsers-db/top-queries?hours=${hours}&limit=${limit}`).then(r => json<ParsersTopQuery[]>(r))
+
+export const fetchParsersLatency = (hours = 24) =>
+  fetch(`${BASE}/parsers-db/latency?hours=${hours}`).then(r => json<ParsersLatency>(r))
+
+export const fetchParsersEmptyResponses = (hours = 24, limit = 50) =>
+  fetch(`${BASE}/parsers-db/empty-responses?hours=${hours}&limit=${limit}`).then(r => json<ParsersEmptyResponse[]>(r))
+
 // ── Cache invalidation ──────────────────────────────────────────────────
 
 export interface CacheInvalidateResult {

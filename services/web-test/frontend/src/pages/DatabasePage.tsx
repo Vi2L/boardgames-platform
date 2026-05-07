@@ -11,10 +11,12 @@ import {
 } from '../lib/api'
 import { getStoreBadgeColor, getStoreLabel, STORE_LABELS } from '../lib/stores'
 import { PriceHistogram } from '../components/database/PriceHistogram'
+import { InventoryTab } from '../components/database/parsers/InventoryTab'
+import { AnalyticsTab } from '../components/database/parsers/AnalyticsTab'
 import { SkeletonList } from '../components/shared/Skeleton'
 import type { ProductOut, StoreHealthEntry } from '../types/api'
 
-type Tab = 'products' | 'stores' | 'searches'
+type Tab = 'products' | 'stores' | 'searches' | 'parsers-inventory' | 'parsers-analytics'
 
 const SORT_OPTIONS = [
   { value: 'fetched_desc', label: 'Свежие' },
@@ -40,16 +42,25 @@ export function DatabasePage() {
       </div>
 
       <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-        <div className="flex border-b border-gray-800 bg-gray-900/50">
-          <TabButton active={tab === 'products'} onClick={() => setTab('products')}>Товары</TabButton>
+        <div className="flex border-b border-gray-800 bg-gray-900/50 overflow-x-auto">
+          <TabButton active={tab === 'products'} onClick={() => setTab('products')}>Товары портала</TabButton>
           <TabButton active={tab === 'stores'} onClick={() => setTab('stores')}>Магазины</TabButton>
           <TabButton active={tab === 'searches'} onClick={() => setTab('searches')}>Журнал</TabButton>
+          <div className="w-px bg-gray-800 my-2 mx-1" />
+          <TabButton active={tab === 'parsers-inventory'} onClick={() => setTab('parsers-inventory')}>
+            БД парсеров: inventory
+          </TabButton>
+          <TabButton active={tab === 'parsers-analytics'} onClick={() => setTab('parsers-analytics')}>
+            БД парсеров: аналитика
+          </TabButton>
         </div>
 
         <div className="p-4">
           {tab === 'products' && <ProductsTab />}
           {tab === 'stores' && <StoresTab />}
           {tab === 'searches' && <SearchesTab />}
+          {tab === 'parsers-inventory' && <InventoryTab />}
+          {tab === 'parsers-analytics' && <AnalyticsTab />}
         </div>
       </div>
     </div>
