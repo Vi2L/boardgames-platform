@@ -57,7 +57,7 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
 | `CACHE_TTL_HOURS` | `4` | Время жизни кеша в часах |
 | `PROXY` | — | SOCKS5/HTTP-прокси для HTTP-парсеров |
 | `ENABLE_RAW_SNAPSHOTS` | — | `1` → каждый HTTP-ответ парсера пишется в `parser_snapshot` (для отладки через /dashboard). По умолчанию выключено, нулевой оверхед. |
-| `CATALOG_INGEST_URL` | — | URL webhook'а `boardgames-catalog`. Если задан — после успешного парсинга батча offers пушатся туда (fire-and-forget). Не задан → publisher отключён, нулевой оверхед. См. секцию «Интеграция с boardgames-catalog». |
+| `CATALOG_INGEST_URL` | — | URL webhook'а `boardgames-catalog`. Если задан — после успешного парсинга батча offers пушатся туда. Не задан → publisher отключён, нулевой оверхед. См. секцию «Интеграция с boardgames-catalog». |
 | `CATALOG_API_KEY` | — | API-ключ для `boardgames-catalog` со scope `ingest`. Используется publisher'ом, если `boardgames-catalog` запущен с `REQUIRE_AUTH=1`. |
 
 ## Соседи (multi-repo стек)
@@ -82,12 +82,19 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
   нулевой оверхед.
 - **Single shared client**: `CatalogPublisher` держит один `httpx.AsyncClient`
   на процесс — переиспользует TCP/TLS-соединения.
+- **DLQ при сбое** (F5.1): если catalog не доступен или ответил 5xx,
+  payload не теряется, а сохраняется в SQLite-таблицу `catalog_dlq`
+  (publisher хранит ссылку на `_db` через `attach_db()` в lifespan).
+  Поля DLQ-записи: `payload_json`, `attempt_count`, `last_error`,
+  `created_at`, `last_attempt_at`. Через REST (`/api/dlq/*`) или
+  web-test UI (`/dlq`) можно сделать replay одной записи или
+  batch'ом — при успехе запись удаляется из DLQ.
 - **Контракт webhook'а** — стабильный, **single source of truth**:
-  [`~/Projects/boardgames-catalog/CLAUDE.md`](../boardgames-catalog/CLAUDE.md)
+  [`services/catalog/CLAUDE.md`](../catalog/CLAUDE.md)
   секция «Контракты с соседями».
 - **При изменении формата** в `catalog_publisher.py` — синхронно править
-  `~/Projects/boardgames-catalog/catalog/routers/ingest.py` и общую схему в
-  `boardgames-catalog/catalog/schemas.py:IngestRequest`.
+  `services/catalog/catalog/routers/ingest.py` и общую схему в
+  `services/catalog/catalog/schemas.py:IngestRequest`.
 
 ## Архитектура
 
@@ -107,7 +114,7 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
 
 - `models.py` — frozen dataclasses: `StoreInfo`, `ParsedProduct` (от парсера), `ProductRecord` (из БД), `PricePoint`, `SearchResult`.
 - `base.py` — `StoreParser` (ABC) + `ParserMetrics` dataclass + `SnapshotRecorder`. См. секцию «Контракт парсера».
-- `db.py` — `PriceDatabase`: 6 таблиц (stores, products, price_observations, request_log, parser_log, parser_snapshot). Цены в **копейках** (int). `normalized_title` = `title.lower()` хранится отдельно — SQLite `lower()` не работает с Unicode/кириллицей. `_MIGRATIONS` — список идемпотентных `ALTER TABLE`, выполняются при `db.init()`.
+- `db.py` — `PriceDatabase`: 7 таблиц (stores, products, price_observations, request_log, parser_log, parser_snapshot, catalog_dlq). Цены в **копейках** (int). `normalized_title` = `title.lower()` хранится отдельно — SQLite `lower()` не работает с Unicode/кириллицей. `_MIGRATIONS` — список идемпотентных `ALTER TABLE`, выполняются при `db.init()`.
 - `service.py` — логика TTL per-store: читает кеш, определяет устаревшие магазины, параллельно парсит через `asyncio.gather` (per-parser таймер через `_run_one`), сохраняет наблюдения, graceful degradation. Метрики читает через `parser.last_metrics` и пишет в `parser_log`.
 - Каждый парсер делает два параллельных этапа: поиск → обогащение (`_enrich`). `_enrich` запрашивает страницу каждого товара в параллели через `asyncio.gather` и возвращает `dict` для `dataclasses.replace(product, **extra)`.
 - `api.py` — FastAPI: `/search`, `/history/{id}`, `/stores`, `/api/debug/parse`. **Форматы цены различаются**: `/search` отдаёт `price_rub` (рубли, float), `/history/{id}` — `price` (копейки, int), `/api/debug/parse` — оба формата для удобства отладки.
@@ -213,5 +220,13 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
 | `/api/debug/snapshots/{id}/raw` | Сырое тело как text/plain |
 | `DELETE /api/debug/snapshots/{id}` | Удалить snapshot |
 | `/api/debug/parse?q=&stores=&limit=` | Live Test — парсеры мимо кеша, без записи в БД |
+| `/api/debug/contract` | Schema `ParsedProduct` (required/optional поля, types, defaults) — собирается через `dataclasses.fields()` |
+| `/api/debug/fetch-url?url=&encoding_hint=` | URL probe — пробный GET через парсерский UA/proxy. Возвращает status, encoding, content_type, body_text (≤200KB), final_url, redirect history |
+| `DELETE /api/cache?store=&q=&confirm=` | Cache invalidation: per-store / per-q (LIKE `%q%` по `normalized_title`) или wipe-all (требует `confirm=true`). Удаляет products + price_observations |
+| `DELETE /api/db/observations/{id}` | Точечная чистка кривых price-observations (например, парсер однажды распарсил цену с буквой). Hard-delete, без восстановления |
+| `GET /api/dlq?limit=&offset=` | DLQ-метаданные (без payload) — для UI-таблицы |
+| `POST /api/dlq/{id}/replay` | Повторить отправку payload в catalog. При успехе запись удаляется; при ошибке — `attempt_count++` и обновление `last_error` |
+| `POST /api/dlq/replay-all?limit=` | Batch-replay (по `created_at` ASC, лимит 50 по умолчанию). Возвращает `{replayed, success, failed}` |
+| `DELETE /api/dlq/{id}` | Удалить DLQ-запись без replay (отказ от данных) |
 
-**Безопасность `/api/debug/*`**: сейчас без auth. В проде закрыть через reverse proxy (nginx auth_basic) или флагом окружения, который снимает router включение в `parsers/api.py`.
+**Безопасность `/api/debug/*` и `/api/dlq/*`**: сейчас без auth. В проде закрыть через reverse proxy (nginx auth_basic) или флагом окружения, который снимает router включение в `parsers/api.py`.

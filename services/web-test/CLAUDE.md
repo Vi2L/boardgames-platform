@@ -4,36 +4,52 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Debug/testing web portal for parsers from `/Users/vitaliy/Projects/parsers`. Provides real-time HTTP inspection, parse step visualization, and database browsing.
+Внутренний debug-портал монорепо `boardgames-platform`. Изначально — UI вокруг
+сервиса парсеров; со временем оброс инструментами для каталога, ручного
+матчинга и cross-service диагностики. Цель — единый «cockpit» разработчика
+без переключения между терминалом, /dashboard'ом парсеров и SQL-консолью.
 
-Также — UI поверх `boardgames-catalog`: вкладка «Каталог» показывает games
-и предлагает ручной матчинг unmatched-оффер'ов. См. секцию «Интеграция с
-boardgames-catalog».
+Что доступно через UI (по доменам):
+
+- **Парсеры**: SSE-поиск через 4 магазина, одиночный run, Live Test мимо
+  кеша, side-by-side compare cache vs live, raw HTTP-снепшоты, URL probe,
+  contract-validator (схема ParsedProduct + heatmap field-coverage),
+  cache invalidation per-store/query.
+- **Каталог**: fuzzy-search games, drawer с полной карточкой (BGG +
+  Wikidata + aliases), CRUD алиасов с verified flag, BGG/Tesera Import
+  Wizard с polling, ручное создание/редактирование Game, merge двух игр.
+- **Матчинг**: dashboard очереди (по магазинам, score-buckets), top-N
+  кандидатов с pg_trgm score прямо в LinkPicker, кнопка reassess (single
+  и batch).
+- **БД**: товары портала (локальная SQLite-БД), магазины, журнал поисков,
+  плюс БД parsers (inventory, products browser с удалением observations,
+  аналитика — latency p50/p95/p99, top queries, тихие сбои).
+- **Тесты (QA)**: snapshots с parser-aware diff (категории: price/lost/
+  gained/raw/field), suite-runner с baselines (фиксация expected min_count
+  per query), favorites.
+- **DLQ**: dead-letter queue для catalog ingest, ручной replay при
+  downtime catalog'а.
+- **Cross-service health**: popover в сайдбаре с метриками обоих соседей
+  (размер БД parsers, total games в catalog, unmatched-counter).
 
 ## Соседи (multi-repo стек)
 
-`parsers_web_test` — один из четырёх репозиториев. Полная карта стека:
-[`~/Projects/boardgames-infra/README.md`](../boardgames-infra/README.md).
-
 | Сервис | Роль | URL в dev | ENV для подключения |
 |---|---|---|---|
-| `~/Projects/parsers` | парсинг цен | `http://localhost:8001` | `PARSERS_API_URL` |
-| `~/Projects/boardgames-catalog` | каталог + матчинг | `http://localhost:8002` | `CATALOG_API_URL`, `CATALOG_API_KEY` |
-| `~/Projects/boardgames-infra` | docker-compose, Postgres | — | — |
+| `services/parsers` | парсинг цен | `http://localhost:8001` | `PARSERS_API_URL` |
+| `services/catalog` | каталог + матчинг | `http://localhost:8002` | `CATALOG_API_URL`, `CATALOG_API_KEY` |
+| `services/web-test` (этот) | debug-портал | `http://localhost:8000` | — |
 
 ## Commands
 
 ### Backend
 
 ```bash
-# Setup (first time)
-uv venv .venv
-uv pip install -e "."
+# Из корня монорепо
+uv sync --all-packages --group dev               # один раз
+uv run --package web-test uvicorn app.main:app --reload --port 8000
 
-# Run dev server
-.venv/bin/uvicorn app.main:app --reload --port 8000
-
-# Check syntax
+# Локально из services/web-test
 python3 -c "import ast, os; [ast.parse(open(os.path.join(r,f)).read()) for r,_,fs in os.walk('app') for f in fs if f.endswith('.py')]"
 ```
 
@@ -41,102 +57,221 @@ python3 -c "import ast, os; [ast.parse(open(os.path.join(r,f)).read()) for r,_,f
 
 ```bash
 cd frontend
-
-# Setup (first time)
-npm install
-
-# Run dev server (proxies /api → localhost:8000)
-npm run dev       # → http://localhost:5173
-
-# Type check
-npx tsc --noEmit
-
-# Build for production (output → frontend/dist/, served by FastAPI)
-npm run build
+npm install                                       # один раз
+npm run dev                                       # → http://localhost:5173
+npx tsc --noEmit                                  # type check
+npm run build                                     # → dist/, отдаётся FastAPI как статика
 ```
 
-### Running both together
+### Running both
 
-Terminal 1: `.venv/bin/uvicorn app.main:app --reload --port 8000`
+Terminal 1: `uv run --package web-test uvicorn app.main:app --reload --port 8000`
 Terminal 2: `cd frontend && npm run dev`
-
-Open: http://localhost:5173
+Open: http://localhost:5173 (Vite проксирует `/api` на `:8000`).
 
 ## Architecture
 
 ```
-parsers_web_test/
-├── app/
-│   ├── main.py          # FastAPI app, CORS, static files mount
-│   ├── deps.py          # Singletons: PriceDatabase, parser configs, in-memory stats
-│   ├── schemas.py       # Pydantic response models + product_record_to_out()
-│   ├── debug_hooks.py   # httpx event_hooks → asyncio.Queue SSE events
-│   ├── db_ext.py        # DebugDB: extra SQL queries (list_products, stats, clear cache)
+services/web-test/
+├── app/                                  # FastAPI backend
+│   ├── main.py                           # роутер-include, CORS, static mount
+│   ├── deps.py                           # ParsersClient, CatalogClient, PortalDB singletons
+│   ├── parsers_client.py                 # тонкий httpx-клиент к parsers
+│   ├── catalog_client.py                 # тонкий httpx-клиент к catalog
+│   ├── db_local.py                       # PortalDB: SQLite локального портала + миграции
+│   ├── diff.py                           # diff_snapshots с категориями (price/lost/gained/raw/field)
+│   ├── schemas.py                        # Pydantic v2 (ProductOut, SnapshotMeta, ...)
+│   ├── debug_hooks.py                    # httpx event_hooks → SSE events
 │   └── api/
-│       ├── search.py    # GET /api/search → SSE stream (sequential parser execution)
-│       ├── parsers.py   # GET /api/parsers, POST /api/parsers/{slug}/run
-│       ├── products.py  # GET /api/products, GET /api/products/{id}, DELETE /api/cache
-│       ├── history.py   # GET /api/products/{id}/history
-│       └── stores.py    # GET /api/stores
-└── frontend/src/
-    ├── App.tsx          # Layout: sidebar + routes
-    ├── store/search.ts  # Zustand: search state + SSE event handler
-    ├── lib/sse.ts       # useSSE hook (EventSource wrapper)
-    ├── lib/api.ts       # fetch helpers
-    ├── pages/           # SearchPage, ParsersPage, DatabasePage, ProductPage
-    └── components/      # search/, parsers/, database/, shared/
+│       ├── search.py                     # GET /api/search (SSE)
+│       ├── parsers.py                    # /parsers, /{slug}/run, DELETE /parsers/cache
+│       ├── debug.py                      # /debug/{parse,compare,fetch-url,contract,
+│       │                                 #   field-coverage,features,snapshots,...}
+│       ├── parsers_db.py                 # /parsers-db/{meta,stores-inventory,products,
+│       │                                 #   top-queries,latency,empty-responses,...}
+│       ├── catalog.py                    # /catalog/{games,games/{id}/aliases,games/merge,
+│       │                                 #   matching/{queue,stats,candidates,...},import/...}
+│       ├── dlq.py                        # /dlq/{list,replay,replay-all,delete}
+│       ├── snapshots.py                  # /snapshots, /snapshots/diff
+│       ├── suites.py                     # /suites + /{id}/baselines (F4.4)
+│       ├── favorites.py                  # /favorites CRUD
+│       ├── stats.py                      # /stats/* — proxy parsers analytics
+│       ├── db.py                         # /db/* — локальная БД портала
+│       ├── stores.py                     # /stores
+│       ├── history.py                    # /products/{id}/history, recent-deltas
+│       └── health.py                     # /health, /health/all (cross-service)
+│
+└── frontend/src/                         # React 18 + Vite + TypeScript + Tailwind
+    ├── App.tsx                           # layout: collapsible sidebar + 7 routes
+    ├── store/search.ts                   # Zustand: search SSE state
+    ├── lib/
+    │   ├── api.ts                        # все fetch-обёртки (~80 функций)
+    │   ├── catalog.ts                    # catalog-специфичные типы и мутации
+    │   ├── sse.ts                        # useSSE hook (EventSource)
+    │   ├── stores.ts                     # STORE_LABELS / colors (single source of truth)
+    │   └── similarity.ts                 # фронтовый fuzzy match
+    ├── pages/
+    │   ├── SearchPage.tsx                # SSE-поиск, watch-mode, snapshots, favorites
+    │   ├── ParsersPage.tsx               # ParserCard × N
+    │   ├── DebugPage.tsx                 # 5 tabs: live / compare / url / contract / snapshots
+    │   ├── DatabasePage.tsx              # 5 tabs: товары / магазины / журнал /
+    │   │                                 #   БД парсеров: inventory / товары / аналитика
+    │   ├── CatalogPage.tsx               # Каталог + Очередь матчинга со stats-header
+    │   ├── ProductPage.tsx               # /products/:id (deep-link)
+    │   ├── TestingPage.tsx               # snapshots / suites / favorites
+    │   └── DlqPage.tsx                   # /dlq — DLQ для catalog ingest
+    └── components/
+        ├── parsers/                      # ParserCard, HttpLogEntry, LiveTestPanel,
+        │                                 #   RawProductCard, CompareTab, RawHttpDrawer,
+        │                                 #   SnapshotsTab, UrlPlayground, ContractPanel
+        ├── catalog/                      # GameDetailDrawer, AliasList/Editor, BggCard,
+        │                                 #   WikidataCard, ImportWizard, GameEditor,
+        │                                 #   MergeDialog, MatchingStatsHeader
+        ├── database/                     # PriceHistogram, parsers/{Inventory,Analytics,
+        │                                 #   ProductsBrowser}Tab
+        ├── testing/                      # DiffView (с категориями), SuiteRunner (с baselines)
+        ├── search/                       # SearchForm, ResultsTable, ProductDrawer
+        └── shared/                       # CommandPalette (Cmd+K), HealthBadge (popover),
+                                          #   JsonViewer, PriceChart, ProductDetail, Skeleton
 ```
 
 ## Key Patterns
 
+### Backend pattern
+
+- **Роутер на домен** в `app/api/<domain>.py`, регистрация в `main.py`.
+- **HTTP клиенты к соседям** — в `parsers_client.py` / `catalog_client.py`.
+  Никогда не делать httpx-вызовы напрямую из роутеров.
+- **Error mapping**: catalog возвращает `CatalogServiceError` (status_code +
+  detail) → `HTTPException` в роутере; parsers — `ParsersServiceError` или
+  `Exception` → 502 для health-style ручек.
+- **CORS**: настроен на `localhost:5173` / `:3000` для Vite dev, в проде
+  фронт отдаётся как статика и cross-origin не нужен.
+
+### Frontend pattern
+
+- **Страница** в `pages/`, локальные компоненты в `components/<domain>/`.
+- **State**: TanStack Query 5 (server state) + Zustand 4 (UI state поиска).
+- **Cache keys**: `['catalog', ...]` / `['parsers', ...]` / `['parsers-db', ...]`
+  / `['debug', ...]` / `['dlq']` / `['health-all']`. Mutation-callback'и
+  явно `invalidateQueries(...)` по нужным ключам.
+- **Таблица + drawer/details** — основной UX. Inline-formы для CRUD
+  (см. `AliasEditor`, `GameEditor`).
+- **SSE** — для долгих операций (search, suite-run). Polling — для
+  job-based (Import Wizard через `refetchInterval` с авто-стопом).
+- **toast (sonner)** для успехов/ошибок мутаций. `window.confirm` для
+  destructive-операций (delete observation, merge games, replay-all DLQ).
+
 ### Adding a new parser
-1. Add to `_parser_configs` in `app/deps.py`:
-   ```python
-   {"cls": NewParser, "kwargs": lambda: {"proxy": os.getenv("PROXY") or None}},
-   ```
-2. Parser must have `self._client_kwargs: dict` for HTTP hook injection to work.
 
-### SSE flow
-1. `GET /api/search` creates `asyncio.Queue` and spawns `_run_parsers()` as background task
-2. `_run_parsers()` creates fresh parser instances, injects debug hooks via `inject_hooks()`
-3. Hooks put `("http-request", {...})` and `("http-response", {...})` tuples into queue
-4. `_stream()` reads queue and yields SSE events
-5. Frontend `useSSE` hook receives events → `handleSSEEvent()` in Zustand store
+В parsers сервисе. Здесь автоматически появится в:
+- `/api/parsers` (список),
+- `/parsers` страница (карточка с Run и Trash),
+- `/api/debug/parse?stores=<slug>` (Live Test),
+- БД парсеров inventory + heatmap coverage,
+- `STORE_LABELS` в `frontend/src/lib/stores.ts` (придётся добавить руками
+  для красивого имени и цвета — иначе fallback на slug).
 
-### Database
-- Uses `parsers.db.PriceDatabase` (from parsers package) for read/write
-- `app/db_ext.py:DebugDB` adds pagination and stats queries directly via aiosqlite
-- DB file: `data/debug.sqlite` (configurable via `DB_PATH` env var)
-- Prices stored as integers (kopecks); `price_rub = price / 100`
+### SSE flow (поиск, suite run)
+
+1. `GET /api/search` создаёт `asyncio.Queue`, спавнит `_run_parsers()` в
+   background-task.
+2. `_run_parsers()` инжектит httpx event_hooks через `inject_hooks()`.
+3. Hooks кладут события в очередь: `http-request`, `http-response`,
+   `store-start`, `store-done`, `api-request`, `api-response`, `results`.
+4. `_stream()` читает очередь, эмитит SSE-события (`event: <name>\n`).
+5. Frontend `useSSE(url, handler)` подписывается, обновляет Zustand-стор.
+
+### Database (локальная портал-БД)
+
+- `app/db_local.py:PortalDB` — async SQLite через aiosqlite, один shared
+  connection. Миграции через `PRAGMA user_version` (список идемпотентных
+  CREATE/ALTER). Таблицы: `local_products`, `local_searches`, `snapshots`,
+  `test_suites`, `suite_runs`, `suite_run_items`, `favorites`,
+  `suite_baselines` (F4.4).
+- Файл: `data/debug.sqlite` (env `DB_PATH`).
+- Цены в копейках, конвертация в рубли в `_row_to_product`.
+
+## API endpoints (web-test)
+
+Backend под `/api/...`. Тонкий слой — большинство endpoints проксируют
+parsers/catalog с error mapping. Свои данные живут в локальной portal-БД.
+
+| Префикс | Что | Источник |
+|---|---|---|
+| `/search`, `/products/{id}/history`, `/products/recent-deltas` | SSE поиск, история | parsers |
+| `/parsers`, `/parsers/{slug}/run`, `DELETE /parsers/cache` | Список парсеров, run, cache invalidation | parsers |
+| `/stores` | Список магазинов | parsers |
+| `/debug/parse`, `/debug/compare`, `/debug/fetch-url`, `/debug/contract`, `/debug/field-coverage`, `/debug/features`, `/debug/snapshots[/{id}[/raw]]` | Live Test, compare cache vs live, URL probe, schema, raw HTTP snapshots | parsers |
+| `/parsers-db/{meta,stores-inventory,products[/{id}],top-queries,latency,empty-responses,price-distribution}`, `DELETE /parsers-db/observations/{id}` | Browser БД parsers | parsers |
+| `/stats/{summary,stores,errors}` | Аналитика парсеров | parsers |
+| `/dlq[/{id}[/replay]]`, `/dlq/replay-all` | Dead-letter queue | parsers |
+| `/db/products`, `/db/searches`, `/db/products/{id}` | Локальная БД портала | local |
+| `/snapshots`, `/snapshots/diff?a=&b=` | Сохранённые прогоны + parser-aware diff | local |
+| `/suites[/{id}[/run\|runs\|baselines\|baselines/{bid}]]` | Test-сьюты + baselines | local |
+| `/favorites` | Сохранённые поисковые запросы | local |
+| `/catalog/health`, `/catalog/games[/{id}]`, `POST /catalog/games`, `PATCH /catalog/games/{id}` | Каталог CRUD | catalog |
+| `/catalog/games/{id}/aliases[/{aid}]` (POST/PATCH/DELETE) | Алиасы CRUD | catalog |
+| `/catalog/games/merge` | Merge двух игр | catalog |
+| `/catalog/import/{bgg,tesera}`, `/catalog/import/jobs/{id}` | BGG/Tesera импорт + polling | catalog |
+| `/catalog/matching/{queue,stats,candidates,{id}/{link,reject,reassess},reassess-all}` | Матчинг + dashboard | catalog |
+| `/health`, `/health/all` | Health-check (deep) | оба + локально |
 
 ## Dependencies
 
-- Parsers package: workspace-член (`{ workspace = true }` в корневом pyproject.toml монорепо), editable
-- Backend: FastAPI, uvicorn, pydantic v2, aiosqlite, python-dotenv, httpx
-- Frontend: React 18, Vite 5, Tailwind CSS v3, TanStack Query v5, Zustand v4, Recharts v2
+- **Workspace member**: `parsers @ { workspace = true }` в корневом
+  `pyproject.toml`. Editable, без `file:///`-путей.
+- **Backend**: FastAPI, uvicorn, pydantic v2, aiosqlite, python-dotenv,
+  httpx.
+- **Frontend**: React 18, Vite 5, Tailwind CSS v3, TanStack Query v5,
+  TanStack Table, Zustand v4, Recharts v2, sonner (toasts), lucide-react,
+  clsx, cmdk.
 
-## Интеграция с boardgames-catalog
+## Контракты с соседями
 
-Подключение через `app/catalog_client.py` (по образу `app/parsers_client.py`)
-и проксирующий роутер `app/api/catalog.py` под префиксом `/api/catalog/*`.
+### catalog API (single source of truth: `services/catalog/CLAUDE.md`)
 
-Файлы:
-- `app/catalog_client.py` — `CatalogClient`: тонкая обёртка над httpx, методы
-  `list_games`, `get_game`, `matching_queue`, `link_offer`, `reject_offer`.
-  Поддержка `X-API-Key`.
-- `app/api/catalog.py` — proxy-роутер: фронт ходит на свой backend, не
-  cross-origin. Маршруты: `/api/catalog/health`, `/games`, `/games/{id}`,
-  `/matching/queue`, `/matching/{id}/link`, `/matching/{id}/reject`.
-- `app/deps.py` — singleton `CatalogClient`, env: `CATALOG_API_URL` (default
-  `http://localhost:8002`), `CATALOG_API_KEY` (для prod auth).
-- `frontend/src/lib/catalog.ts` — TS-клиент к `/api/catalog/*`.
-- `frontend/src/pages/CatalogPage.tsx` — две вкладки:
-  - **Каталог**: поиск с pg_trgm fuzzy, таблица games с source-бейджами
-    (manual/bgg/tesera).
-  - **Очередь матчинга**: unmatched-оффер'ы с inline-picker'ом для ручной
-    связки с Game.
+Web-test проксирует все нужные endpoints. При изменениях upstream:
+1. Обновить `app/catalog_client.py` — новые/изменённые методы.
+2. Обновить `app/api/catalog.py` — proxy + error mapping.
+3. Обновить `frontend/src/lib/catalog.ts` — типы и fetch-функции.
+4. По желанию обновить таблицу выше.
 
-Контракт API каталога — **single source of truth**:
-[`~/Projects/boardgames-catalog/CLAUDE.md`](../boardgames-catalog/CLAUDE.md)
-секция «Контракты с соседями». При изменениях upstream'а синхронно
-поправить `app/catalog_client.py` и `frontend/src/lib/catalog.ts`.
+Auth: catalog admin-mutations требуют `X-API-Key`. Web-test использует
+один ключ из env `CATALOG_API_KEY` (scope `admin`). Если catalog запущен
+с `REQUIRE_AUTH=0`, web-test тоже работает без ключа.
+
+### parsers API
+
+Контракт `/search`, `/api/debug/*`, `/api/db/*`, `/api/stats/*`, `/api/dlq/*`
+описан в `services/parsers/CLAUDE.md`. Web-test проксирует через
+`parsers_client.py` и роутеры в `app/api/{parsers,debug,parsers_db,dlq,stats}.py`.
+
+## Подводные камни
+
+- **`parsers @ workspace`**: импорты `from parsers.db import ...` работают
+  из-за editable workspace install. Старый `file:///`-путь больше не нужен.
+- **Frontend cache key consistency**: после mutation в одном домене часто
+  нужно invalidate несколько ключей. Например, `linkOffer` инвалидирует
+  `['catalog','matching-queue']` И `['catalog','matching-stats']` —
+  иначе dashboard висит со старыми числами.
+- **`catalog_dlq` в parsers**: web-test не пишет сам, только проксирует
+  чтение и replay. DLQ-логика — на стороне `parsers/catalog_publisher.py`.
+- **Suite baselines**: пока используется только `min_count` из
+  `SuiteBaselineSpec`. Поля `expected_stores` и `min_field_coverage` есть
+  в schema, но не сравниваются на прогоне (UI показывает их в pill, если
+  заполнены). Расширение — следующая итерация.
+- **Snapshot diff `extra` разбивается на `extra.<key>`** на бэкенде
+  (`app/diff.py:diff_products`). Если нужно вернуться к сравнению целиком —
+  убрать ветку `if field == "extra"` в diff_products.
+- **Health popover** держит `position: fixed inset-0` overlay для
+  закрытия по клику. Не вкладывать в overflow-hidden родителя — иначе
+  popover обрезается.
+
+## Запреты
+
+- **Не push в remote** без явного разрешения пользователя.
+- **Не менять формат** webhook'а `parsers → catalog` (`/ingest/offers`)
+  без синхронной правки producer'а и consumer'а.
+- **Не удалять** observations / DLQ-записи / aliases без подтверждения
+  оператора (UI везде использует `window.confirm` для destructive ops).

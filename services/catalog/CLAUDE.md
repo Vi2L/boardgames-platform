@@ -199,12 +199,20 @@ X-API-Key: <ingest scope>     ← обязателен только при REQUI
 
 | Эндпоинт | Scope | Описание |
 |---|---|---|
-| `GET /games?q=&limit=&offset=` | `read` | листинг + pg_trgm fuzzy по q |
-| `GET /games/{id}` | `read` | карточка с массивом aliases |
-| `GET /matching/queue?store=&limit=` | `read` | unmatched offers, NULLS LAST по match_score |
-| `POST /matching/{offer_id}/link {game_id}` | `admin` | ручная связка + добавить title_raw как alias |
-| `POST /matching/{offer_id}/reject` | `admin` | пометить как «не игра» |
+| `GET /games?q=&limit=&offset=` | `read` | листинг + pg_trgm fuzzy по q (UNION с `game_aliases`) |
+| `GET /games/{id}` | `read` | `GameDetailOut`: основа + `aliases[]` + `bgg` (satellite) + `wikidata` (satellite) |
 | `POST /games`, `PATCH /games/{id}` | `admin` | ручное создание/правка |
+| `POST /games/merge {source_id, target_id}` | `admin` | объединить две игры: переносит offers + aliases (ON CONFLICT skip), source.status='merged', `meta.merged_into=target_id`. Возвращает `{offers_moved, aliases_moved, aliases_skipped_dup}` |
+| `POST /games/{id}/aliases {alias, source?, language?, verified?}` | `admin` | добавить альтернативное название (UNIQUE по `alias_norm` per game) |
+| `PATCH /games/{id}/aliases/{aid}` | `admin` | редактирование (alias / source / language / verified). Главный кейс — пометка `verified=true` после ревью |
+| `DELETE /games/{id}/aliases/{aid}` | `admin` | удалить алиас |
+| `GET /matching/queue?store=&limit=` | `read` | unmatched offers, NULLS LAST по match_score |
+| `GET /matching/stats` | `read` | breakdown unmatched: total + by_store (count, avg_score) + by_bucket (good ≥0.6 / candidate 0.3-0.6 / cold) + thresholds |
+| `GET /matching/candidates?title=&limit=` | `read` | топ-N кандидатов с pg_trgm score через тот же `find_match_candidates` (UNION title+aliases, MAX score per game). JOIN с games — без N+1 на фронте |
+| `POST /matching/{offer_id}/link {game_id}` | `admin` | ручная связка + добавить title_raw как alias (`source='manual'`, ON CONFLICT skip) |
+| `POST /matching/{offer_id}/reject` | `admin` | пометить как «не игра» |
+| `POST /matching/{offer_id}/reassess` | `admin` | пересчитать `find_best_match` после правки алиасов / импорта BGG. 409 если offer уже `manual` или `rejected` |
+| `POST /matching/reassess-all?store=&max_score=` | `admin` | batch-пересчёт unmatched. Возвращает `{scanned, promoted_to_auto, score_improved, unchanged}` |
 | `POST /import/{bgg,tesera}` | `admin` | запуск импортёра |
 | `GET /import/jobs/{id}` | `read` | статус job'ы |
 | `GET /health`, `GET /health/db` | — | без auth (нужно для compose-healthcheck) |
@@ -242,6 +250,9 @@ Scope'ы:
 - **`pool_pre_ping=True`** — отбрасывает мёртвые соединения. Критично, если перед сервисом стоит pgbouncer или Postgres рестартует.
 - **Alembic + async**: `env.py` использует `async_engine_from_config` + `run_sync` — обычный шаблон Alembic не работает с asyncpg.
 - **Игнор `parsers.products` как источника правды**: оффер'ы дублируются в нашу `offers` (last_price + история в `offer_prices`). Это сделано ради независимости — `parsers` может пересоздавать SQLite, мы храним свою копию для долгосрочной аналитики.
+- **Merge games не удаляет source**: после `POST /games/merge` source-игра помечается `status='merged'` и пишет `meta.merged_into=target_id`. Для трассировки auto-match'ей, которые могли сослаться на старый id. Реальные offers и aliases переезжают на target. UI (`web-test`) фильтрует merged-игры через `status` колонку.
+- **`reassess` уважает `manual`/`rejected`**: операторские решения не пересчитываются — single-reassess отвечает 409, batch-reassess их игнорирует через WHERE `match_status='unmatched'`. Чтобы пересмотреть manual-связку — сначала reject/unlink вручную.
+- **`find_match_candidates` группирует per-game**: одна игра может всплыть и через `title`, и через `alias` одновременно — берём `MAX(score)` и `via` от лучшего. Иначе UI показывал бы дубль одной игры со score 0.85 и 0.72.
 
 ## Запреты
 
