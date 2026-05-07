@@ -1,0 +1,67 @@
+# Корневой pyproject.toml монорепо boardgames-platform.
+#
+# Этот файл объявляет uv workspace: каждый сервис в `services/*` — отдельный
+# member со своим pyproject.toml, но устанавливаются они в один общий
+# `.venv/` в корне через `uv sync`. В будущем сюда же приедут members из
+# `packages/` (общие pydantic-схемы и т.п.).
+#
+# Подробности — в CLAUDE.md.
+
+[project]
+name = "boardgames-platform"
+version = "0.1.0"
+description = "Monorepo: catalog + parsers + debug portal for the boardgames platform."
+requires-python = ">=3.12"
+# Корень не публикуется как пакет, но `name`/`version` нужны для метаданных.
+
+# === uv workspace ===
+[tool.uv.workspace]
+members = [
+    "services/catalog",
+    "services/parsers",
+    "services/web-test",
+]
+
+# Когда любой member видит зависимость "parsers", uv берёт её из workspace,
+# а не с PyPI. Это и есть замена прежнего `parsers @ file:///...` в web-test.
+[tool.uv.sources]
+parsers = { workspace = true }
+
+# === Общие dev-зависимости (PEP 735 dependency-groups) ===
+# Ставятся для всего workspace командой `uv sync --group dev` (или просто
+# `uv sync`, если default-groups содержит "dev"). Видны во всех members.
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.5",
+]
+
+# === Линтер/форматтер ===
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = [
+    "**/.venv",
+    "**/dist",
+    "**/build",
+    "services/web-test/frontend",
+    "services/catalog/alembic/versions",
+]
+
+[tool.ruff.lint]
+# Базовый набор: pyflakes (F), pycodestyle errors/warnings (E, W), isort (I)
+select = ["F", "E", "W", "I"]
+
+# === Тесты — корневой pytest ===
+# Позволяет запустить `uv run pytest` из корня и прогнать все members разом.
+# Per-service pyproject.toml имеют свои `testpaths` — они работают
+# независимо при `uv run --package <name> pytest`.
+[tool.pytest.ini_options]
+testpaths = [
+    "services/catalog/tests",
+    "services/parsers/tests",
+    "services/web-test/tests",
+]
+asyncio_mode = "strict"

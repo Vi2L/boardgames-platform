@@ -1,0 +1,39 @@
+# Исключения для docker build context.
+#
+# Сервис web-test использует root-context (`build.context: .` в compose),
+# поэтому корневой .dockerignore нужен, чтобы не отправлять в build daemon
+# `.git/`, `.venv/`, `node_modules/` и прочее, что в финальный образ не идёт.
+# Без этого Docker отправляет сотни МБ при каждом build.
+
+.git
+.gitignore
+.dockerignore
+
+# Python venv и кеши
+.venv
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/*.egg-info
+**/build
+**/dist
+
+# Node
+**/node_modules
+
+# Локальные данные сервисов (SQLite-файлы)
+services/*/data
+*.sqlite
+*.sqlite-journal
+
+# Документация и Claude Code
+docs
+.claude
+README.md
+
+# Plan файлы и envs
+.env
+.env.local
+.env.*.local

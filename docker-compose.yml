@@ -1,0 +1,124 @@
+# Единый docker-compose для всего монорепо.
+#
+# Profiles позволяют поднимать подмножества сервисов:
+#   docker compose --profile minimal up -d   # только postgres
+#   docker compose --profile catalog up -d   # postgres + catalog
+#   docker compose --profile full up -d      # всё (postgres+catalog+parsers+web-test)
+#
+# Все сервисы общаются по именам через сеть `bg`. Внешние порты можно
+# переопределять переменными в .env (например POSTGRES_PORT=5434).
+
+name: boardgames-platform
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: bg-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-catalog}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-catalog}
+      POSTGRES_DB: ${POSTGRES_DB:-catalog}
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # init.sql выполняется один раз при создании volume — ставит расширения
+      # pg_trgm и unaccent. Если нужно перезапустить — `docker compose down -v`
+      # и заново. Для прод-миграций — Alembic в catalog'е, не init.sql.
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-catalog} -d ${POSTGRES_DB:-catalog}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - bg
+    profiles: ["minimal", "catalog", "full"]
+
+  catalog:
+    build:
+      context: ./services/catalog
+      dockerfile: Dockerfile
+    image: boardgames-catalog:latest
+    container_name: bg-catalog
+    ports:
+      - "${CATALOG_PORT:-8002}:8002"
+    environment:
+      # Внутри сети bg сервис ходит на postgres:5432 (имя сервиса).
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-catalog}:${POSTGRES_PASSWORD:-catalog}@postgres:5432/${POSTGRES_DB:-catalog}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REQUIRE_AUTH: ${REQUIRE_AUTH:-0}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - bg
+    profiles: ["catalog", "full"]
+
+  parsers:
+    build:
+      context: ./services/parsers
+      dockerfile: Dockerfile
+    image: boardgames-parsers:latest
+    container_name: bg-parsers
+    ports:
+      - "${PARSERS_PORT:-8001}:8001"
+    environment:
+      DB_PATH: /data/prices.sqlite
+      CACHE_TTL_HOURS: ${CACHE_TTL_HOURS:-4}
+      ENABLE_RAW_SNAPSHOTS: ${ENABLE_RAW_SNAPSHOTS:-}
+      # В сети bg catalog доступен по имени сервиса.
+      CATALOG_INGEST_URL: http://catalog:8002/ingest/offers
+      CATALOG_API_KEY: ${CATALOG_API_KEY:-}
+    volumes:
+      - prices-data:/data
+    depends_on:
+      catalog:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - bg
+    profiles: ["full"]
+
+  web-test:
+    build:
+      # Root-context: Dockerfile делает COPY и из services/parsers/, и из
+      # services/web-test/. Единственный валидный родитель обоих путей —
+      # корень монорепо. См. .dockerignore для исключений из build context.
+      context: .
+      dockerfile: services/web-test/Dockerfile
+    image: boardgames-web-test:latest
+    container_name: bg-web-test
+    ports:
+      - "${WEB_TEST_PORT:-8000}:8000"
+    environment:
+      DB_PATH: /data/portal.sqlite
+      PARSERS_API_URL: http://parsers:8001
+      CATALOG_API_URL: http://catalog:8002
+      CATALOG_API_KEY: ${CATALOG_API_KEY:-}
+    volumes:
+      - portal-data:/data
+    depends_on:
+      - parsers
+      - catalog
+    restart: unless-stopped
+    networks:
+      - bg
+    profiles: ["full"]
+
+volumes:
+  pgdata:
+  prices-data:
+  portal-data:
+
+networks:
+  bg:
+    driver: bridge
