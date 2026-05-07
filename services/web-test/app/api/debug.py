@@ -34,6 +34,31 @@ async def debug_parse(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+# ── Contract validator (F1.5) ──────────────────────────────────────────────
+
+
+@router.get("/contract")
+async def debug_contract(
+    client: ParsersClient = Depends(get_parsers_client),
+) -> dict:
+    """Схема ParsedProduct (источник правды парсера)."""
+    try:
+        return await client.debug_contract()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
+@router.get("/field-coverage")
+async def debug_field_coverage(
+    client: ParsersClient = Depends(get_parsers_client),
+) -> list[dict]:
+    """Покрытие опциональных полей per-store за всё время (data quality)."""
+    try:
+        return await client.get_field_coverage()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
 # ── URL probe (F1.4) ───────────────────────────────────────────────────────
 
 

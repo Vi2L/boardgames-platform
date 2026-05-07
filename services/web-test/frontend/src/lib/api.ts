@@ -1,7 +1,7 @@
 import type {
-  CompareResponse,
+  CompareResponse, ContractResponse,
   DebugFeatures, DebugFetchUrlResult, DebugParseResponse,
-  DiffResult, FavoriteOut,
+  DiffResult, FavoriteOut, FieldCoverageRow,
   HealthOut, ParserSnapshotFull, ParserSnapshotMeta, ParserStatsOut, PriceDeltaOut, PricePointOut,
   ProductDetailOut, ProductsPage, SearchesPage,
   SnapshotFull, SnapshotsPage, StoreOut, StoreStatsResponse,
@@ -128,6 +128,12 @@ export const fetchRawSnapshot = (id: number) =>
   fetch(`${BASE}/debug/snapshots/${id}`).then(r => json<ParserSnapshotFull>(r))
 
 export const rawSnapshotTextUrl = (id: number) => `${BASE}/debug/snapshots/${id}/raw`
+
+export const fetchContract = () =>
+  fetch(`${BASE}/debug/contract`).then(r => json<ContractResponse>(r))
+
+export const fetchFieldCoverage = () =>
+  fetch(`${BASE}/debug/field-coverage`).then(r => json<FieldCoverageRow[]>(r))
 
 export const debugFetchUrl = (params: { url: string; encoding_hint?: string }) => {
   const sp = new URLSearchParams({ url: params.url })

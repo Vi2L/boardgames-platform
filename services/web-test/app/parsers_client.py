@@ -140,6 +140,18 @@ class ParsersClient:
             raise ParsersServiceError(resp.status_code, detail)
         return resp.json()
 
+    async def debug_contract(self) -> dict:
+        """GET /api/debug/contract → схема ParsedProduct."""
+        resp = await self._client.get("/api/debug/contract")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_field_coverage(self) -> list[dict]:
+        """GET /api/stats/field-coverage → coverage опц. полей per-store."""
+        resp = await self._client.get("/api/stats/field-coverage")
+        resp.raise_for_status()
+        return resp.json()
+
     async def debug_fetch_url(
         self,
         url: str,

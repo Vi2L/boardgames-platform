@@ -9,20 +9,22 @@
  * Дальше сюда же добавятся: URL playground (F1.4), Contract validator (F1.5).
  */
 import { useState } from 'react'
-import { Beaker, Scale, FileCode2, Link2, type LucideIcon } from 'lucide-react'
+import { Beaker, Scale, FileCode2, Link2, ScrollText, type LucideIcon } from 'lucide-react'
 import clsx from 'clsx'
 import { LiveTestPanel } from '../components/parsers/LiveTestPanel'
 import { CompareTab } from '../components/parsers/CompareTab'
 import { SnapshotsTab } from '../components/parsers/SnapshotsTab'
 import { UrlPlayground } from '../components/parsers/UrlPlayground'
+import { ContractPanel } from '../components/parsers/ContractPanel'
 
-type Tab = 'live' | 'compare' | 'url' | 'snapshots'
+type Tab = 'live' | 'compare' | 'url' | 'contract' | 'snapshots'
 
 const TABS: Array<{ id: Tab; label: string; icon: LucideIcon; hint: string }> = [
-  { id: 'live',     label: 'Live Test',  icon: Beaker,    hint: 'мимо кеша, raw ParsedProduct' },
-  { id: 'compare',  label: 'Сравнить',   icon: Scale,     hint: 'diff cache vs live по url' },
-  { id: 'url',      label: 'По URL',     icon: Link2,     hint: 'пробный GET по URL магазина' },
-  { id: 'snapshots',label: 'Raw HTTP',   icon: FileCode2, hint: 'тело сохранённых ответов' },
+  { id: 'live',     label: 'Live Test',  icon: Beaker,     hint: 'мимо кеша, raw ParsedProduct' },
+  { id: 'compare',  label: 'Сравнить',   icon: Scale,      hint: 'diff cache vs live по url' },
+  { id: 'url',      label: 'По URL',     icon: Link2,      hint: 'пробный GET по URL магазина' },
+  { id: 'contract', label: 'Контракт',   icon: ScrollText, hint: 'схема ParsedProduct + coverage' },
+  { id: 'snapshots',label: 'Raw HTTP',   icon: FileCode2,  hint: 'тело сохранённых ответов' },
 ]
 
 export function DebugPage() {
@@ -64,6 +66,7 @@ export function DebugPage() {
       {tab === 'live' && <LiveTestPanel />}
       {tab === 'compare' && <CompareTab />}
       {tab === 'url' && <UrlPlayground />}
+      {tab === 'contract' && <ContractPanel />}
       {tab === 'snapshots' && <SnapshotsTab />}
     </div>
   )

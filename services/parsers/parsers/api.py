@@ -117,6 +117,49 @@ async def price_history(product_id: int):
     return [{"price": p.price, "fetched_at": p.fetched_at.isoformat()} for p in points]
 
 
+@app.get("/api/debug/contract")
+async def debug_contract():
+    """Контракт парсера: schema ParsedProduct (требуемые/опциональные поля).
+
+    ParsedProduct — frozen dataclass, не pydantic, поэтому собираем схему
+    вручную через `dataclasses.fields`. Этот endpoint используется UI как
+    «source of truth» для heatmap coverage и валидации новых парсеров.
+    """
+    import dataclasses
+    from .models import ParsedProduct
+
+    fields_out: list[dict] = []
+    for f in dataclasses.fields(ParsedProduct):
+        # MISSING значит «без default» → required
+        no_default = f.default is dataclasses.MISSING
+        no_factory = f.default_factory is dataclasses.MISSING  # type: ignore[misc]
+        required = no_default and no_factory
+
+        default_repr: object = None
+        if not no_default:
+            default_repr = f.default
+        elif not no_factory:
+            try:
+                default_repr = f.default_factory()  # type: ignore[misc]
+            except Exception:  # noqa: BLE001
+                default_repr = None
+
+        # f.type — string из __future__ annotations, оставляем как есть
+        type_str = f.type if isinstance(f.type, str) else str(f.type)
+        fields_out.append({
+            "name": f.name,
+            "type": type_str,
+            "required": required,
+            "default": default_repr,
+        })
+
+    return {
+        "model": "ParsedProduct",
+        "module": "parsers.models",
+        "fields": fields_out,
+    }
+
+
 @app.get("/api/debug/fetch-url")
 async def debug_fetch_url(
     url: str = Query(..., description="URL для пробного GET-запроса"),

@@ -403,6 +403,27 @@ export interface CompareResponse {
   errors: { cache: string | null; live: string | null }
 }
 
+/** Поле dataclass ParsedProduct (см. /api/debug/contract). */
+export interface ContractField {
+  name: string
+  type: string
+  required: boolean
+  default: unknown
+}
+
+export interface ContractResponse {
+  model: string
+  module: string
+  fields: ContractField[]
+}
+
+/** Покрытие опциональных полей per-store (heatmap data quality). */
+export interface FieldCoverageRow {
+  store_slug: string
+  total: number
+  coverage: Record<string, number>  // field -> percent (0..100)
+}
+
 /** Результат /api/debug/fetch-url: пробный GET через парсерский стек. */
 export interface DebugFetchUrlResult {
   status_code: number
