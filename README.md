@@ -1,14 +1,33 @@
 # boardgames-catalog
 
-Каталог настольных игр: канонические Game-сущности + связанные offers (предложения магазинов из проекта `parsers`).
+Каталог настольных игр: канонические **Game** (метаданные из BGG/Tesera +
+ручной ввод) + связанные **offers** (предложения магазинов, приходят из
+сервиса `parsers` через webhook).
 
-Часть стека `~/Projects/boardgames-stack/` (см. `~/.claude/plans/woolly-wobbling-simon.md`).
+Часть мультирепо-стека: см. **карту стека** в
+[`~/Projects/boardgames-infra/README.md`](../boardgames-infra/README.md).
 
-## Этап реализации
+## Соседи
 
-**Этап 1 (текущий) — skeleton:** FastAPI с `/health`, async SQLAlchemy + asyncpg, Alembic настроен (миграций ещё нет), Dockerfile.
+| Сервис | Что от нас хочет | Эндпоинт |
+|---|---|---|
+| [`parsers`](../parsers) | пушит batched offers | `POST /ingest/offers` (scope `ingest`) |
+| [`parsers_web_test`](../parsers_web_test) | проксирует UI каталога и ручного матчинга | `GET /games`, `GET /matching/queue`, `POST /matching/*/link\|reject` |
+| Будущие приложения (партии, скидки, мобайл) | читают каталог и offers по канонической Game | `GET /games`, `GET /games/{id}`, `GET /games/{id}/offers` |
 
-Следующие этапы — в плане в `~/.claude/plans/woolly-wobbling-simon.md`.
+Подробный контракт webhook'а — в [`CLAUDE.md`](CLAUDE.md) секция «Контракты с соседями».
+
+## Возможности
+
+- BGG XML API + Tesera JSON импортёры (`POST /import/{bgg,tesera}`,
+  идемпотентный upsert по `bgg_id`/`tesera_id`).
+- pg_trgm fuzzy-search в `GET /games?q=` (находит «Каркассон» по «каркасон»).
+- Auto-matcher оффер'ов на canonical Game через триграммы; порог 0.6 →
+  `match_status=auto`, ниже → `unmatched`-queue для ручного review.
+- Idempotent ingest: повторный POST того же оффера не плодит дубли,
+  manual/rejected-статусы не перезаписываются.
+- X-API-Key auth с scope'ами `ingest`/`read`/`admin`. По умолчанию выключена
+  для удобства dev/CI; в prod включить `REQUIRE_AUTH=1`.
 
 ## Запуск
 

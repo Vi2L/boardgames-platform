@@ -58,30 +58,82 @@ catalog/
 
 ## Контракты с соседями
 
-### Webhook от `parsers` (этап 5)
+### Webhook от `parsers` — `POST /ingest/offers`
 
-```
+**Source of truth для контракта.** Менять формат — только синхронно с
+`~/Projects/parsers/parsers/catalog_publisher.py`.
+
+```http
 POST /ingest/offers
-X-API-Key: <ingest scope>
+Content-Type: application/json
+X-API-Key: <ingest scope>     ← обязателен только при REQUIRE_AUTH=1
+```
 
+```json
 {
   "store_slug": "hobbygames",
+  "fetched_at": "2026-05-07T12:00:00+00:00",   // optional; если нет — server now()
   "products": [
     {
       "external_id": "1234",
       "title": "Каркассон",
-      "url": "https://...",
-      "price": 169500,           // копейки
-      "image_url": "...",
-      "extra": {...}             // raw_json из parsers
+      "url": "https://hobbygames.ru/.../",
+      "price": 169500,                          // в копейках, nullable
+      "image_url": "https://...",               // nullable
+      "extra": {                                // ParsedProduct.raw из parsers
+        "gallery": ["..."],
+        "tags": [...],
+        "rating": 7.5
+      }
     }
   ]
 }
 ```
 
+**Ответ:**
+
+```json
+{
+  "store_slug": "hobbygames",
+  "accepted": 1,
+  "auto_matched": 1,
+  "unmatched": 0,
+  "items": [
+    {
+      "external_id": "1234",
+      "offer_id": 42,
+      "game_id": 7,                             // null если не сматчен
+      "match_status": "auto",                   // auto | unmatched | manual | rejected
+      "match_score": 0.72                       // null для unmatched без кандидатов
+    }
+  ]
+}
+```
+
+**Семантика:**
+- Upsert по `(store_slug, external_id)` — один offer = один ряд в `offers`.
+- Если `match_status` уже `manual` или `rejected` — не пересматчиваем
+  (решение оператора финально).
+- При auto-match `title` сохраняется как `game_aliases.alias` с
+  `source='auto-match'` — следующий ingest сматчится по точному `alias_norm`,
+  не нагружая trgm-индекс.
+- `offer_prices` получает точку при каждом ingest'е с `price != null`.
+  PRIMARY KEY `(offer_id, fetched_at)` + ON CONFLICT DO NOTHING — один и тот
+  же ингест в тот же миг не плодит дубли.
+
 ### Чтение из `parsers_web_test` и других потребителей
 
-Все GET-эндпоинты `/games`, `/games/{id}/offers`, `/games/{id}/price-history` — за `X-API-Key` со scope `read`.
+| Эндпоинт | Scope | Описание |
+|---|---|---|
+| `GET /games?q=&limit=&offset=` | `read` | листинг + pg_trgm fuzzy по q |
+| `GET /games/{id}` | `read` | карточка с массивом aliases |
+| `GET /matching/queue?store=&limit=` | `read` | unmatched offers, NULLS LAST по match_score |
+| `POST /matching/{offer_id}/link {game_id}` | `admin` | ручная связка + добавить title_raw как alias |
+| `POST /matching/{offer_id}/reject` | `admin` | пометить как «не игра» |
+| `POST /games`, `PATCH /games/{id}` | `admin` | ручное создание/правка |
+| `POST /import/{bgg,tesera}` | `admin` | запуск импортёра |
+| `GET /import/jobs/{id}` | `read` | статус job'ы |
+| `GET /health`, `GET /health/db` | — | без auth (нужно для compose-healthcheck) |
 
 ## Auth (этап 7)
 
