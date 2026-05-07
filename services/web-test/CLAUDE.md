@@ -111,7 +111,7 @@ parsers_web_test/
 
 ## Dependencies
 
-- Parsers package: `file:///Users/vitaliy/Projects/parsers` (local editable)
+- Parsers package: workspace-член (`{ workspace = true }` в корневом pyproject.toml монорепо), editable
 - Backend: FastAPI, uvicorn, pydantic v2, aiosqlite, python-dotenv, httpx
 - Frontend: React 18, Vite 5, Tailwind CSS v3, TanStack Query v5, Zustand v4, Recharts v2
 
