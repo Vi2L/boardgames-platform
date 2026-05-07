@@ -1,14 +1,27 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, Users, Clock, Baby, ArrowDownRight, ArrowUpRight, Minus } from 'lucide-react'
+import {
+  ChevronDown, ChevronUp, ChevronsUpDown, Users, Clock, Baby,
+  ArrowDownRight, ArrowUpRight, Minus,
+} from 'lucide-react'
 import clsx from 'clsx'
 import type { PriceDeltaOut, ProductOut } from '../../types/api'
-import { getStoreBadgeColor } from '../../lib/stores'
+import { getStoreBadgeColor, getStoreLabel } from '../../lib/stores'
 
 interface Props {
   products: ProductOut[]
   /** Δ-цены пакетом (id → PriceDeltaOut). Может быть пустым на первом рендере. */
   deltas?: Map<number, PriceDeltaOut>
   onSelect: (product: ProductOut) => void
+}
+
+type SortKey = 'store' | 'title' | 'price'
+type SortDir = 'asc' | 'desc'
+
+/** Лейблы для mobile-переключателя сортировки. */
+const SORT_LABELS: Record<SortKey, string> = {
+  store: 'Магазин',
+  title: 'Название',
+  price: 'Цена',
 }
 
 /**
@@ -62,21 +75,76 @@ function formatPrice(rub: number): string {
  * чтобы карточка влезала в один ряд без переполнения.
  */
 export function ResultsTable({ products, deltas, onSelect }: Props) {
-  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
+  // Дефолт — цена по возрастанию (сохраняем прежнее поведение). По клику на
+  // тот же ключ — флипаем направление; на другой ключ — переключаем ключ и
+  // сбрасываем dir в asc, чтобы интерфейс был предсказуем.
+  const [sortKey, setSortKey] = useState<SortKey>('price')
+  const [sortDir, setSortDir] = useState<SortDir>('asc')
+
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) {
+      setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    } else {
+      setSortKey(key)
+      setSortDir('asc')
+    }
+  }
 
   if (products.length === 0) {
     return <div className="text-center text-gray-500 py-12 text-sm">Нет результатов</div>
   }
 
-  const sorted = [...products].sort((a, b) =>
-    sortDir === 'asc' ? a.price_rub - b.price_rub : b.price_rub - a.price_rub
-  )
+  // Для магазина сортируем по человеческому имени, а не по slug —
+  // «GaGa», «HobbyGames», «Лавка игр» вместо «gaga»/«hobbygames»/«lavkaigr».
+  // Для названия — locale-aware с флагом sensitivity='base' (без учёта регистра/диакритики).
+  const sorted = [...products].sort((a, b) => {
+    let cmp = 0
+    if (sortKey === 'price') {
+      cmp = a.price_rub - b.price_rub
+    } else if (sortKey === 'store') {
+      cmp = getStoreLabel(a.store_slug).localeCompare(getStoreLabel(b.store_slug), 'ru-RU')
+    } else if (sortKey === 'title') {
+      cmp = a.title.localeCompare(b.title, 'ru-RU', { sensitivity: 'base' })
+    }
+    return sortDir === 'asc' ? cmp : -cmp
+  })
 
   const renderStoreBadge = (slug: string) => (
     <span className={clsx('px-2 py-0.5 rounded text-xs font-mono font-medium', getStoreBadgeColor(slug))}>
       {slug}
     </span>
   )
+
+  /**
+   * Рендер кликабельного `<th>`. Активная колонка показывает направление
+   * стрелкой; остальные — приглушённый ChevronsUpDown как индикатор того,
+   * что по ним тоже можно сортировать.
+   */
+  const SortableTh = ({
+    keyName, label, className,
+  }: { keyName: SortKey; label: string; className?: string }) => {
+    const active = sortKey === keyName
+    const Icon = active
+      ? (sortDir === 'asc' ? ChevronUp : ChevronDown)
+      : ChevronsUpDown
+    return (
+      <th
+        scope="col"
+        className={clsx(
+          'px-3 py-2.5 text-left text-xs font-medium cursor-pointer select-none whitespace-nowrap',
+          active ? 'text-gray-300' : 'text-gray-500 hover:text-gray-300',
+          className,
+        )}
+        onClick={() => toggleSort(keyName)}
+        aria-sort={active ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'none'}
+      >
+        <span className="inline-flex items-center gap-1">
+          {label}
+          <Icon size={12} className={active ? '' : 'opacity-40'} />
+        </span>
+      </th>
+    )
+  }
 
   const renderParams = (p: ProductOut) => (
     <div className="flex flex-wrap gap-1.5">
@@ -106,17 +174,10 @@ export function ResultsTable({ products, deltas, onSelect }: Props) {
           <thead>
             <tr className="border-b border-gray-800 bg-gray-900/80">
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium w-8"></th>
-              <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium">Магазин</th>
-              <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium">Название</th>
+              <SortableTh keyName="store" label="Магазин" />
+              <SortableTh keyName="title" label="Название" />
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden lg:table-cell">Параметры</th>
-              <th
-                className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium cursor-pointer hover:text-gray-300 select-none whitespace-nowrap"
-                onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
-              >
-                <span className="flex items-center gap-1">
-                  Цена {sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-                </span>
-              </th>
+              <SortableTh keyName="price" label="Цена" />
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden xl:table-cell whitespace-nowrap" title="Изменение цены между двумя последними точками истории">Δ</th>
               <th className="px-3 py-2.5 text-left text-xs text-gray-500 font-medium hidden lg:table-cell">Дата</th>
             </tr>
@@ -167,14 +228,35 @@ export function ResultsTable({ products, deltas, onSelect }: Props) {
 
       {/* ── Mobile: карточки ──────────────────────────────────────────── */}
       <div className="md:hidden grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="col-span-full flex justify-end mb-1">
-          <button
-            type="button"
-            onClick={() => setSortDir(d => d === 'asc' ? 'desc' : 'asc')}
-            className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-200 px-2 py-1 rounded bg-gray-900 border border-gray-800"
-          >
-            Сортировка по цене {sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-          </button>
+        {/*
+          Mobile-переключатель сортировки: сегментированный контрол вместо
+          трёх дублирующих заголовков. Активная кнопка подсвечена + стрелка
+          направления; повторный клик меняет dir.
+        */}
+        <div className="col-span-full flex flex-wrap items-center gap-1.5 mb-1">
+          <span className="text-xs text-gray-500 mr-1">Сортировка:</span>
+          {(Object.keys(SORT_LABELS) as SortKey[]).map(k => {
+            const active = sortKey === k
+            const Icon = active
+              ? (sortDir === 'asc' ? ChevronUp : ChevronDown)
+              : ChevronsUpDown
+            return (
+              <button
+                key={k}
+                type="button"
+                onClick={() => toggleSort(k)}
+                className={clsx(
+                  'flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors',
+                  active
+                    ? 'bg-violet-900/40 border-violet-700 text-violet-200'
+                    : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200',
+                )}
+              >
+                {SORT_LABELS[k]}
+                <Icon size={12} className={active ? '' : 'opacity-40'} />
+              </button>
+            )
+          })}
         </div>
         {sorted.map(p => (
           <button
