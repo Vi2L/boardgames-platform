@@ -3,12 +3,14 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "parsers-web-test"
+name = "web-test"
 version = "0.1.0"
 description = "Debug/testing web interface for parsers"
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
-    "parsers @ file:///Users/vitaliy/Projects/parsers",
+    # `parsers` резолвится через [tool.uv.sources] в корневом pyproject.toml
+    # (workspace = true) — это замена прежнего `parsers @ file:///...`
+    "parsers",
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
     "pydantic>=2",
@@ -29,6 +31,3 @@ testpaths = ["tests"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
-
-[tool.hatch.metadata]
-allow-direct-references = true

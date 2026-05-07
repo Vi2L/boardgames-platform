@@ -2,7 +2,7 @@
 name = "parsers"
 version = "0.1.0"
 description = "Price comparison service for board games."
-requires-python = ">=3.9"
+requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",

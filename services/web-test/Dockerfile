@@ -6,11 +6,11 @@ FROM node:20-alpine AS frontend-builder
 WORKDIR /build
 
 # Устанавливаем зависимости отдельным слоем (кэшируется при изменении только кода)
-COPY parsers_web_test/frontend/package*.json ./
+COPY services/web-test/frontend/package*.json ./
 RUN npm ci --silent
 
 # Копируем исходники и собираем
-COPY parsers_web_test/frontend/ ./
+COPY services/web-test/frontend/ ./
 RUN npm run build
 
 
@@ -24,8 +24,9 @@ WORKDIR /app
 # Все Python-зависимости имеют pre-built wheels (pydantic, fastapi, uvicorn,
 # aiosqlite, httpx, python-dotenv) — компилятор не нужен.
 
-# Устанавливаем parsers как пакет (не editable — для production-образа)
-COPY parsers/ /tmp/parsers/
+# Устанавливаем parsers как пакет (не editable — для production-образа).
+# Build context = корень монорепо (см. docker-compose.yml: web-test.build.context: .)
+COPY services/parsers/ /tmp/parsers/
 RUN pip install --no-cache-dir /tmp/parsers/ && rm -rf /tmp/parsers/
 
 # Устанавливаем дополнительные зависимости parsers_web_test
@@ -35,7 +36,7 @@ RUN pip install --no-cache-dir \
     "python-dotenv>=1.0"
 
 # Копируем исходный код приложения
-COPY parsers_web_test/app/ ./app/
+COPY services/web-test/app/ ./app/
 
 # Копируем собранный фронтенд — FastAPI отдаёт его как статику
 COPY --from=frontend-builder /build/dist ./frontend/dist/
