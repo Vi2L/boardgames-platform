@@ -211,10 +211,13 @@ export interface SnapshotFull extends SnapshotMeta {
 
 export type DiffStatus = 'added' | 'removed' | 'changed'
 
+export type DiffCategory = 'price' | 'lost' | 'gained' | 'raw' | 'field'
+
 export interface DiffField {
   a: unknown
   b: unknown
   delta_pct?: number
+  category?: DiffCategory
 }
 
 export interface DiffProductItem {
@@ -235,6 +238,7 @@ export interface DiffResult {
     same: number
     ms_a?: number | null
     ms_b?: number | null
+    categories?: Record<DiffCategory, number>
   }
   products: DiffProductItem[]
   meta: {

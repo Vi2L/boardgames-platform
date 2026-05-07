@@ -75,14 +75,61 @@ def _values_equal(a: Any, b: Any) -> bool:
     return a == b
 
 
+def _classify_change(field: str, av: Any, bv: Any) -> str:
+    """Категория изменения — для UI-фильтров и бейджей.
+
+      - 'lost'      — значение было, стало null/empty (регрессия парсера);
+      - 'gained'    — наоборот, поле появилось (улучшение);
+      - 'price'     — изменилась цена;
+      - 'raw'       — изменился ключ внутри extra (raw_json парсера);
+      - 'field'     — обычное изменение значения.
+    """
+    if field == "price_rub":
+        return "price"
+    if field.startswith("extra."):
+        return "raw"
+    a_empty = av is None or av == "" or av == [] or av == {}
+    b_empty = bv is None or bv == "" or bv == [] or bv == {}
+    if a_empty and not b_empty:
+        return "gained"
+    if b_empty and not a_empty:
+        return "lost"
+    return "field"
+
+
 def diff_products(a: dict[str, Any], b: dict[str, Any]) -> dict[str, dict[str, Any]]:
-    """Возвращает {field: {a, b, [delta_pct]}} для всех изменённых полей."""
+    """Возвращает {field: {a, b, [delta_pct], category}} для всех изменённых полей.
+
+    `extra` разбирается покустно: вместо одного entry 'extra' собираем
+    отдельные `extra.gallery`, `extra.sku`, `extra.dimensions`, ... — это
+    даёт UI-у точный diff и категорию 'raw'.
+    """
     changes: dict[str, dict[str, Any]] = {}
     for field in DIFF_FIELDS:
         av = a.get(field)
         bv = b.get(field)
+
+        # extra: разбиваем по ключам, чтобы UI видел gallery vs sku vs dimensions
+        # как отдельные изменения, а не одно «extra изменилось целиком».
+        if field == "extra":
+            ad = av if isinstance(av, dict) else {}
+            bd = bv if isinstance(bv, dict) else {}
+            for k in sorted(set(ad) | set(bd)):
+                if not _values_equal(ad.get(k), bd.get(k)):
+                    sub = f"extra.{k}"
+                    changes[sub] = {
+                        "a": ad.get(k),
+                        "b": bd.get(k),
+                        "category": _classify_change(sub, ad.get(k), bd.get(k)),
+                    }
+            continue
+
         if not _values_equal(av, bv):
-            entry: dict[str, Any] = {"a": av, "b": bv}
+            entry: dict[str, Any] = {
+                "a": av,
+                "b": bv,
+                "category": _classify_change(field, av, bv),
+            }
             if field == "price_rub" and isinstance(av, (int, float)) and isinstance(bv, (int, float)) and av:
                 entry["delta_pct"] = round((bv - av) / av * 100, 2)
             changes[field] = entry
@@ -129,11 +176,25 @@ def diff_snapshots(
                 # «same» в выдаче не показываем (фронт фильтрует), но считаем
                 counts["same"] += 1
 
+    # Подсчёт категорий для верхней сводки UI: сколько товаров с
+    # потерянным полем, сколько с raw-изменением и т.п.
+    cat_counts = {"price": 0, "lost": 0, "gained": 0, "raw": 0, "field": 0}
+    for it in items:
+        if it.get("status") != "changed":
+            continue
+        cats_in_item = set()
+        for f in (it.get("fields") or {}).values():
+            if isinstance(f, dict) and f.get("category"):
+                cats_in_item.add(f["category"])
+        for c in cats_in_item:
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+
     return {
         "summary": {
             "a_count": len(a_map),
             "b_count": len(b_map),
             **counts,
+            "categories": cat_counts,
         },
         "products": items,
     }

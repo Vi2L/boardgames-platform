@@ -1,11 +1,13 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowDown, ArrowUp, Plus, Minus } from 'lucide-react'
+import { ArrowLeft, ArrowDown, ArrowUp, Plus, Minus, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
-import type { DiffField, DiffProductItem } from '../../types/api'
+import type { DiffCategory, DiffField, DiffProductItem } from '../../types/api'
 import { fetchSnapshotDiff } from '../../lib/api'
 import { getStoreBadgeColor } from '../../lib/stores'
+
+const PRICE_ALERT_THRESHOLD = 30  // % — > 30% считаем подозрительным
 
 /**
  * Side-by-side diff двух snapshot-ов.
@@ -21,6 +23,7 @@ export function DiffView() {
   const a = Number(params.get('a'))
   const b = Number(params.get('b'))
   const [filter, setFilter] = useState<'all' | 'changes'>('changes')
+  const [catFilter, setCatFilter] = useState<DiffCategory | 'any'>('any')
 
   const { data: diff, isLoading, error } = useQuery({
     queryKey: ['snapshot-diff', a, b],
@@ -30,9 +33,17 @@ export function DiffView() {
 
   const filtered = useMemo(() => {
     if (!diff) return []
-    if (filter === 'all') return diff.products
-    return diff.products.filter(p => p.status !== 'same' as never)
-  }, [diff, filter])
+    let items = filter === 'all'
+      ? diff.products
+      : diff.products.filter(p => p.status !== 'same' as never)
+    if (catFilter !== 'any') {
+      items = items.filter(p => {
+        if (p.status !== 'changed') return false
+        return Object.values(p.fields ?? {}).some(f => f.category === catFilter)
+      })
+    }
+    return items
+  }, [diff, filter, catFilter])
 
   if (isLoading) return <div className="text-sm text-gray-500">Загрузка diff…</div>
   if (error || !diff) {
@@ -63,6 +74,20 @@ export function DiffView() {
           <option value="all">Все</option>
         </select>
 
+        <select
+          value={catFilter}
+          onChange={e => setCatFilter(e.target.value as DiffCategory | 'any')}
+          className="px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200"
+          title="Категория изменения"
+        >
+          <option value="any">Все категории</option>
+          <option value="price">Цена</option>
+          <option value="lost">Потеряно поле</option>
+          <option value="gained">Появилось поле</option>
+          <option value="raw">Raw (extra)</option>
+          <option value="field">Прочее</option>
+        </select>
+
         <span className="text-xs text-gray-500 ml-auto font-mono">
           a:{diff.meta.a.id} · b:{diff.meta.b.id}
         </span>
@@ -76,6 +101,17 @@ export function DiffView() {
         <SummaryCell label="Удалено" value={`−${diff.summary.removed}`} accent="text-red-400" />
         <SummaryCell label="Изменено" value={`Δ${diff.summary.changed}`} accent="text-yellow-400" />
       </div>
+
+      {/* Categories breakdown */}
+      {diff.summary.categories && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 text-xs">
+          <CatCell label="Цена изменилась"  count={diff.summary.categories.price ?? 0} category="price" />
+          <CatCell label="Потеряно поле"    count={diff.summary.categories.lost ?? 0}  category="lost" />
+          <CatCell label="Появилось поле"   count={diff.summary.categories.gained ?? 0} category="gained" />
+          <CatCell label="Raw (extra)"      count={diff.summary.categories.raw ?? 0}   category="raw" />
+          <CatCell label="Прочие изм."      count={diff.summary.categories.field ?? 0} category="field" />
+        </div>
+      )}
 
       {filtered.length === 0
         ? <div className="text-sm text-gray-500 py-12 text-center">Нет изменений</div>
@@ -101,6 +137,28 @@ function SummaryCell({
   )
 }
 
+function CatCell({
+  label, count, category,
+}: { label: string; count: number; category: DiffCategory }) {
+  const color = CAT_COLOR[category]
+  return (
+    <div className="bg-gray-950/40 border border-gray-800 rounded px-3 py-2">
+      <div className={clsx('text-xs', color.text)}>{label}</div>
+      <div className={clsx('text-base font-mono font-semibold', count > 0 ? color.text : 'text-gray-500')}>
+        {count}
+      </div>
+    </div>
+  )
+}
+
+const CAT_COLOR: Record<DiffCategory, { text: string; bg: string; pill: string }> = {
+  price:  { text: 'text-yellow-400', bg: 'bg-yellow-950/20', pill: 'bg-yellow-900/40 text-yellow-200' },
+  lost:   { text: 'text-red-400',    bg: 'bg-red-950/20',    pill: 'bg-red-900/40 text-red-200' },
+  gained: { text: 'text-emerald-400',bg: 'bg-emerald-950/20',pill: 'bg-emerald-900/40 text-emerald-200' },
+  raw:    { text: 'text-blue-400',   bg: 'bg-blue-950/20',   pill: 'bg-blue-900/40 text-blue-200' },
+  field:  { text: 'text-gray-400',   bg: 'bg-gray-900/40',   pill: 'bg-gray-800 text-gray-300' },
+}
+
 function DiffRow({ item }: { item: DiffProductItem }) {
   const product = item.b ?? item.a
   if (!product) return null
@@ -115,21 +173,44 @@ function DiffRow({ item }: { item: DiffProductItem }) {
     item.status === 'removed' ? Minus :
     null
 
+  // Уникальные категории всех полей, чтобы показать summary-pills.
+  const cats = new Set<DiffCategory>()
+  if (item.status === 'changed' && item.fields) {
+    for (const f of Object.values(item.fields)) {
+      if (f.category) cats.add(f.category)
+    }
+  }
+  const priceField = item.fields?.price_rub
+  const isBigPriceJump =
+    priceField?.delta_pct != null && Math.abs(priceField.delta_pct) >= PRICE_ALERT_THRESHOLD
+
   return (
     <details className={clsx('border rounded p-3', borderClass)}>
-      <summary className="cursor-pointer flex items-center gap-2 select-none">
+      <summary className="cursor-pointer flex items-center gap-2 select-none flex-wrap">
         {StatusIcon && <StatusIcon size={14} className={
           item.status === 'added' ? 'text-green-400' : 'text-red-400'
         } />}
         <span className={clsx('px-2 py-0.5 rounded text-xs font-mono', getStoreBadgeColor(product.store_slug))}>
           {product.store_slug}
         </span>
-        <span className="font-medium text-gray-200 truncate flex-1" title={product.title}>
+        <span className="font-medium text-gray-200 truncate flex-1 min-w-0" title={product.title}>
           {product.title}
         </span>
-        {item.fields?.price_rub && (
-          <PriceDelta field={item.fields.price_rub} />
+
+        {/* Категории-pills */}
+        {[...cats].map(c => (
+          <span key={c} className={clsx('text-[10px] px-1.5 py-0.5 rounded uppercase', CAT_COLOR[c].pill)}>
+            {c}
+          </span>
+        ))}
+
+        {isBigPriceJump && (
+          <span className="text-amber-400 flex items-center gap-1" title="Большое изменение цены">
+            <AlertTriangle size={12} />
+          </span>
         )}
+
+        {priceField && <PriceDelta field={priceField} />}
       </summary>
 
       {item.status === 'changed' && item.fields && (
@@ -160,12 +241,23 @@ function PriceDelta({ field }: { field: DiffField }) {
 function FieldDiff({ field, val }: { field: string; val: DiffField }) {
   const renderValue = (v: unknown) => {
     if (v === null || v === undefined) return <span className="text-gray-600">—</span>
+    if (Array.isArray(v)) {
+      return <span className="text-blue-400">[…{v.length}]</span>
+    }
     if (typeof v === 'object') return <span className="text-blue-400">{JSON.stringify(v).slice(0, 80)}</span>
     return <span>{String(v)}</span>
   }
+  const cat = val.category
   return (
-    <div className="grid grid-cols-[100px_1fr_1fr] gap-2 items-start">
-      <span className="text-gray-500">{field}</span>
+    <div className="grid grid-cols-[140px_1fr_1fr] gap-2 items-start">
+      <div className="flex items-center gap-1.5 min-w-0">
+        {cat && (
+          <span className={clsx('text-[9px] px-1 py-0 rounded uppercase tracking-wide', CAT_COLOR[cat].pill)}>
+            {cat}
+          </span>
+        )}
+        <span className="text-gray-500 truncate" title={field}>{field}</span>
+      </div>
       <span className="text-red-300/70 line-through truncate" title={String(val.a)}>{renderValue(val.a)}</span>
       <span className="text-green-300 truncate" title={String(val.b)}>{renderValue(val.b)}</span>
     </div>
