@@ -1,0 +1,41 @@
+{
+  "entities": {
+    "Q17262": {
+      "type": "item",
+      "id": "Q17262",
+      "labels": {
+        "en": {"language": "en", "value": "Carcassonne"},
+        "ru": {"language": "ru", "value": "Каркассон"},
+        "de": {"language": "de", "value": "Carcassonne"}
+      },
+      "descriptions": {
+        "en": {"language": "en", "value": "tile-based German-style board game"},
+        "ru": {"language": "ru", "value": "немецкая настольная игра"}
+      },
+      "aliases": {
+        "ru": [
+          {"language": "ru", "value": "Каркассон (настольная игра)"},
+          {"language": "ru", "value": "Каркасон"}
+        ],
+        "en": [
+          {"language": "en", "value": "Carcassonne (board game)"}
+        ]
+      },
+      "claims": {
+        "P2339": [
+          {
+            "mainsnak": {
+              "snaktype": "value",
+              "property": "P2339",
+              "datavalue": {"value": "822", "type": "string"}
+            },
+            "type": "statement"
+          }
+        ]
+      },
+      "title": "Q17262",
+      "pageid": 18925,
+      "modified": "2024-12-01T10:00:00Z"
+    }
+  }
+}
