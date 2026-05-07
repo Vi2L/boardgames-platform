@@ -212,6 +212,88 @@ async def import_dicefest(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+# ── Promotion (PR-2/PR-3) ──────────────────────────────────────────────────
+
+
+@router.get("/promotion/{provider}/queue")
+async def promotion_queue(
+    provider: str,
+    status: str = Query("new"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_queue(
+            provider, status=status, limit=limit, offset=offset,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/promotion/{provider}/{raw_id:int}")
+async def promotion_get_raw(
+    provider: str, raw_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_get_raw(provider, raw_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/promotion/{provider}/{raw_id:int}/candidates")
+async def promotion_candidates(
+    provider: str, raw_id: int,
+    threshold: float = Query(0.5, ge=0.0, le=1.0),
+    limit: int = Query(5, ge=1, le=20),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_candidates(
+            provider, raw_id, threshold=threshold, limit=limit,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/promotion/{provider}/{raw_id:int}/apply")
+async def promotion_apply(
+    provider: str, raw_id: int, body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_apply(provider, raw_id, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/promotion/log/{log_id:int}/revert")
+async def promotion_revert(
+    log_id: int, body: dict | None = None,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_revert(log_id, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/promotion/log")
+async def promotion_log(
+    provider: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_log(
+            provider=provider, limit=limit, offset=offset,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.get("/import/jobs/{job_id}")
 async def get_import_job(
     job_id: int, client: CatalogClient = Depends(get_catalog_client),

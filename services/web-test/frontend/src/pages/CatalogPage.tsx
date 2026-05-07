@@ -29,9 +29,10 @@ import { ImportWizard } from '../components/catalog/ImportWizard'
 import { GameEditor } from '../components/catalog/GameEditor'
 import { MatchingStatsHeader } from '../components/catalog/MatchingStatsHeader'
 import { BackupButton } from '../components/catalog/BackupButton'
+import { PromotionPanel } from '../components/catalog/PromotionPanel'
 import { Download, Plus } from 'lucide-react'
 
-type Tab = 'catalog' | 'matching'
+type Tab = 'catalog' | 'matching' | 'promotion'
 
 export function CatalogPage() {
   const [tab, setTab] = useState<Tab>('catalog')
@@ -75,7 +76,7 @@ export function CatalogPage() {
       {showCreate && <GameEditor mode="create" onClose={() => setShowCreate(false)} />}
 
       <div className="flex gap-2 border-b border-gray-800">
-        {(['catalog', 'matching'] as Tab[]).map(t => (
+        {(['catalog', 'matching', 'promotion'] as Tab[]).map(t => (
           <button
             key={t}
             type="button"
@@ -86,12 +87,16 @@ export function CatalogPage() {
                 : 'text-gray-400 hover:text-gray-200'
             }`}
           >
-            {t === 'catalog' ? 'Каталог' : 'Очередь матчинга'}
+            {t === 'catalog' ? 'Каталог'
+              : t === 'matching' ? 'Очередь матчинга'
+              : 'Промоушен Dicefest'}
           </button>
         ))}
       </div>
 
-      {tab === 'catalog' ? <CatalogSection /> : <MatchingSection />}
+      {tab === 'catalog'  ? <CatalogSection />
+        : tab === 'matching' ? <MatchingSection />
+        : <PromotionPanel provider="dicefest" />}
     </div>
   )
 }

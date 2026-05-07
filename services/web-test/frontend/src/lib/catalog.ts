@@ -314,6 +314,150 @@ export const importDicefest = (payload: { max_items?: number; only_year?: number
 export const fetchImportJob = (id: number) =>
   fetch(`${BASE}/import/jobs/${id}`).then(r => json<ImportJob>(r))
 
+// ── Promotion (двухстадийная схема: staging → canonical) ─────────────────
+
+export type DicefestRawGame = {
+  id: number
+  slug: string
+  page_url: string
+  title_ru: string | null
+  title_en: string | null
+  publisher: string | null
+  release_year: number | null
+  release_month: number | null
+  release_status: string | null      // data-status code, например 'v-prodazhe'
+  description: string | null
+  cover_url: string | null
+  raw: Record<string, unknown>
+  source_listing: string | null
+  fetched_at: string
+  status: 'new' | 'promoted' | 'skipped' | 'rejected'
+  promoted_at: string | null
+  promoted_to_game_id: number | null
+  notes: string | null
+}
+
+export type DicefestRawList = {
+  items: DicefestRawGame[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type PromotionCandidate = {
+  game_id: number
+  title: string
+  year: number | null
+  score: number
+  via: string                         // 'title' | 'alias_ru' | 'alias_en' | ...
+  matched_text: string | null
+  aliases: CatalogGameAlias[]
+  has_satellite_for_provider: boolean // 🚩 уже привязан другой dicefest-page
+  year_diff: number | null            // ⚠ ≥3 лет — год не сходится
+}
+
+export type PromotionCandidates = {
+  raw: DicefestRawGame
+  candidates: PromotionCandidate[]
+  threshold: number
+}
+
+export type PromotionAction = 'link' | 'create' | 'skip' | 'reject'
+
+export type PromotionApplyRequest = {
+  action: PromotionAction
+  target_game_id?: number
+  notes?: string
+  performed_by?: string
+}
+
+export type PromotionApplyResult = {
+  raw_id: number
+  log_id: number
+  game_id: number | null
+  alias_id: number | null
+  satellite_id: number | null
+  status: string
+}
+
+export type PromotionLogEntry = {
+  id: number
+  provider: string
+  raw_id: number
+  action: 'link' | 'create' | 'skip' | 'reject' | 'revert'
+  game_id: number | null
+  alias_id: number | null
+  satellite_created: boolean
+  performed_by: string | null
+  performed_at: string
+  reverted_at: string | null
+  reverted_by: string | null
+  notes: string | null
+}
+
+export type PromotionLogList = {
+  items: PromotionLogEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type PromotionRevertResult = {
+  raw_id: number
+  revert_log_id: number
+  original_log_id: number
+  status_after_revert: string
+}
+
+const PROVIDER = 'dicefest'  // пока поддерживается только dicefest
+
+export const fetchPromotionQueue = (
+  status: DicefestRawGame['status'] = 'new', limit = 50, offset = 0,
+) => {
+  const u = new URL(`${BASE}/promotion/${PROVIDER}/queue`, window.location.origin)
+  u.searchParams.set('status', status)
+  u.searchParams.set('limit', String(limit))
+  u.searchParams.set('offset', String(offset))
+  return fetch(u.toString().replace(window.location.origin, ''))
+    .then(r => json<DicefestRawList>(r))
+}
+
+export const fetchPromotionCandidates = (
+  rawId: number, threshold = 0.5, limit = 5,
+) => {
+  const u = new URL(
+    `${BASE}/promotion/${PROVIDER}/${rawId}/candidates`,
+    window.location.origin,
+  )
+  u.searchParams.set('threshold', String(threshold))
+  u.searchParams.set('limit', String(limit))
+  return fetch(u.toString().replace(window.location.origin, ''))
+    .then(r => json<PromotionCandidates>(r))
+}
+
+export const applyPromotion = (rawId: number, body: PromotionApplyRequest) =>
+  fetch(`${BASE}/promotion/${PROVIDER}/${rawId}/apply`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  }).then(r => json<PromotionApplyResult>(r))
+
+export const revertPromotion = (logId: number, notes?: string) =>
+  fetch(`${BASE}/promotion/log/${logId}/revert`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(notes ? { notes } : {}),
+  }).then(r => json<PromotionRevertResult>(r))
+
+export const fetchPromotionLog = (limit = 50, offset = 0) => {
+  const u = new URL(`${BASE}/promotion/log`, window.location.origin)
+  u.searchParams.set('provider', PROVIDER)
+  u.searchParams.set('limit', String(limit))
+  u.searchParams.set('offset', String(offset))
+  return fetch(u.toString().replace(window.location.origin, ''))
+    .then(r => json<PromotionLogList>(r))
+}
+
 // ── Aliases CRUD ──────────────────────────────────────────────────────
 
 export type AliasInput = {

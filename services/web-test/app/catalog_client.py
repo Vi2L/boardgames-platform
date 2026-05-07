@@ -146,6 +146,56 @@ class CatalogClient:
         resp = await self._client.post("/import/dicefest", json=payload)
         return _ok_or_raise(resp)
 
+    # ── Promotion (PR-2/PR-3) ───────────────────────────────────────────
+
+    async def promotion_queue(
+        self, provider: str, *, status: str = "new",
+        limit: int = 50, offset: int = 0,
+    ) -> dict[str, Any]:
+        params = {"status": status, "limit": limit, "offset": offset}
+        resp = await self._client.get(
+            f"/promotion/{provider}/queue", params=params,
+        )
+        return _ok_or_raise(resp)
+
+    async def promotion_get_raw(self, provider: str, raw_id: int) -> dict[str, Any]:
+        resp = await self._client.get(f"/promotion/{provider}/{raw_id}")
+        return _ok_or_raise(resp)
+
+    async def promotion_candidates(
+        self, provider: str, raw_id: int, *,
+        threshold: float = 0.5, limit: int = 5,
+    ) -> dict[str, Any]:
+        params = {"threshold": threshold, "limit": limit}
+        resp = await self._client.get(
+            f"/promotion/{provider}/{raw_id}/candidates", params=params,
+        )
+        return _ok_or_raise(resp)
+
+    async def promotion_apply(
+        self, provider: str, raw_id: int, payload: dict,
+    ) -> dict[str, Any]:
+        resp = await self._client.post(
+            f"/promotion/{provider}/{raw_id}/apply", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def promotion_revert(self, log_id: int, payload: dict | None = None) -> dict[str, Any]:
+        resp = await self._client.post(
+            f"/promotion/log/{log_id}/revert", json=payload or {},
+        )
+        return _ok_or_raise(resp)
+
+    async def promotion_log(
+        self, *, provider: str | None = None,
+        limit: int = 50, offset: int = 0,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if provider:
+            params["provider"] = provider
+        resp = await self._client.get("/promotion/log", params=params)
+        return _ok_or_raise(resp)
+
     async def get_import_job(self, job_id: int) -> dict[str, Any]:
         """GET /import/jobs/{id} → polling статуса (pending/running/done/failed)."""
         resp = await self._client.get(f"/import/jobs/{job_id}")

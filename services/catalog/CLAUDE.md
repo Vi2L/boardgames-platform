@@ -276,8 +276,14 @@ X-API-Key: <ingest scope>     ← обязателен только при REQUI
 | `POST /matching/{offer_id}/reject` | `admin` | пометить как «не игра» |
 | `POST /matching/{offer_id}/reassess` | `admin` | пересчитать `find_best_match` после правки алиасов / импорта BGG. 409 если offer уже `manual` или `rejected` |
 | `POST /matching/reassess-all?store=&max_score=` | `admin` | batch-пересчёт unmatched. Возвращает `{scanned, promoted_to_auto, score_improved, unchanged}` |
-| `POST /import/{bgg,tesera}` | `admin` | запуск импортёра |
-| `GET /import/jobs/{id}` | `read` | статус job'ы |
+| `POST /import/{bgg,tesera,dicefest}` | `admin` | запуск импортёра |
+| `GET /import/jobs/{id}` | `read` | статус job'ы (включая `progress` и `log_lines` для long-running) |
+| `GET /promotion/{provider}/queue?status=&limit=&offset=` | `read` | список raw-записей (provider=`dicefest`) |
+| `GET /promotion/{provider}/{raw_id}` | `read` | одна raw-запись |
+| `GET /promotion/{provider}/{raw_id}/candidates?threshold=&limit=` | `read` | кандидаты-canonical Game по pg_trgm |
+| `POST /promotion/{provider}/{raw_id}/apply` | `admin` | действие промоушена: `link`/`create`/`skip`/`reject`. Возвращает `{log_id, game_id, alias_id, satellite_id}` |
+| `POST /promotion/log/{log_id}/revert` | `admin` | откат: удаляет alias+satellite, возвращает raw в `new`. 409 если `games.status='merged'` |
+| `GET /promotion/log?provider=&limit=&offset=` | `read` | журнал действий промоушена |
 | `GET /health`, `GET /health/db` | — | без auth (нужно для compose-healthcheck) |
 
 ## Auth (этап 7)
