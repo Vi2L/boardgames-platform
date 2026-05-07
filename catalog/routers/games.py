@@ -20,11 +20,13 @@ from catalog.models import Game, GameAlias
 from catalog.schemas import (
     AliasCreate,
     GameAliasOut,
+    GameBggOut,
     GameCreate,
     GameDetailOut,
     GameListOut,
     GameOut,
     GamePatch,
+    GameWikidataOut,
 )
 
 router = APIRouter(prefix="/games", tags=["games"])
@@ -81,13 +83,25 @@ async def list_games(
 async def get_game(
     game_id: int, session: AsyncSession = Depends(get_session)
 ) -> GameDetailOut:
-    stmt = select(Game).where(Game.id == game_id).options(selectinload(Game.aliases))
+    # selectinload подтягивает связанные satellite-таблицы одним SELECT WHERE IN
+    # вместо N+1. Ленивые .bgg / .wikidata определены в catalog.models.Game.
+    stmt = (
+        select(Game)
+        .where(Game.id == game_id)
+        .options(
+            selectinload(Game.aliases),
+            selectinload(Game.bgg),
+            selectinload(Game.wikidata),
+        )
+    )
     game = (await session.execute(stmt)).scalar_one_or_none()
     if game is None:
         raise HTTPException(status_code=404, detail="game not found")
     return GameDetailOut(
         **GameOut.model_validate(game).model_dump(),
         aliases=[GameAliasOut.model_validate(a) for a in game.aliases],
+        bgg=GameBggOut.model_validate(game.bgg) if game.bgg else None,
+        wikidata=GameWikidataOut.model_validate(game.wikidata) if game.wikidata else None,
     )
 
 

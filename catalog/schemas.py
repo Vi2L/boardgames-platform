@@ -23,6 +23,8 @@ class GameAliasOut(_ORMBase):
     id: int
     alias: str
     source: str
+    language: str | None = None
+    verified: bool = False
 
 
 class GameOut(_ORMBase):
@@ -48,9 +50,48 @@ class GameOut(_ORMBase):
     updated_at: datetime
 
 
+class GameBggOut(_ORMBase):
+    """BGG satellite-данные: ranks + (опционально) XML-API enrichment."""
+    bgg_id: int
+    rank: int | None = None
+    bayes_average: float | None = None
+    average: float | None = None
+    users_rated: int | None = None
+    is_expansion: bool = False
+    subtype_ranks: dict[str, Any] | None = None
+    description: str | None = None
+    designers: list[str] | None = None
+    artists: list[str] | None = None
+    publishers: list[str] | None = None
+    mechanics: list[str] | None = None
+    categories: list[str] | None = None
+    min_players: int | None = None
+    max_players: int | None = None
+    min_age: int | None = None
+    playtime_min: int | None = None
+    playtime_max: int | None = None
+    image_url: str | None = None
+    thumbnail_url: str | None = None
+    source: str | None = None
+    fetched_at: datetime
+
+
+class GameWikidataOut(_ORMBase):
+    """Wikidata satellite: labels/aliases/descriptions per language."""
+    bgg_id: int | None = None
+    entity_id: str | None = None
+    found: bool = False
+    labels: dict[str, str] = Field(default_factory=dict)
+    aliases: dict[str, list[str]] = Field(default_factory=dict)
+    descriptions: dict[str, str] = Field(default_factory=dict)
+    fetched_at: datetime
+
+
 class GameDetailOut(GameOut):
-    """Карточка с алиасами. /games/{id}."""
+    """Карточка с алиасами и satellite-данными. /games/{id}."""
     aliases: list[GameAliasOut] = Field(default_factory=list)
+    bgg: GameBggOut | None = None
+    wikidata: GameWikidataOut | None = None
 
 
 class GameCreate(BaseModel):
