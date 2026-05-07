@@ -16,6 +16,13 @@
 #   0 3 * * *  cd /Users/vitaliy/Projects/boardgames-platform && bin/backup-catalog.sh
 
 set -e
+
+# cron на macOS стартует с минимальным PATH=/usr/bin:/bin, и `docker` в нём
+# не находится (он в /usr/local/bin на Intel или /opt/homebrew/bin на Apple
+# Silicon). Расширяем PATH в начале — пусть скрипт работает одинаково и из
+# терминала, и из cron.
+export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
+
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 BACKUP_DIR="$ROOT/.scratch/backups"
