@@ -16,7 +16,7 @@ from sqlalchemy.orm import selectinload
 
 from catalog.auth import require_scope
 from catalog.db import get_session
-from catalog.models import Game, GameAlias
+from catalog.models import Game, GameAlias, Offer
 from catalog.schemas import (
     AliasCreate,
     AliasPatch,
@@ -25,10 +25,13 @@ from catalog.schemas import (
     GameCreate,
     GameDetailOut,
     GameListOut,
+    GameMergeRequest,
+    GameMergeResult,
     GameOut,
     GamePatch,
     GameWikidataOut,
 )
+from sqlalchemy import update
 
 router = APIRouter(prefix="/games", tags=["games"])
 
@@ -153,6 +156,94 @@ async def patch_game(
     await session.commit()
     await session.refresh(game)
     return GameOut.model_validate(game)
+
+
+@router.post(
+    "/merge",
+    response_model=GameMergeResult,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def merge_games(
+    payload: GameMergeRequest,
+    session: AsyncSession = Depends(get_session),
+) -> GameMergeResult:
+    """Объединение source → target.
+
+    Поток:
+      1. Все offers source переходят на target (FK update).
+      2. Aliases source переезжают на target. Дубликаты по
+         uq_alias_per_game (game_id + alias_norm) пропускаются —
+         их count возвращается в aliases_skipped_dup.
+      3. source.status='merged' + source.meta.merged_into=target_id.
+
+    Без удаления source — карточка остаётся для истории и для трассировки
+    (когда-то auto-match мог сослаться на source.id, нужна возможность
+    отследить).
+    """
+    if payload.source_id == payload.target_id:
+        raise HTTPException(status_code=400, detail="source_id == target_id")
+
+    source = (await session.execute(
+        select(Game).where(Game.id == payload.source_id)
+    )).scalar_one_or_none()
+    target = (await session.execute(
+        select(Game).where(Game.id == payload.target_id)
+    )).scalar_one_or_none()
+    if source is None:
+        raise HTTPException(status_code=404, detail=f"source #{payload.source_id} not found")
+    if target is None:
+        raise HTTPException(status_code=404, detail=f"target #{payload.target_id} not found")
+    if source.status == "merged":
+        raise HTTPException(status_code=409, detail="source уже merged")
+
+    # 1. Offers — простой UPDATE, обходит ON CONFLICT (offers уникальны по
+    # store_slug+external_id, не по game_id).
+    offers_res = await session.execute(
+        update(Offer).where(Offer.game_id == payload.source_id)
+                     .values(game_id=payload.target_id)
+    )
+    offers_moved = offers_res.rowcount or 0
+
+    # 2. Aliases — забираем те, которых ещё нет в target (по alias_norm).
+    src_aliases = (await session.execute(
+        select(GameAlias).where(GameAlias.game_id == payload.source_id)
+    )).scalars().all()
+
+    # alias_norm у target
+    tgt_norms = set((await session.execute(
+        select(GameAlias.alias_norm).where(GameAlias.game_id == payload.target_id)
+    )).scalars().all())
+
+    moved = 0
+    skipped = 0
+    for a in src_aliases:
+        if a.alias_norm in tgt_norms:
+            await session.delete(a)
+            skipped += 1
+        else:
+            a.game_id = payload.target_id
+            tgt_norms.add(a.alias_norm)
+            moved += 1
+
+    # 3. Помечаем source. meta — JSONB, аккуратно мерджим.
+    meta = dict(source.meta or {})
+    meta["merged_into"] = payload.target_id
+    source.meta = meta
+    source.status = "merged"
+
+    try:
+        await session.commit()
+    except IntegrityError as e:
+        await session.rollback()
+        raise HTTPException(status_code=409, detail=f"conflict: {e.orig}") from e
+
+    return GameMergeResult(
+        source_id=payload.source_id,
+        target_id=payload.target_id,
+        offers_moved=offers_moved,
+        aliases_moved=moved,
+        aliases_skipped_dup=skipped,
+    )
 
 
 @router.post(

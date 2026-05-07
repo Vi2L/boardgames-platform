@@ -157,6 +157,24 @@ class GameListOut(BaseModel):
     offset: int
 
 
+class GameMergeRequest(BaseModel):
+    """Объединение двух игр: source → target.
+
+    target_id остаётся, source помечается status='merged' и пишет в
+    meta.merged_into=target_id. Все offers и aliases переезжают.
+    """
+    source_id: int
+    target_id: int
+
+
+class GameMergeResult(BaseModel):
+    source_id: int
+    target_id: int
+    offers_moved: int
+    aliases_moved: int
+    aliases_skipped_dup: int
+
+
 # ---------- imports ----------
 
 class BggImportRequest(BaseModel):

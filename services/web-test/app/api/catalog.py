@@ -87,6 +87,21 @@ async def reject_offer(
 # ── Game CRUD (manual create / edit) ───────────────────────────────────────
 
 
+@router.post("/games/merge")
+async def merge_games(
+    body: dict,  # {source_id, target_id}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    sid = body.get("source_id")
+    tid = body.get("target_id")
+    if not isinstance(sid, int) or not isinstance(tid, int):
+        raise HTTPException(status_code=400, detail="source_id и target_id (int) required")
+    try:
+        return await client.merge_games(sid, tid)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.post("/games")
 async def create_game(
     body: dict,  # GameCreate-совместимый payload (slug + title обязательны)

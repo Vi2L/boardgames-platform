@@ -140,6 +140,23 @@ export const rejectOffer = (offerId: number) =>
   fetch(`${BASE}/matching/${offerId}/reject`, { method: 'POST' })
     .then(r => json<CatalogOffer>(r))
 
+// ── Game merge ─────────────────────────────────────────────────────
+
+export type GameMergeResult = {
+  source_id: number
+  target_id: number
+  offers_moved: number
+  aliases_moved: number
+  aliases_skipped_dup: number
+}
+
+export const mergeGames = (sourceId: number, targetId: number) =>
+  fetch(`${BASE}/games/merge`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ source_id: sourceId, target_id: targetId }),
+  }).then(r => json<GameMergeResult>(r))
+
 // ── Game CRUD (manual) ─────────────────────────────────────────────
 
 export type GameCreatePayload = {

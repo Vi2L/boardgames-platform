@@ -81,6 +81,13 @@ class CatalogClient:
 
     # ── Game CRUD ───────────────────────────────────────────────────────
 
+    async def merge_games(self, source_id: int, target_id: int) -> dict[str, Any]:
+        """POST /games/merge {source_id, target_id} → объединение."""
+        resp = await self._client.post(
+            "/games/merge", json={"source_id": source_id, "target_id": target_id}
+        )
+        return _ok_or_raise(resp)
+
     async def create_game(self, payload: dict) -> dict[str, Any]:
         """POST /games → создать каноническую игру вручную."""
         resp = await self._client.post("/games", json=payload)
