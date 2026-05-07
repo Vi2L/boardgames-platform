@@ -17,10 +17,34 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.auth import require_scope
 from catalog.db import get_session
+from catalog.matching.matcher import find_match_candidates
 from catalog.models import Game, GameAlias, Offer
 from catalog.schemas import MatchingQueueOut, MatchLinkRequest, OfferOut
 
 router = APIRouter(prefix="/matching", tags=["matching"])
+
+
+@router.get(
+    "/candidates",
+    dependencies=[Depends(require_scope("read"))],
+)
+async def candidates(
+    title: str = Query(..., min_length=1, description="title_raw для матчинга"),
+    limit: int = Query(10, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Топ-N кандидатов с score для ручного link.
+
+    Используется при «связать» в UI: оператор видит ранжированный список
+    с pg_trgm-similarity вместо просто fuzzy-search без оценки. Пороги:
+    auto >= 0.6, candidate >= 0.3.
+    """
+    return {
+        "title": title,
+        "auto_threshold": 0.6,
+        "candidate_threshold": 0.3,
+        "items": await find_match_candidates(session, title, limit=limit),
+    }
 
 
 @router.get(

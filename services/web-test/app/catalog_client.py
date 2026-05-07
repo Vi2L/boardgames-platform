@@ -60,6 +60,15 @@ class CatalogClient:
         resp = await self._client.get(f"/games/{game_id}")
         return _ok_or_raise(resp)
 
+    async def match_candidates(
+        self, title: str, limit: int = 10,
+    ) -> dict[str, Any]:
+        """GET /matching/candidates → топ-N с score (для UI ручного link)."""
+        resp = await self._client.get(
+            "/matching/candidates", params={"title": title, "limit": limit},
+        )
+        return _ok_or_raise(resp)
+
     async def matching_queue(
         self, store: str | None = None, limit: int = 50, offset: int = 0
     ) -> dict[str, Any]:

@@ -80,6 +80,61 @@ async def find_best_match(
     return MatchCandidate(game_id=row.game_id, score=float(row.score), via=row.via)
 
 
+async def find_match_candidates(
+    session: AsyncSession, title_raw: str, limit: int = 10,
+) -> list[dict]:
+    """Топ-N кандидатов с score + минимальная инфа об игре.
+
+    Используется UI ручного матчинга: оператор видит ранжированный список
+    и сразу выбирает. JOIN с games чтобы избавить фронт от N+1 запросов.
+
+    Берём MAX(score) per game_id (одна игра может всплыть и через title,
+    и через alias одновременно — показываем лучший).
+    """
+    stmt = text(
+        """
+        WITH q AS (SELECT lower(immutable_unaccent(:q)) AS norm),
+        from_title AS (
+            SELECT g.id AS game_id,
+                   similarity(g.title_norm, q.norm) AS score,
+                   'title'::text AS via
+            FROM games g, q
+            WHERE g.title_norm % q.norm
+        ),
+        from_alias AS (
+            SELECT a.game_id,
+                   similarity(a.alias_norm, q.norm) AS score,
+                   'alias'::text AS via
+            FROM game_aliases a, q
+            WHERE a.alias_norm % q.norm
+        ),
+        all_matches AS (
+            SELECT * FROM from_title
+            UNION ALL
+            SELECT * FROM from_alias
+        ),
+        per_game AS (
+            SELECT game_id,
+                   MAX(score) AS score,
+                   -- если один и тот же game встречается через title и
+                   -- alias, отдадим тот источник, у которого выше score
+                   (ARRAY_AGG(via ORDER BY score DESC))[1] AS via
+            FROM all_matches
+            WHERE score >= :threshold
+            GROUP BY game_id
+        )
+        SELECT pg.game_id, pg.score, pg.via,
+               g.title, g.slug, g.year, g.bgg_id, g.tesera_id, g.cover_url, g.status
+        FROM per_game pg
+        JOIN games g ON g.id = pg.game_id
+        ORDER BY pg.score DESC, g.id
+        LIMIT :limit
+        """
+    ).bindparams(q=title_raw, threshold=MIN_CANDIDATE_THRESHOLD, limit=limit)
+    rows = (await session.execute(stmt)).mappings().all()
+    return [dict(r) for r in rows]
+
+
 def classify(score: float | None) -> str:
     """`auto` если score ≥ AUTO_MATCH_THRESHOLD, иначе `unmatched`."""
     if score is None:

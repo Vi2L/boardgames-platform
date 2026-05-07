@@ -129,6 +129,32 @@ export const fetchMatchingQueue = (
   return fetch(`${BASE}/matching/queue?${params}`).then(r => json<CatalogQueue>(r))
 }
 
+export type MatchCandidate = {
+  game_id: number
+  score: number
+  via: 'title' | 'alias'
+  title: string
+  slug: string
+  year: number | null
+  bgg_id: number | null
+  tesera_id: number | null
+  cover_url: string | null
+  status: string
+}
+
+export type MatchCandidatesResponse = {
+  title: string
+  auto_threshold: number
+  candidate_threshold: number
+  items: MatchCandidate[]
+}
+
+export const fetchMatchCandidates = (title: string, limit = 10) => {
+  const params = new URLSearchParams({ title, limit: String(limit) })
+  return fetch(`${BASE}/matching/candidates?${params}`)
+    .then(r => json<MatchCandidatesResponse>(r))
+}
+
 export const linkOffer = (offerId: number, gameId: number) =>
   fetch(`${BASE}/matching/${offerId}/link`, {
     method: 'POST',

@@ -13,12 +13,14 @@ import { useQuery, useQueryClient, useMutation } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   fetchCatalogHealth,
+  fetchMatchCandidates,
   fetchMatchingQueue,
   linkOffer,
   listCatalogGames,
   rejectOffer,
   type CatalogGame,
   type CatalogOffer,
+  type MatchCandidate,
 } from '../lib/catalog'
 import { GameDetailDrawer } from '../components/catalog/GameDetailDrawer'
 import { ImportWizard } from '../components/catalog/ImportWizard'
@@ -287,45 +289,78 @@ function OfferRow({
 
 function LinkPicker({ offer, onLinked }: { offer: CatalogOffer; onLinked: () => void }) {
   const [q, setQ] = useState(offer.title_raw)
-  const games = useQuery({
-    queryKey: ['catalog', 'link-picker', q],
-    queryFn: () => listCatalogGames(q || undefined, 10, 0),
+  // По умолчанию query = title_raw, тогда запрос автоматически приносит
+  // топ-N кандидатов через pg_trgm % similarity. Можно переписать руками,
+  // если автомат проматчил не туда.
+  const candidates = useQuery({
+    queryKey: ['catalog', 'match-candidates', q],
+    queryFn: () => fetchMatchCandidates(q, 10),
+    enabled: !!q.trim(),
   })
+
   const link = useMutation({
     mutationFn: (gameId: number) => linkOffer(offer.id, gameId),
     onSuccess: () => { toast.success('Оффер связан с игрой'); onLinked() },
     onError: (e) => toast.error(`Не удалось связать: ${e}`),
   })
 
+  const items: MatchCandidate[] = candidates.data?.items ?? []
+  const auto = candidates.data?.auto_threshold ?? 0.6
+  const minC = candidates.data?.candidate_threshold ?? 0.3
+
   return (
     <div className="space-y-2">
+      <div className="text-xs text-gray-500">
+        Автоматически связывается при score ≥ {auto.toFixed(2)};
+        кандидаты ≥ {minC.toFixed(2)} попадают в очередь.
+        Текущий offer: <span className="font-mono text-gray-300">«{offer.title_raw}»</span>
+      </div>
       <input
         type="text"
         value={q}
         onChange={e => setQ(e.target.value)}
-        placeholder="Найти игру в каталоге..."
+        placeholder="title_raw → автокандидаты, или ручной поиск..."
         className="w-full px-2 py-1 text-sm bg-gray-900 border border-gray-700 rounded text-gray-100"
       />
-      <div className="space-y-1">
-        {games.data?.items.map(g => (
-          <button
-            key={g.id}
-            type="button"
-            disabled={link.isPending}
-            onClick={() => link.mutate(g.id)}
-            className="w-full text-left px-2 py-1 text-sm bg-gray-900 hover:bg-gray-800 rounded text-gray-200 disabled:opacity-50"
-          >
-            <span className="font-mono text-xs text-gray-500 mr-2">#{g.id}</span>
-            {g.title}
-            {g.year && <span className="text-xs text-gray-500 ml-2">({g.year})</span>}
-          </button>
-        ))}
-        {games.data?.items.length === 0 && (
-          <div className="text-xs text-gray-500 px-2 py-1">
-            Игра не найдена. Создайте её через POST /games или импортируйте из BGG/Tesera.
-          </div>
-        )}
-      </div>
+      {items.length > 0 ? (
+        <div className="space-y-1">
+          {items.map(c => (
+            <button
+              key={c.game_id}
+              type="button"
+              disabled={link.isPending}
+              onClick={() => link.mutate(c.game_id)}
+              className="w-full text-left px-2 py-1.5 text-sm bg-gray-900 hover:bg-gray-800 rounded text-gray-200 disabled:opacity-50 flex items-center gap-2"
+            >
+              <ScoreBadge score={c.score} auto={auto} via={c.via} />
+              <span className="font-mono text-xs text-gray-500">#{c.game_id}</span>
+              <span className="truncate flex-1">{c.title}</span>
+              {c.year && <span className="text-xs text-gray-500 flex-shrink-0">({c.year})</span>}
+              {c.bgg_id && <span className="text-xs text-orange-300/80 flex-shrink-0 font-mono">BGG#{c.bgg_id}</span>}
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-gray-500 px-2 py-1">
+          {candidates.isLoading ? 'ищу кандидатов…'
+            : `Кандидатов ≥ ${minC.toFixed(2)} нет. Импортируй из BGG/Tesera или создай вручную.`}
+        </div>
+      )}
     </div>
+  )
+}
+
+function ScoreBadge({ score, auto, via }: { score: number; auto: number; via: 'title'|'alias' }) {
+  const cls = score >= auto
+    ? 'bg-emerald-900/60 text-emerald-200'
+    : score >= 0.5
+      ? 'bg-amber-900/60 text-amber-200'
+      : 'bg-gray-800 text-gray-400'
+  return (
+    <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono ${cls}`}
+          title={`similarity по ${via === 'title' ? 'title канона' : 'алиасу'}`}>
+      {score.toFixed(2)}
+      <span className="opacity-60 uppercase">{via}</span>
+    </span>
   )
 }

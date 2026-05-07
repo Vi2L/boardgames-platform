@@ -46,6 +46,19 @@ async def get_game(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.get("/matching/candidates")
+async def match_candidates(
+    title: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Топ-N матчинговых кандидатов c score."""
+    try:
+        return await client.match_candidates(title, limit=limit)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.get("/matching/queue")
 async def matching_queue(
     store: str | None = Query(None),
