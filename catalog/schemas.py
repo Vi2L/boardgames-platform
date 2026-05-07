@@ -118,6 +118,68 @@ class TeseraImportRequest(BaseModel):
     items: list[str | int] | None = None
 
 
+# ---------- ingest от parsers ----------
+
+class IngestOfferIn(BaseModel):
+    external_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+    url: str
+    price: int | None = None  # копейки
+    image_url: str | None = None
+    extra: dict[str, Any] | None = None
+
+
+class IngestRequest(BaseModel):
+    store_slug: str = Field(min_length=1, max_length=64)
+    fetched_at: datetime | None = None
+    products: list[IngestOfferIn]
+
+
+class IngestResultItem(BaseModel):
+    external_id: str
+    offer_id: int
+    game_id: int | None
+    match_status: str
+    match_score: float | None
+
+
+class IngestResult(BaseModel):
+    store_slug: str
+    accepted: int
+    auto_matched: int
+    unmatched: int
+    items: list[IngestResultItem]
+
+
+# ---------- matching queue ----------
+
+class OfferOut(_ORMBase):
+    id: int
+    game_id: int | None
+    store_slug: str
+    external_id: str
+    url: str
+    title_raw: str
+    image_url: str | None
+    last_price: int | None
+    last_seen_at: datetime
+    match_status: str
+    match_score: float | None
+
+
+class MatchingQueueOut(BaseModel):
+    items: list[OfferOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class MatchLinkRequest(BaseModel):
+    game_id: int
+
+
+# ---------- import jobs (uses datetime, defined above) ----------
+
 class ImportJobOut(_ORMBase):
     id: int
     type: str

@@ -12,6 +12,8 @@ from catalog.config import get_settings
 from catalog.db import dispose_engine, get_engine
 from catalog.routers import games as games_router
 from catalog.routers import imports as imports_router
+from catalog.routers import ingest as ingest_router
+from catalog.routers import matching as matching_router
 
 
 @asynccontextmanager
@@ -46,6 +48,8 @@ def create_app() -> FastAPI:
 
     app.include_router(games_router.router)
     app.include_router(imports_router.router)
+    app.include_router(ingest_router.router)
+    app.include_router(matching_router.router)
     return app
 
 
