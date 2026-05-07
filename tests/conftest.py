@@ -52,6 +52,20 @@ requires_db = pytest.mark.skipif(
 )
 
 
+@pytest_asyncio.fixture(autouse=True)
+async def _reset_app_engine() -> AsyncIterator[None]:
+    """Singleton engine из catalog.db привязывается к текущему event loop.
+
+    pytest-asyncio даёт каждому тесту свой loop → asyncpg-соединения старого
+    loop'а становятся «event loop is closed». Сбрасываем engine до и после
+    теста, чтобы catalog.api.app поднял свежий движок под новый loop.
+    """
+    from catalog import db as db_mod
+    await db_mod.dispose_engine()
+    yield
+    await db_mod.dispose_engine()
+
+
 @pytest_asyncio.fixture
 async def engine() -> AsyncIterator[AsyncEngine]:
     eng = create_async_engine(_db_url())

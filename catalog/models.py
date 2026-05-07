@@ -37,9 +37,10 @@ from catalog.db import Base
 
 
 def _now() -> datetime:
-    """Server-side default лучше клиентского, но оставляем Python-default
-    как страховку для тестов, где не всегда есть NOW()."""
-    return datetime.utcnow()
+    """Server-side default предпочтительнее, но клиентский нужен для
+    onupdate, чтобы updated_at тикал без явного INSERT...DEFAULT."""
+    from datetime import timezone
+    return datetime.now(timezone.utc)
 
 
 class Game(Base):
