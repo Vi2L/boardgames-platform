@@ -117,6 +117,74 @@ async def price_history(product_id: int):
     return [{"price": p.price, "fetched_at": p.fetched_at.isoformat()} for p in points]
 
 
+@app.get("/api/debug/fetch-url")
+async def debug_fetch_url(
+    url: str = Query(..., description="URL для пробного GET-запроса"),
+    encoding_hint: str | None = Query(
+        None, description="Подсказка декодинга, если httpx угадывает неверно"),
+):
+    """URL probe — пробный HTTP GET через те же UA/прокси, что у парсеров.
+
+    Полезен при отладке: «магазин отдаёт 200?», «redirect ведёт куда?»,
+    «cp1251 правильно декодируется?». Это не запуск парсера на URL — он не
+    извлекает структурированный ParsedProduct (для этого нужны магазинные
+    селекторы), но даёт raw материал, на котором можно проверить регулярки
+    или CSS-селекторы прежде чем встраивать в код парсера.
+    """
+    import httpx
+    proxy = os.getenv("PROXY")
+    t0 = time.monotonic()
+    try:
+        async with httpx.AsyncClient(
+            timeout=20.0,
+            proxy=proxy or None,
+            follow_redirects=True,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; boardgames-debug-portal) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko)"
+                ),
+                "Accept-Language": "ru-RU,ru;q=0.9,en;q=0.5",
+            },
+        ) as c:
+            resp = await c.get(url)
+    except Exception as e:  # noqa: BLE001
+        elapsed_ms = int((time.monotonic() - t0) * 1000)
+        raise HTTPException(
+            status_code=502,
+            detail=f"fetch failed after {elapsed_ms}ms: {e}",
+        ) from e
+
+    elapsed_ms = int((time.monotonic() - t0) * 1000)
+    enc = encoding_hint or resp.encoding or resp.charset_encoding or "utf-8"
+    try:
+        body_text = resp.content.decode(enc, errors="replace")
+    except (LookupError, TypeError):
+        enc = "utf-8"
+        body_text = resp.content.decode("utf-8", errors="replace")
+
+    BODY_LIMIT = 200_000  # 200KB декодированного — избегаем бесконечных страниц
+    truncated = len(body_text) > BODY_LIMIT
+    if truncated:
+        body_text = body_text[:BODY_LIMIT]
+
+    return {
+        "status_code": resp.status_code,
+        "encoding": enc,
+        "content_type": resp.headers.get("content-type"),
+        "body_size": len(resp.content),
+        "duration_ms": elapsed_ms,
+        "body_text": body_text,
+        "truncated": truncated,
+        "final_url": str(resp.url),
+        "headers": dict(resp.headers),
+        "history": [
+            {"status": h.status_code, "url": str(h.url)}
+            for h in resp.history
+        ],
+    }
+
+
 @app.delete("/api/cache")
 async def clear_cache(
     store: str | None = Query(None, description="Магазин (slug). Без — все магазины"),

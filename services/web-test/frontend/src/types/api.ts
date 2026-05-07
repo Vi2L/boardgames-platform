@@ -403,6 +403,20 @@ export interface CompareResponse {
   errors: { cache: string | null; live: string | null }
 }
 
+/** Результат /api/debug/fetch-url: пробный GET через парсерский стек. */
+export interface DebugFetchUrlResult {
+  status_code: number
+  encoding: string
+  content_type: string | null
+  body_size: number
+  duration_ms: number
+  body_text: string
+  truncated: boolean
+  final_url: string
+  headers: Record<string, string>
+  history: Array<{ status: number; url: string }>
+}
+
 /** Маркер недоступности parsers — приходит вместо реального ответа. */
 export interface UnavailableMarker {
   _unavailable: true

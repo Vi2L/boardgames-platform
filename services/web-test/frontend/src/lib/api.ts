@@ -1,6 +1,6 @@
 import type {
   CompareResponse,
-  DebugFeatures, DebugParseResponse,
+  DebugFeatures, DebugFetchUrlResult, DebugParseResponse,
   DiffResult, FavoriteOut,
   HealthOut, ParserSnapshotFull, ParserSnapshotMeta, ParserStatsOut, PriceDeltaOut, PricePointOut,
   ProductDetailOut, ProductsPage, SearchesPage,
@@ -128,6 +128,12 @@ export const fetchRawSnapshot = (id: number) =>
   fetch(`${BASE}/debug/snapshots/${id}`).then(r => json<ParserSnapshotFull>(r))
 
 export const rawSnapshotTextUrl = (id: number) => `${BASE}/debug/snapshots/${id}/raw`
+
+export const debugFetchUrl = (params: { url: string; encoding_hint?: string }) => {
+  const sp = new URLSearchParams({ url: params.url })
+  if (params.encoding_hint) sp.set('encoding_hint', params.encoding_hint)
+  return fetch(`${BASE}/debug/fetch-url?${sp}`).then(r => json<DebugFetchUrlResult>(r))
+}
 
 // ── Snapshots / Suites / Favorites ─────────────────────────────────────
 

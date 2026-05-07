@@ -140,6 +140,22 @@ class ParsersClient:
             raise ParsersServiceError(resp.status_code, detail)
         return resp.json()
 
+    async def debug_fetch_url(
+        self,
+        url: str,
+        encoding_hint: str | None = None,
+    ) -> dict:
+        """GET /api/debug/fetch-url → пробный GET через парсерский HTTP-стек."""
+        params: dict[str, Any] = {"url": url}
+        if encoding_hint:
+            params["encoding_hint"] = encoding_hint
+        resp = await self._client.get("/api/debug/fetch-url", params=params,
+                                       timeout=30.0)
+        if resp.is_error:
+            detail = _extract_detail(resp) or f"HTTP {resp.status_code}"
+            raise ParsersServiceError(resp.status_code, detail)
+        return resp.json()
+
     async def debug_features(self) -> dict:
         """GET /api/debug/features → какие debug-возможности активны на parsers."""
         resp = await self._client.get("/api/debug/features")

@@ -34,6 +34,26 @@ async def debug_parse(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+# ── URL probe (F1.4) ───────────────────────────────────────────────────────
+
+
+@router.get("/fetch-url")
+async def debug_fetch_url(
+    url: str = Query(..., description="URL целевой страницы магазина"),
+    encoding_hint: str | None = Query(None, description="Принудительный encoding"),
+    client: ParsersClient = Depends(get_parsers_client),
+) -> dict:
+    """Пробный GET через parsers (тот же UA/прокси/таймаут что у парсеров).
+
+    Возвращает status_code, encoding, content_type, body_text (≤200KB),
+    final_url (после redirect-ов) и history редиректов.
+    """
+    try:
+        return await client.debug_fetch_url(url=url, encoding_hint=encoding_hint)
+    except ParsersServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 # ── Compare: cache vs live ─────────────────────────────────────────────────
 
 
