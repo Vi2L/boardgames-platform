@@ -14,6 +14,6 @@ RUN mkdir -p data
 ENV DB_PATH=data/prices.sqlite
 ENV CACHE_TTL_HOURS=4
 
-EXPOSE 8000
+EXPOSE 8001
 
-CMD ["uvicorn", "parsers.api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "parsers.api:app", "--host", "0.0.0.0", "--port", "8001"]
