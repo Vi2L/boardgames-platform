@@ -36,3 +36,4 @@ services/*/data/
 
 # Локальные настройки Claude Code конкретного разработчика
 .claude/settings.local.json
+.scratch/
