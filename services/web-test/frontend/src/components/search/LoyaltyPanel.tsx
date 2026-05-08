@@ -23,16 +23,15 @@ export function LoyaltyPanel() {
       >
         <Caret size={13} className="text-gray-500" />
         <Sparkles size={12} className="text-violet-400" />
-        <span className="font-medium">Учитывать личные скидки</span>
-        <label className="ml-auto flex items-center gap-2 cursor-pointer select-none" onClick={e => e.stopPropagation()}>
+        <label className="flex items-center cursor-pointer select-none" onClick={e => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={enabled}
             onChange={e => setEnabled(e.target.checked)}
-            className="accent-violet-500 w-3.5 h-3.5"
+            className="accent-violet-500 w-5 h-5"
           />
-          <span className="text-xs text-gray-400">{enabled ? 'вкл' : 'выкл'}</span>
         </label>
+        <span className="font-medium">Учитывать личные скидки</span>
       </button>
 
       {open && (

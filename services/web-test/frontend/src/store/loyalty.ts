@@ -38,7 +38,7 @@ export interface LoyaltyStore {
 }
 
 export const useLoyaltyStore = create<LoyaltyStore>()(persist((set) => ({
-  enabled: false,
+  enabled: true,
   hobbygames: { enabled: true, bonuses: 'unlim' },
   lavkaigr: { enabled: true, percent: 10, vkDon: true },
 
