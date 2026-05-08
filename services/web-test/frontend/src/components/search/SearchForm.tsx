@@ -1,9 +1,10 @@
-import { useRef } from 'react'
-import { Search, RotateCcw, Square, PackageX } from 'lucide-react'
+import { RotateCcw, Square, Search, PackageX } from 'lucide-react'
 import clsx from 'clsx'
 import type { StoreOut } from '../../types/api'
 import { useSearchStore } from '../../store/search'
 import { LoyaltyPanel } from './LoyaltyPanel'
+import { SuggestInput } from '../shared/SuggestInput'
+import { useSearchHistory } from '../../lib/searchHistory'
 
 interface Props {
   stores: StoreOut[]
@@ -16,11 +17,14 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
     query, selectedStores, refresh, limit, showOutOfStock, isSearching,
     setQuery, toggleStore, setAllStores, clearStores, setRefresh, setLimit, setShowOutOfStock,
   } = useSearchStore()
-  const inputRef = useRef<HTMLInputElement>(null)
+  // history используется только для push'а при сабмите. Чтение/отображение
+  // подсказок — внутри SuggestInput через свой инстанс useSearchHistory.
+  const { push: pushHistory } = useSearchHistory('search')
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (isSearching) { onStop(); return }
+    if (query.trim()) pushHistory(query)
     onSearch()
   }
 
@@ -30,20 +34,16 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
   return (
     <form onSubmit={handleSubmit} className="space-y-3">
       <div className="flex gap-2">
-        <div className="relative flex-1">
-          <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500" />
-          <input
-            ref={inputRef}
-            id="search-q-input"
-            type="text"
-            value={query}
-            onChange={e => setQuery(e.target.value)}
-            placeholder="Название игры…  (Cmd+/)"
-            className="w-full pl-9 pr-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30"
-            disabled={isSearching}
-            autoFocus
-          />
-        </div>
+        <SuggestInput
+          inputId="search-q-input"
+          value={query}
+          onChange={setQuery}
+          historyKey="search"
+          placeholder="Название игры…  (Cmd+/)"
+          disabled={isSearching}
+          autoFocus
+          className="flex-1"
+        />
         <button
           type="submit"
           className={clsx(

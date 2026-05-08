@@ -38,6 +38,8 @@ import { MatchingStatsHeader } from '../components/catalog/MatchingStatsHeader'
 import { BackupButton } from '../components/catalog/BackupButton'
 import { PromotionPanel } from '../components/catalog/PromotionPanel'
 import { useCatalogTableStore } from '../store/catalog'
+import { SuggestInput } from '../components/shared/SuggestInput'
+import { useSearchHistory } from '../lib/searchHistory'
 import { Download, Plus, Settings2 } from 'lucide-react'
 
 type Tab = 'catalog' | 'matching' | 'promotion'
@@ -236,6 +238,9 @@ const ALL_COLUMN_IDS = COLUMNS.map(c => c.id)
 
 function CatalogSection() {
   const [q, setQ] = useState('')
+  // История запросов отдельная от /search — здесь юзер ищет канонические
+  // игры в каталоге, не товары в магазинах. push'аем при ручном Enter.
+  const { push: pushHistory } = useSearchHistory('catalog')
   const [openId, setOpenId] = useState<number | null>(null)
   const visibleColumnIds = useCatalogTableStore(s => s.visibleColumns)
   const columnSizes = useCatalogTableStore(s => s.columnSizes)
@@ -310,12 +315,13 @@ function CatalogSection() {
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
-        <input
-          type="text"
-          placeholder="Поиск по названиям (RU/EN aliases + fuzzy)"
+        <SuggestInput
           value={q}
-          onChange={e => setQ(e.target.value)}
-          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:border-violet-500 focus:outline-none"
+          onChange={setQ}
+          onSubmit={() => { if (q.trim()) pushHistory(q) }}
+          historyKey="catalog"
+          placeholder="Поиск по названиям (RU/EN aliases + fuzzy)"
+          className="flex-1"
         />
         <ColumnsPicker />
       </div>
