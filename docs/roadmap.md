@@ -35,7 +35,9 @@ PRS (parsers), INFRA (общее).
 
 ## Бэклог (без даты)
 
-### Catalog / matching
+### web-test
+
+**Catalog / matching UI**
 - [WT-F2.5] **Offer history page** — вкладка «офферы игры» на
   странице каталога (catalog уже отдаёт через `Game.offers`).
 - [WT-F2.6] **Bulk-import wizard top-N** — UI вокруг
@@ -45,15 +47,35 @@ PRS (parsers), INFRA (общее).
   подставляется RU; `getDisplayName(game)` в `lib/catalog.ts`
   как shared-хелпер.
 
-### Cross-service / инфра
+**Диагностика**
+- [WT-F5.3] **Status page** — `/status` с историей пингов и
+  timeline'ом unmatched-counter'а (для ретроспектив).
+
+**Auth и безопасность**
+- [WT-F6.1] **Закрыть `/api/debug/*` и `/api/dlq/*`** — nginx
+  `auth_basic` или JWT-middleware при публичном деплое.
+- [WT-F6.2] **Баннер «admin-функции отключены»** при отсутствии
+  `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
+
+**Технический долг**
+- [WT-T1] **`AliasList.tsx` → удалить** — заменён на
+  `AliasEditor.tsx` после F2.2, файл остался как dead-code.
+- [WT-T2] **Snapshot diff `extra` — фильтр** — сейчас
+  разбивается на `extra.<key>`, при 100 ключах в `raw` UI шумный.
+  Whitelist важных raw-ключей или фильтр «изменения ≥ X%».
+- [WT-T3] **`useInvalidate(domain)` хук** — единая точка
+  invalidate для cache-keys одного домена вместо ручного
+  перечисления в каждой mutation.
+
+### Parsers
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,
   пробующий replay'нуть DLQ-записи с экспоненциальным backoff;
   алерт при `attempt_count > 10`.
 - [PRS-2] **Парсер avito.ru** — C2C classifieds, зависит от [INFRA-5];
   `ParsedProduct.raw`: condition, location, seller_type;
   enrich (страница объявления) — не в первой итерации.
-- [WT-F5.3] **Status page** — `/status` с историей пингов и
-  timeline'ом unmatched-counter'а (для ретроспектив).
+
+### Инфра
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал
   (Next.js / Vite + React).
 - [INFRA-2] **`apps/mobile/`** — React Native / Expo для записи
@@ -67,22 +89,6 @@ PRS (parsers), INFRA (общее).
   Playwright + playwright-stealth, `POST /fetch {url} → {html, cookies, headers}`;
   профиль `browser` в docker-compose; `browser_client.py` в parsers
   как тонкий httpx-клиент к этому сервису.
-
-### Auth и безопасность
-- [WT-F6.1] **Закрыть `/api/debug/*` и `/api/dlq/*`** — nginx
-  `auth_basic` или JWT-middleware при публичном деплое.
-- [WT-F6.2] **Баннер «admin-функции отключены»** при отсутствии
-  `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
-
-### Технический долг
-- [WT-T1] **`AliasList.tsx` → удалить** — заменён на
-  `AliasEditor.tsx` после F2.2, файл остался как dead-code.
-- [WT-T2] **Snapshot diff `extra` — фильтр** — сейчас
-  разбивается на `extra.<key>`, при 100 ключах в `raw` UI шумный.
-  Whitelist важных raw-ключей или фильтр «изменения ≥ X%».
-- [WT-T3] **`useInvalidate(domain)` хук** — единая точка
-  invalidate для cache-keys одного домена вместо ручного
-  перечисления в каждой mutation.
 
 ### Известные ограничения (не баги, а константы)
 - **Парсеры — только 4 магазина** (hobbygames, lavkaigr, gaga,
