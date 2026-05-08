@@ -10,7 +10,7 @@
  *  - вытянуть HTML и попробовать на нём CSS-селекторы прежде чем
  *    встраивать в парсер.
  */
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { Play, Loader2, AlertTriangle, ExternalLink, Copy, Check } from 'lucide-react'
 import clsx from 'clsx'
@@ -198,6 +198,75 @@ function ProbeResult({
              style={{ maxHeight: 600, fontFamily: "'JetBrains Mono', 'Fira Code', monospace" }}>
           {result.body_text}
         </pre>
+      </div>
+
+      <SelectorPlayground html={result.body_text} />
+    </div>
+  )
+}
+
+// ─── CSS Selector playground ─────────────────────────────────────────────────
+
+function SelectorPlayground({ html }: { html: string }) {
+  const [selector, setSelector] = useState('')
+
+  type SelectorResult =
+    | { kind: 'ok'; matches: { text: string; outerHTML: string }[] }
+    | { kind: 'error'; message: string }
+
+  // DOMParser — синхронный браузерный API, никаких сетевых запросов.
+  // useMemo пересчитывается при каждом изменении селектора или html.
+  const result = useMemo((): SelectorResult | null => {
+    const q = selector.trim()
+    if (!q) return null
+    try {
+      const doc = new DOMParser().parseFromString(html, 'text/html')
+      const nodes = Array.from(doc.querySelectorAll(q))
+      return { kind: 'ok', matches: nodes.map(el => ({ text: el.textContent?.trim() ?? '', outerHTML: el.outerHTML })) }
+    } catch (e) {
+      return { kind: 'error', message: String(e) }
+    }
+  }, [html, selector])
+
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-lg p-3 space-y-2">
+      <div className="text-xs text-gray-500 font-medium uppercase tracking-wide">CSS Selector</div>
+      <div className="flex items-center gap-2">
+        <input
+          value={selector}
+          onChange={e => setSelector(e.target.value)}
+          placeholder=".price, h1, [data-product-id]"
+          className="flex-1 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 font-mono focus:outline-none focus:border-violet-500"
+        />
+        {result?.kind === 'ok' && (
+          <span className={clsx('text-xs whitespace-nowrap', result.matches.length ? 'text-emerald-400' : 'text-gray-500')}>
+            {result.matches.length} совпадений
+          </span>
+        )}
+      </div>
+      {result?.kind === 'error' && (
+        <div className="text-xs text-red-400 font-mono">{result.message}</div>
+      )}
+      {result?.kind === 'ok' && result.matches.length > 0 && (
+        <div className="space-y-1 max-h-72 overflow-y-auto">
+          {result.matches.map((m, i) => (
+            <details key={i} className="text-xs group">
+              <summary className="cursor-pointer list-none flex items-center gap-2 py-0.5 text-gray-400 hover:text-gray-200">
+                <span className="text-gray-600 font-mono w-6 flex-shrink-0">[{i}]</span>
+                <span className="truncate">{m.text || <span className="text-gray-600 italic">(нет текста)</span>}</span>
+              </summary>
+              <pre className="mt-1 p-2 bg-gray-950 border border-gray-800 rounded text-[11px] text-gray-300 whitespace-pre-wrap break-all font-mono">
+                {m.outerHTML}
+              </pre>
+            </details>
+          ))}
+        </div>
+      )}
+      {result?.kind === 'ok' && result.matches.length === 0 && selector.trim() && (
+        <div className="text-xs text-gray-500 italic">Нет совпадений.</div>
+      )}
+      <div className="text-[10px] text-gray-600">
+        Применяется к полученному body через DOMParser — без сетевых запросов.
       </div>
     </div>
   )
