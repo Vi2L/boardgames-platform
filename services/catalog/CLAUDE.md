@@ -168,6 +168,59 @@ curl -X POST 'http://localhost:8002/import/bgg?wait=true' \
 Скачивает XML, заполняет `game_bgg` `description`/`designers`/`mechanics`/
 `categories`/`min_players` и т.д. По одной игре за вызов (rate-limit BGG).
 
+### XML API BGG batch — массовое обогащение топ-N (этап 2-3)
+
+Подсистема `catalog/parsers/bgg/` с batch до 20 ID на запрос — полный seed
+по ranked-играм (~30K) укладывается в ~25 минут вместо ~8 часов
+(одиночный `/import/bgg` × 30K).
+
+CLI (для админских прогонов):
+
+```bash
+# Топ-100 dry-run — проверить, что доедет до BGG и не упадёт.
+uv run --package boardgames-catalog python -m catalog.scripts.enrich_bgg \
+    --only-rank-le 100 --dry-run
+
+# Реальный прогон топ-1000.
+uv run --package boardgames-catalog python -m catalog.scripts.enrich_bgg \
+    --only-rank-le 1000
+
+# Полный seed по всем ranked-играм. Долго; запускать под `nohup` или в screen.
+nohup uv run --package boardgames-catalog python -m catalog.scripts.enrich_bgg \
+    --all-ranked > .scratch/enrich_bgg.log 2>&1 &
+```
+
+HTTP-endpoint (для UI с polling'ом прогресса):
+
+```bash
+curl -X POST http://localhost:8002/import/bgg/batch \
+  -H 'content-type: application/json' \
+  -d '{"rank_le": 1000}'
+# → {"id": 42, "status": "pending", ...}
+
+curl http://localhost:8002/import/jobs/42 | jq '.progress, .log_lines | last'
+# progress: {"phase": "enriching", "current": 540, "total": 1000, "current_title": "..."}
+```
+
+Запись в БД:
+- **games**: COALESCE-семантика — НЕ затираем ручные правки. Обогащаются только
+  пустые поля (description / designers / players_min/max / age_min / playtime_*
+  / cover_url). `source` из `'bgg-ranks'` поднимается до `'bgg'`.
+- **game_bgg** (satellite): полная перезапись XML-полей (description, designers,
+  mechanics, categories, min/max_players, image_url, ...). `source='xml-api'`,
+  `fetched_at=now()` — это resume-state, повторный прогон со
+  `skip_recent_days=30` пропустит недавно обогащённые.
+- **game_aliases**: alternate names (преимущественно EN) с `source='bgg'`,
+  `language='en'`, `verified=False`, ON CONFLICT DO NOTHING на
+  `uq_alias_per_game`.
+
+Прогресс в UI: `ImportJob.progress = {phase, current, total, current_title}`,
+`log_lines` (ring-buffer 200 строк), batched UPDATE через
+`catalog.importers._log_buffer.LogBuffer` каждые 100 строк / 2 сек.
+
+Rate-limit BGG: `--rate-limit-sec 1.0` (≥1 req/sec — best practice). При
+превышении — BGG может вернуть 429 или временно забанить.
+
 ### Tesera — отложено
 
 Cloudflare блокирует tesera.ru / api.tesera.ru с большинства не-RU-IP.

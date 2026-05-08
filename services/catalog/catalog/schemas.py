@@ -240,6 +240,34 @@ class BggImportRequest(BaseModel):
     ids: list[int] | None = None
 
 
+class BggBatchImportRequest(BaseModel):
+    """POST /import/bgg/batch — массовое XML-обогащение топ-N или всех ranked игр.
+
+    Ровно один из `rank_le` / `all_ranked` обязателен (валидация — model_validator
+    в роутере, чтобы 422 был с понятным сообщением).
+    """
+
+    rank_le: int | None = Field(
+        default=None, ge=1,
+        description="обработать только игры с BGG rank ≤ N (топ-N).",
+    )
+    all_ranked: bool = Field(
+        default=False,
+        description="обработать все ranked-игры (~25 минут при rate-limit 1/сек).",
+    )
+    batch_size: int = Field(default=20, ge=1, le=20)
+    skip_recent_days: int = Field(
+        default=30, ge=0,
+        description="не перезапрашивать игры с fetched_at < N дней (0 — форсировать).",
+    )
+    limit: int | None = Field(
+        default=None, ge=1,
+        description="общий потолок (для пробного прогона).",
+    )
+    dry_run: bool = False
+    rate_limit_sec: float = Field(default=1.0, ge=0.0, le=10.0)
+
+
 class TeseraImportRequest(BaseModel):
     """Tesera принимает alias (slug) или числовой id. Можно батчем."""
     alias: str | None = None
@@ -555,12 +583,16 @@ class BatchLinkRequest(BaseModel):
 
     threshold — минимальный score для безопасного авто-link (по умолчанию 0.95
     «почти точное совпадение»). dry_run по умолчанию True для UX «preview сначала».
+
+    `match_params` — расширенные параметры (weights, prefer_external_id).
+    Если задан, его `threshold` имеет приоритет над верхнеуровневым.
     """
 
     threshold: float = 0.95
     max_items: int = 100
     dry_run: bool = True
     skip_with_satellite: bool = True
+    match_params: "MatchParams | None" = None
 
 
 class BatchLinkItemPreview(BaseModel):
@@ -587,3 +619,166 @@ class BatchLinkResult(BaseModel):
     skipped: list[BatchLinkSkipped]
     items: list[BatchLinkItemPreview]    # топ-50 для preview
     dry_run: bool
+
+
+# ---------- parsers (BGG / Wikidata / ...) ----------
+
+class BggSearchRequest(BaseModel):
+    """Запрос поиска игр в BGG XML API через `POST /parsers/bgg/search`."""
+    query: str = Field(min_length=1, max_length=256)
+    # exact=True проксируется в BGG `/search?exact=1` — фильтр по полному
+    # совпадению primary name. False (default) даёт fuzzy-поведение, нужное
+    # оператору в Live Test.
+    exact: bool = False
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class BggSearchHitOut(BaseModel):
+    """Одна позиция в ответе `POST /parsers/bgg/search`."""
+    bgg_id: int
+    title: str
+    year: int | None = None
+
+
+class BggSearchResponse(BaseModel):
+    query: str
+    exact: bool
+    count: int
+    items: list[BggSearchHitOut]
+
+
+# ---------- match params (унифицированный матчинг) ----------
+
+class MatchWeights(BaseModel):
+    """Веса score per поле. Default = 1.0 для всех — поведение совпадает с старым.
+
+    `ru` / `en` — при матче по title/alias на соответствующем языке.
+    `alias` — общий мультипликатор для совпадений через game_aliases (поверх
+    языкового веса). Полезно, если оператор хочет понизить доверие к auto-match
+    aliases в пользу title.
+    """
+
+    ru: float = Field(default=1.0, ge=0.0, le=2.0)
+    en: float = Field(default=1.0, ge=0.0, le=2.0)
+    alias: float = Field(default=1.0, ge=0.0, le=2.0)
+
+
+class MatchParams(BaseModel):
+    """Параметры матчинга, передаваемые в /candidates и /batch-link.
+
+    Все поля опциональны; при отсутствии параметров поведение совпадает с
+    текущим (threshold=0.3-0.5 в зависимости от endpoint, веса = 1.0,
+    external_id не учитывается).
+    """
+
+    threshold: float = Field(default=0.3, ge=0.0, le=1.0)
+    prefer_external_id: bool = Field(
+        default=False,
+        description=(
+            "Если у raw есть BGG/Tesera ID в external_links — добавить "
+            "deterministic-кандидата со score=1.0 поверх trgm-результатов."
+        ),
+    )
+    weights: MatchWeights = Field(default_factory=MatchWeights)
+
+
+# ---------- match profiles ----------
+
+class MatchProfileIn(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    params: MatchParams
+    is_default: bool = False
+
+
+class MatchProfileOut(_ORMBase):
+    id: int
+    provider: str
+    name: str
+    params: dict[str, Any]
+    is_default: bool
+    updated_at: datetime
+
+
+# ---------- sources: scrape runs ----------
+
+class ScrapeRunCreate(BaseModel):
+    """Тело POST /sources/{provider}/runs. Параметры скрапа провайдер-специфичны;
+    собираются в `ScraperParams` в runner'е.
+    """
+
+    max_items: int | None = Field(default=None, ge=1, le=10000)
+    only_year: int | None = Field(default=None, ge=2000, le=2100)
+    extra: dict[str, Any] = Field(default_factory=dict)
+
+
+class ScrapeRunTotals(BaseModel):
+    """Снимок счётчиков прогона для UI. Поля опциональны — runner заполняет
+    их по мере прогресса; UI рендерит только что есть."""
+
+    new: int | None = None
+    updated: int | None = None
+    unchanged: int | None = None
+    total_slugs: int | None = None
+    errors: int | None = None
+    applied: int | None = None
+
+
+class ScrapeRunOut(_ORMBase):
+    id: int
+    provider: str
+    status: str
+    params: dict[str, Any]
+    totals: dict[str, Any]
+    error_message: str | None = None
+    log_lines: list[str]
+    started_at: datetime
+    finished_at: datetime | None = None
+    performed_by: str | None = None
+
+
+class ScrapeRunListOut(BaseModel):
+    runs: list[ScrapeRunOut]
+    total: int
+
+
+class ScrapeItemOut(_ORMBase):
+    id: int
+    run_id: int
+    slug: str
+    payload: dict[str, Any]
+    content_hash: str
+    prev_hash: str | None = None
+    change_type: str
+    field_diffs: dict[str, Any] | None = None
+    fetched_at: datetime
+
+
+class ScrapeItemListOut(BaseModel):
+    items: list[ScrapeItemOut]
+    total: int
+
+
+class ScrapeRunApplyRequest(BaseModel):
+    """`item_ids` и `change_types` фильтруются как AND. Если оба None — ошибка.
+    UI всегда передаёт хотя бы один."""
+
+    item_ids: list[int] | None = None
+    change_types: list[str] | None = None
+    performed_by: str | None = None
+
+
+class ScrapeRunApplyResult(BaseModel):
+    run_id: int
+    applied: int
+
+
+class ScrapeRunDiscardResult(BaseModel):
+    run_id: int
+    status: str
+
+
+# Forward-references: BatchLinkRequest объявлен раньше MatchParams и использует
+# его как опциональное поле. Pydantic v2 при `from __future__ import annotations`
+# все аннотации видит строкой — после определения MatchParams нужно явно
+# пересобрать модель, иначе поле останется без валидатора.
+BatchLinkRequest.model_rebuild()

@@ -24,6 +24,7 @@ from catalog.schemas import (
     BatchLinkResult,
     DicefestRawGameOut,
     DicefestRawListOut,
+    MatchParams,
     PromotionApplyRequest,
     PromotionApplyResult,
     PromotionCandidate,
@@ -109,11 +110,28 @@ async def candidates(
     raw_id: int,
     threshold: float = Query(0.5, ge=0.0, le=1.0),
     limit: int = Query(5, ge=1, le=20),
+    prefer_external_id: bool = Query(
+        False, description="Поднять deterministic-кандидата по BGG/Tesera ID",
+    ),
+    weight_ru: float = Query(1.0, ge=0.0, le=2.0),
+    weight_en: float = Query(1.0, ge=0.0, le=2.0),
+    weight_alias: float = Query(1.0, ge=0.0, le=2.0),
     session: AsyncSession = Depends(get_session),
 ) -> PromotionCandidatesOut:
+    """Список кандидатов для raw-записи.
+
+    Параметры матчинга передаются через query (плоско, чтобы был кешируемый
+    GET): threshold, prefer_external_id, weight_*. Если ни один не задан —
+    поведение совпадает со старым контрактом (1.0/1.0/1.0, без external_id).
+    """
     _check_provider(provider)
+    params = MatchParams(
+        threshold=threshold,
+        prefer_external_id=prefer_external_id,
+        weights={"ru": weight_ru, "en": weight_en, "alias": weight_alias},
+    )
     raw, cand_dicts = await dicefest_promo.match_candidates(
-        session, raw_id, threshold=threshold, limit=limit,
+        session, raw_id, threshold=threshold, limit=limit, params=params,
     )
     return PromotionCandidatesOut(
         raw=DicefestRawGameOut.model_validate(raw),
@@ -171,6 +189,7 @@ async def batch_link(
         max_items=payload.max_items,
         dry_run=payload.dry_run,
         skip_with_satellite=payload.skip_with_satellite,
+        params=payload.match_params,
     )
     return BatchLinkResult.model_validate(result)
 

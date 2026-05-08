@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
-import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug, Inbox } from 'lucide-react'
+import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug, Inbox, Boxes } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
@@ -10,6 +10,7 @@ import { TestingPage } from './pages/TestingPage'
 import { CatalogPage } from './pages/CatalogPage'
 import { DebugPage } from './pages/DebugPage'
 import { DlqPage } from './pages/DlqPage'
+import { SourcesPage } from './pages/SourcesPage'
 import { DiffView } from './components/testing/DiffView'
 import { HealthBadge } from './components/shared/HealthBadge'
 import { CommandPalette } from './components/shared/CommandPalette'
@@ -20,6 +21,7 @@ const NAV = [
   { to: '/debug', label: 'Debug', icon: Bug },
   { to: '/database', label: 'БД', icon: Database },
   { to: '/catalog', label: 'Каталог', icon: Library },
+  { to: '/sources', label: 'Источники', icon: Boxes },
   { to: '/testing', label: 'Тесты', icon: FlaskConical },
   { to: '/dlq', label: 'DLQ', icon: Inbox },
 ]
@@ -140,6 +142,8 @@ export default function App() {
           <Route path="/dlq" element={<DlqPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/catalog" element={<CatalogPage />} />
+          <Route path="/sources" element={<SourcesPage />} />
+          <Route path="/sources/:provider" element={<SourcesPage />} />
           <Route path="/products/:id" element={<ProductPage />} />
           <Route path="/testing" element={<TestingPage />} />
           <Route path="/testing/diff" element={<DiffView />} />

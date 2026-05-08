@@ -21,11 +21,12 @@ import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from catalog.auth import require_scope
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catalog.db import get_engine, get_session
+from catalog.importers._log_buffer import LogBuffer
 from catalog.importers.bgg import (
     BggGame,
     fetch_bgg_thing,
@@ -42,7 +43,10 @@ from catalog.importers.dicefest import (
     _run_dicefest_reparse_job,
 )
 from catalog.models import Game, GameAlias, ImportJob
+from catalog.parsers.bgg import BggClient
+from catalog.parsers.bgg.service import enrich_batch
 from catalog.schemas import (
+    BggBatchImportRequest,
     BggImportRequest,
     DicefestImportRequest,
     ImportJobOut,
@@ -282,6 +286,178 @@ async def import_bgg(
         # Fire-and-forget. Сама задача создаёт свою сессию — текущая dep-сессия
         # будет закрыта по завершении HTTP-запроса.
         asyncio.create_task(_run_bgg_import_job(job.id, ids))
+
+    return ImportJobOut.model_validate(job)
+
+
+# ─── BGG batch enrich (этап 2-3) ─────────────────────────────────────────────
+
+
+def get_batch_bgg_client() -> BggClient:
+    """FastAPI dependency для batch-endpoint'а. Тесты переопределяют через
+    `app.dependency_overrides` для подмены MockTransport.
+
+    Отдельная функция, а не общая с `routers/parsers.py:get_bgg_client`,
+    потому что тесты часто хотят разный mock'инг для search vs batch
+    (в search возвращается /search-XML, в batch — /thing-XML)."""
+    return BggClient()
+
+
+async def _run_bgg_batch_job(
+    job_id: int,
+    payload: BggBatchImportRequest,
+    *,
+    client: BggClient | None = None,
+) -> None:
+    """Background-таск для batch BGG XML enrich.
+
+    Управляет своей сессией (фоновая задача — своя транзакция, не делим
+    с HTTP-handler'ом). Прогресс пишет через `LogBuffer` каждые 100 строк
+    или 2 сек — на 1000+ играх это даёт ~10-30 UPDATE'ов вместо 3000.
+    """
+    engine = get_engine()
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with SessionFactory() as session:
+        # 1. Помечаем job как running.
+        job = (
+            await session.execute(select(ImportJob).where(ImportJob.id == job_id))
+        ).scalar_one()
+        job.status = "running"
+        job.started_at = _utcnow()
+        await session.commit()
+
+        # LogBuffer держит свою же session — flush'ит UPDATE'ы туда.
+        # flush_every_n=100 — для batch enrich (1000+ игр) хватит, чтобы
+        # poll-UI видел движение каждые ~100 итераций / 2 секунды.
+        buf = LogBuffer(session, job_id=job_id, flush_every_n=100, flush_every_s=2.0)
+
+        rank_le = None if payload.all_ranked else payload.rank_le
+        scope = "all-ranked" if payload.all_ranked else f"rank≤{rank_le}"
+        buf.set_progress(phase="starting", current=0, total=0)
+        buf.log(
+            f"BGG batch enrich: scope={scope} batch_size={payload.batch_size} "
+            f"skip_recent_days={payload.skip_recent_days} dry_run={payload.dry_run}"
+        )
+        await buf.flush()
+
+        own_client = client is None
+        if client is None:
+            client = BggClient()
+
+        async def progress_cb(i: int, total: int, bgg) -> None:
+            # Лог per-item только для не-skipped, чтобы не засорять ring-buffer.
+            if bgg is not None:
+                buf.log(f"[{i}/{total}] bgg_id={bgg.bgg_id} — {bgg.title}")
+            buf.set_progress(
+                phase="enriching",
+                current=i,
+                total=total,
+                current_title=bgg.title if bgg is not None else None,
+            )
+            await buf.maybe_flush()
+
+        try:
+            if own_client:
+                await client.__aenter__()
+            stats = await enrich_batch(
+                rank_le=rank_le,
+                batch_size=payload.batch_size,
+                skip_recent_days=payload.skip_recent_days,
+                limit=payload.limit,
+                dry_run=payload.dry_run,
+                rate_limit_sec=payload.rate_limit_sec,
+                progress_cb=progress_cb,
+                session_factory=SessionFactory,
+                client=client,
+            )
+
+            buf.log(
+                f"Done: enriched={stats.enriched} skipped={stats.skipped} "
+                f"failed={stats.failed}"
+            )
+            buf.set_progress(phase="done")
+            await buf.flush()
+
+            # Final status: failed только если совсем ничего не обогатили
+            # и при этом были ошибки. Если хоть одна игра обработана — done
+            # (частичный успех — нормально для long-running batch'а).
+            final_status = (
+                "failed" if stats.failed > 0 and stats.enriched == 0 else "done"
+            )
+            await session.execute(
+                update(ImportJob)
+                .where(ImportJob.id == job_id)
+                .values(
+                    status=final_status,
+                    finished_at=_utcnow(),
+                    result=stats.to_dict(),
+                    error=stats.errors[0]["error"] if final_status == "failed" and stats.errors else None,
+                )
+            )
+            await session.commit()
+        except Exception as exc:  # noqa: BLE001 — фоновая задача
+            logger.exception("BGG batch job %d failed", job_id)
+            buf.log(f"FAILED: {exc!r}")
+            await buf.flush()
+            await session.execute(
+                update(ImportJob)
+                .where(ImportJob.id == job_id)
+                .values(
+                    status="failed",
+                    finished_at=_utcnow(),
+                    error=str(exc),
+                )
+            )
+            await session.commit()
+        finally:
+            if own_client:
+                await client.__aexit__(None, None, None)
+
+
+@router.post(
+    "/bgg/batch",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_bgg_batch(
+    payload: BggBatchImportRequest,
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    session: AsyncSession = Depends(get_session),
+    bgg: BggClient = Depends(get_batch_bgg_client),
+) -> ImportJobOut:
+    """Запустить batch-обогащение catalog'а через BGG XML API.
+
+    Один из `rank_le` / `all_ranked` обязателен. Прогресс пишется в
+    `ImportJob.progress` и `log_lines`, читать через `GET /import/jobs/{id}`.
+
+    `wait=true` — синхронный режим для тестов. В продакшене — fire-and-forget.
+    """
+    if payload.rank_le is None and not payload.all_ranked:
+        raise HTTPException(
+            status_code=400,
+            detail="rank_le или all_ranked обязателен",
+        )
+    if payload.rank_le is not None and payload.all_ranked:
+        raise HTTPException(
+            status_code=400,
+            detail="rank_le и all_ranked взаимоисключают друг друга",
+        )
+
+    job = ImportJob(
+        type="bgg-batch",
+        payload=payload.model_dump(exclude_none=True),
+        status="pending",
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await _run_bgg_batch_job(job.id, payload, client=bgg)
+        await session.refresh(job)
+    else:
+        asyncio.create_task(_run_bgg_batch_job(job.id, payload, client=bgg))
 
     return ImportJobOut.model_validate(job)
 

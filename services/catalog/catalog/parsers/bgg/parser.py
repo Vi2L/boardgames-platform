@@ -1,0 +1,165 @@
+"""Pure-функции парсинга BGG XML.
+
+Без сети, без БД — на вход строка XML, на выход dataclass из `models.py`.
+Тестируются на статических фикстурах в `tests/fixtures/bgg_*.xml`.
+
+Особенности BGG XML:
+- `<items><item id type><name type="primary|alternate" value/>...</item></items>`
+- Designers / publishers / categories / mechanics — все через единый
+  `<link type="boardgame{designer|publisher|category|mechanic}" value/>`.
+- `/thing` отдаёт `<statistics><ratings><average value/><bayesaverage value/>`.
+- `/search` отдаёт минимум полей — только name и yearpublished.
+"""
+from __future__ import annotations
+
+from xml.etree import ElementTree as ET
+
+from catalog.parsers.bgg.models import BggGame, BggSearchHit
+
+
+def _int_attr(elem: ET.Element | None, attr: str = "value") -> int | None:
+    """Безопасный извлекатель int-атрибута: None при отсутствии или невалидном значении."""
+    if elem is None:
+        return None
+    val = elem.attrib.get(attr)
+    if val is None:
+        return None
+    try:
+        return int(val)
+    except ValueError:
+        return None
+
+
+def _float_attr(elem: ET.Element | None, attr: str = "value") -> float | None:
+    if elem is None:
+        return None
+    val = elem.attrib.get(attr)
+    if val is None:
+        return None
+    try:
+        return float(val)
+    except ValueError:
+        return None
+
+
+def parse_thing_xml(xml_text: str) -> BggGame | None:
+    """Парсит ответ BGG XML API на запрос `/thing?id=<bgg_id>&stats=1`.
+
+    Возвращает None, если игры с таким id нет (BGG отдаёт пустой `<items/>`).
+    """
+    root = ET.fromstring(xml_text)
+    item = root.find("item")
+    if item is None:
+        return None
+
+    bgg_id = int(item.attrib["id"])
+
+    # Имена: одно primary + N alternate.
+    primary_name = ""
+    aliases: list[str] = []
+    for name_el in item.findall("name"):
+        if name_el.attrib.get("type") == "primary":
+            primary_name = name_el.attrib.get("value", "")
+        else:
+            alt = name_el.attrib.get("value")
+            if alt:
+                aliases.append(alt)
+
+    # Линки: designers / publishers / categories / mechanics — через `<link type=...>`.
+    designers: list[str] = []
+    publishers: list[str] = []
+    categories: list[str] = []
+    mechanics: list[str] = []
+    for link in item.findall("link"):
+        ltype = link.attrib.get("type")
+        value = link.attrib.get("value", "")
+        if ltype == "boardgamedesigner":
+            designers.append(value)
+        elif ltype == "boardgamepublisher":
+            publishers.append(value)
+        elif ltype == "boardgamecategory":
+            categories.append(value)
+        elif ltype == "boardgamemechanic":
+            mechanics.append(value)
+
+    description = None
+    desc_el = item.find("description")
+    if desc_el is not None and desc_el.text:
+        description = desc_el.text
+
+    image_el = item.find("image")
+    thumb_el = item.find("thumbnail")
+
+    # Статистика — внутри `<statistics><ratings>...`.
+    stats = item.find("statistics/ratings")
+    rating_avg = _float_attr(stats.find("average") if stats is not None else None)
+    rating_bayes = _float_attr(stats.find("bayesaverage") if stats is not None else None)
+
+    return BggGame(
+        bgg_id=bgg_id,
+        title=primary_name,
+        aliases=aliases,
+        year=_int_attr(item.find("yearpublished")),
+        description=description,
+        cover_url=image_el.text if image_el is not None and image_el.text else None,
+        thumbnail_url=thumb_el.text if thumb_el is not None and thumb_el.text else None,
+        designers=designers,
+        publishers=publishers,
+        players_min=_int_attr(item.find("minplayers")),
+        players_max=_int_attr(item.find("maxplayers")),
+        playtime_min=_int_attr(item.find("minplaytime")),
+        playtime_max=_int_attr(item.find("maxplaytime")),
+        age_min=_int_attr(item.find("minage")),
+        categories=categories,
+        mechanics=mechanics,
+        rating_avg=rating_avg,
+        rating_bayes=rating_bayes,
+    )
+
+
+def parse_search_xml(xml_text: str) -> list[BggSearchHit]:
+    """Парсит ответ BGG XML API на запрос `/search?query=<q>&type=boardgame`.
+
+    Формат ответа:
+        <items total="N">
+          <item type="boardgame" id="822">
+            <name type="primary" value="Carcassonne"/>
+            <yearpublished value="2000"/>
+          </item>
+          ...
+        </items>
+
+    Пустой результат → пустой список (не None — search не имеет
+    «нет такого id», только «ничего не нашлось»).
+
+    Фильтруем по `type='boardgame'` на всякий случай — если bgg вдруг
+    отдаст boardgameaccessory без `&type=boardgame`-фильтра, мы не
+    поломаемся, просто пропустим лишнее.
+    """
+    root = ET.fromstring(xml_text)
+    hits: list[BggSearchHit] = []
+    for item in root.findall("item"):
+        if item.attrib.get("type") != "boardgame":
+            continue
+        try:
+            bgg_id = int(item.attrib["id"])
+        except (KeyError, ValueError):
+            continue
+
+        # primary name — обязательно. Без него позиция бесполезна.
+        title = ""
+        for name_el in item.findall("name"):
+            if name_el.attrib.get("type") == "primary":
+                title = name_el.attrib.get("value", "")
+                break
+        if not title:
+            continue
+
+        hits.append(
+            BggSearchHit(
+                bgg_id=bgg_id,
+                title=title,
+                year=_int_attr(item.find("yearpublished")),
+            )
+        )
+    return hits
