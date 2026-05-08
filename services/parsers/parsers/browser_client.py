@@ -50,9 +50,15 @@ class BrowserClient:
         extra_headers: dict[str, str] | None = None,
         stealth: bool = True,
         proxy: str | None = None,
+        wait_for_selector: str | None = None,
+        wait_for_selector_timeout_ms: int = 15_000,
     ) -> dict:
         """POST /fetch → словарь с ключами:
             html, status, url, headers, cookies, elapsed_ms.
+
+        wait_for_selector: CSS-селектор, появление которого означает «контент загружен».
+        Используется для сайтов с bot-challenge (Qrator, Cloudflare) — позволяет
+        дождаться реальных данных после автоматического прохождения JS-challenge.
 
         Raises BrowserServiceError при HTTP-ошибке browser-сервиса.
         """
@@ -66,6 +72,9 @@ class BrowserClient:
             payload["extra_headers"] = extra_headers
         if proxy:
             payload["proxy"] = proxy
+        if wait_for_selector:
+            payload["wait_for_selector"] = wait_for_selector
+            payload["wait_for_selector_timeout_ms"] = wait_for_selector_timeout_ms
 
         resp = await self._client.post("/fetch", json=payload)
         if resp.is_error:

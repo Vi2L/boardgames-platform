@@ -62,9 +62,14 @@ class AvitoParser(StoreParser):
         t0 = time.monotonic()
         result = await self._browser_client.fetch(
             url,
-            wait_until="networkidle",
+            wait_until="load",
             timeout_ms=35_000,
             stealth=True,
+            # Ждём появления карточки товара — это значит Qrator-challenge прошёл
+            # и страница показала реальный контент. Таймаут не бросает исключение,
+            # поэтому при блоке мы получим HTML challenge-страницы и вернём [].
+            wait_for_selector="[data-marker='item']",
+            wait_for_selector_timeout_ms=20_000,
         )
         # Один вызов к browser-сервису = одна «транзакция» в метриках,
         # даже если Chromium внутри делает десятки sub-request'ов.

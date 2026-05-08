@@ -45,6 +45,13 @@ class FetchRequest(BaseModel):
     stealth: bool = True
     # Переопределить прокси для этого запроса. None = использовать BROWSER_PROXY_URL.
     proxy: str | None = None
+    # CSS-селектор, появление которого означает «контент загружен».
+    # Используется для сайтов с bot-challenge (Qrator, Cloudflare): браузер
+    # ждёт появления реального контента, а не страницы challenge.
+    # Если селектор не появился до wait_for_selector_timeout_ms → возвращаем
+    # что есть (без ошибки, чтобы парсер мог определить сам что пошло не так).
+    wait_for_selector: str | None = None
+    wait_for_selector_timeout_ms: int = Field(default=15_000, ge=1_000, le=60_000)
 
 
 class FetchResponse(BaseModel):
@@ -149,6 +156,19 @@ async def fetch(req: FetchRequest, request: Request):
                     status_code=502,
                     detail=f"browser error after {elapsed_ms}ms: {exc}",
                 ) from exc
+
+            # Если задан wait_for_selector — ждём появления реального контента.
+            # Это нужно для сайтов с bot-challenge (Qrator, Cloudflare):
+            # challenge-страница тоже триггерит networkidle, но не содержит
+            # целевые элементы. Таймаут не бросает исключение — возвращаем что есть.
+            if req.wait_for_selector:
+                try:
+                    await page.wait_for_selector(
+                        req.wait_for_selector,
+                        timeout=req.wait_for_selector_timeout_ms,
+                    )
+                except PlaywrightTimeoutError:
+                    pass  # вернём что есть, парсер разберётся
 
             html = await page.content()
             cookies = await context.cookies()
