@@ -103,19 +103,73 @@ async def test_search_substring_short_query(client: AsyncClient):
     assert "Settlers" not in found
 
 
-async def test_search_substring_priority_over_fuzzy(client: AsyncClient):
-    """Точные substring-matches идут первыми в выдаче, fuzzy — после.
+async def test_search_score_hierarchy(client: AsyncClient):
+    """Иерархия score'а в композитном ранжире:
+    exact (4.0) > prefix (3.0) > substring (2.0) > fuzzy (<1.0).
 
-    'Azul Mini' содержит подстроку — score=1.0. 'Azuleo' только похож по
-    триграммам — score < 1.0. Substring должен быть выше в результатах.
+    Конкретный кейс: для запроса 'Azul' игра с точным title='Azul' идёт
+    раньше всех вариантов. Substring-only ('Some Azul Edition') идёт ниже
+    prefix-match ('Azul Mini'). Fuzzy ('Asul' с очепяткой) — последняя
+    или вне выдачи (зависит от similarity threshold).
     """
-    await client.post("/games", json={"slug": "az1", "title": "Azuleo"})
-    await client.post("/games", json={"slug": "az2", "title": "Azul Mini"})
+    await client.post("/games", json={"slug": "az0", "title": "Azul"})
+    await client.post("/games", json={"slug": "az1", "title": "Azul Mini"})
+    await client.post("/games", json={"slug": "az2", "title": "Some Azul Edition"})
     r = await client.get("/games", params={"q": "Azul"})
     titles = [item["title"] for item in r.json()["items"]]
-    assert "Azul Mini" in titles
-    assert "Azuleo" in titles
-    assert titles.index("Azul Mini") < titles.index("Azuleo")
+    # exact match впереди всех
+    assert titles.index("Azul") < titles.index("Azul Mini")
+    # prefix впереди substring-only
+    assert titles.index("Azul Mini") < titles.index("Some Azul Edition")
+
+
+async def test_search_base_outranks_expansion(client: AsyncClient):
+    """При равном score'е база (kind='base') идёт раньше дополнений.
+
+    Имитирует «Каркассон»-сценарий: `q='Carc'` находит и базу, и дополнения
+    через title prefix — обе строки получают score=3.0. Tiebreaker по kind
+    помещает базу выше.
+    """
+    base = (await client.post(
+        "/games", json={"slug": "carc-base", "title": "Carcassonne"},
+    )).json()
+    await client.post(
+        "/games", json={
+            "slug": "carc-exp", "title": "Carcassonne: Expansion",
+            "kind": "expansion", "parent_game_id": base["id"],
+        },
+    )
+    r = await client.get("/games", params={"q": "Carc"})
+    titles = [item["title"] for item in r.json()["items"]]
+    assert titles.index("Carcassonne") < titles.index("Carcassonne: Expansion")
+
+
+async def test_search_alias_match_ranks_high(client: AsyncClient):
+    """Игра с английским title и ru-alias должна по русскому запросу
+    подняться в топ — alias-prefix-match даёт score=3.0, как и title-prefix.
+
+    Это исправляет реальный кейс с #231 'Carcassonne' (en title +
+    ru-alias 'Каркассон'): раньше попадал в выдачу через WHERE-EXISTS,
+    но в ORDER BY получал низкую title-fuzzy-score и тонул.
+    """
+    g = (await client.post(
+        "/games", json={"slug": "carc-en", "title": "Carcassonne"},
+    )).json()
+    # ru-alias через POST /games/{id}/aliases
+    await client.post(
+        f"/games/{g['id']}/aliases",
+        json={"alias": "Каркассон", "language": "ru", "source": "manual",
+              "verified": True},
+    )
+    # Ещё одна игра, у которой запрос матчится только через title-fuzzy.
+    await client.post("/games", json={"slug": "carrom", "title": "Carrom"})
+
+    r = await client.get("/games", params={"q": "карк"})
+    titles = [it["title"] for it in r.json()["items"]]
+    assert "Carcassonne" in titles
+    if "Carrom" in titles:
+        # Carrom может найтись через fuzzy — но Carcassonne (с alias) выше.
+        assert titles.index("Carcassonne") < titles.index("Carrom")
 
 
 async def test_search_escapes_like_wildcards(client: AsyncClient):

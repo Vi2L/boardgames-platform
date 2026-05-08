@@ -97,17 +97,51 @@ async def list_games(
     total = (await session.execute(select(func.count()).select_from(stmt.subquery()))).scalar_one()
 
     if q:
-        # Сортировка: точные substring-matches (score=1.0) первыми, потом
-        # fuzzy-кандидаты по убыванию pg_trgm similarity, потом по id.
-        # Имена параметров не пересекаются с WHERE, чтобы не зависеть от того,
-        # как SQLAlchemy объединяет bindparams в финальном SQL.
+        # Композитный ранжир, чтобы оригинал/база шла раньше переизданий
+        # и дополнений. Иерархия score'ов:
+        #   exact-match  4.0  — title_norm == :q
+        #   prefix       3.0  — title_norm LIKE 'q%'
+        #   substring    2.0  — title_norm LIKE '%q%'
+        #   fuzzy       <1.0  — pg_trgm similarity
+        # Берём GREATEST из title-score и max(alias-score) для этой игры —
+        # это исправляет кейс, когда canonical-title английский, а
+        # ru-локализация (Wikidata-alias) совпадает с запросом. Раньше
+        # такие игры (#231 'Carcassonne') получали низкую fuzzy и тонули.
+        #
+        # Tiebreakers внутри одного score-bucket'а: kind='base' выше
+        # допов/промо, parent_game_id IS NULL выше детей, короткий title
+        # ('Каркассон' < 'Каркассон: Колесо фортуны'), id ASC (оригиналы
+        # с маленькими id выше переизданий).
+        #
+        # Sub-SELECT на game_aliases выполняется только для уже-
+        # отфильтрованных WHERE строк (≤limit), не на полных 162K games.
+        # Параметры :q3/:qlike3 не пересекаются с WHERE (:q/:qlike) и
+        # ORDER BY в других местах — это страхует от случаев, когда
+        # SQLAlchemy объединит bindparams.
         stmt = stmt.order_by(
             text(
-                "(CASE WHEN title_norm LIKE '%' || lower(immutable_unaccent(:qlike2)) || '%' ESCAPE '\\' "
-                "      THEN 1.0 "
-                "      ELSE similarity(title_norm, lower(immutable_unaccent(:q2))) END) DESC"
-            ).bindparams(q2=q, qlike2=q_like),
-            Game.id.desc(),
+                "GREATEST("
+                "  CASE "
+                "    WHEN title_norm = lower(immutable_unaccent(:q3)) THEN 4.0 "
+                "    WHEN title_norm LIKE lower(immutable_unaccent(:qlike3)) || '%' ESCAPE '\\' THEN 3.0 "
+                "    WHEN title_norm LIKE '%' || lower(immutable_unaccent(:qlike3)) || '%' ESCAPE '\\' THEN 2.0 "
+                "    ELSE similarity(title_norm, lower(immutable_unaccent(:q3))) "
+                "  END, "
+                "  COALESCE(("
+                "    SELECT MAX(CASE "
+                "      WHEN ga.alias_norm = lower(immutable_unaccent(:q3)) THEN 4.0 "
+                "      WHEN ga.alias_norm LIKE lower(immutable_unaccent(:qlike3)) || '%' ESCAPE '\\' THEN 3.0 "
+                "      WHEN ga.alias_norm LIKE '%' || lower(immutable_unaccent(:qlike3)) || '%' ESCAPE '\\' THEN 2.0 "
+                "      ELSE similarity(ga.alias_norm, lower(immutable_unaccent(:q3))) "
+                "    END) "
+                "    FROM game_aliases ga WHERE ga.game_id = games.id"
+                "  ), 0.0)"
+                ") DESC, "
+                "(CASE WHEN kind = 'base' THEN 0 ELSE 1 END) ASC, "
+                "(CASE WHEN parent_game_id IS NULL THEN 0 ELSE 1 END) ASC, "
+                "LENGTH(title) ASC, "
+                "id ASC"
+            ).bindparams(q3=q, qlike3=q_like),
         )
     else:
         stmt = stmt.order_by(Game.id.desc())
