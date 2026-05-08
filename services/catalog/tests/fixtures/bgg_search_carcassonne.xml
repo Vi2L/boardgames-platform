@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<items termsofuse="https://boardgamegeek.com/xmlapi/termsofuse" total="3">
+    <item type="boardgame" id="822">
+        <name type="primary" value="Carcassonne"/>
+        <yearpublished value="2000"/>
+    </item>
+    <item type="boardgame" id="478">
+        <name type="primary" value="Citadels"/>
+        <yearpublished value="2000"/>
+    </item>
+    <item type="boardgame" id="9217">
+        <name type="primary" value="Carcassonne: Hunters and Gatherers"/>
+        <yearpublished value="2002"/>
+    </item>
+    <item type="boardgameaccessory" id="999999">
+        <name type="primary" value="Carcassonne Promo Sleeve Set"/>
+    </item>
+    <item type="boardgame" id="100000">
+        <name type="alternate" value="Only alternate name"/>
+    </item>
+</items>

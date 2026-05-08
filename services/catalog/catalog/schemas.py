@@ -593,6 +593,32 @@ class BatchLinkResult(BaseModel):
     dry_run: bool
 
 
+# ---------- parsers (BGG / Wikidata / ...) ----------
+
+class BggSearchRequest(BaseModel):
+    """Запрос поиска игр в BGG XML API через `POST /parsers/bgg/search`."""
+    query: str = Field(min_length=1, max_length=256)
+    # exact=True проксируется в BGG `/search?exact=1` — фильтр по полному
+    # совпадению primary name. False (default) даёт fuzzy-поведение, нужное
+    # оператору в Live Test.
+    exact: bool = False
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class BggSearchHitOut(BaseModel):
+    """Одна позиция в ответе `POST /parsers/bgg/search`."""
+    bgg_id: int
+    title: str
+    year: int | None = None
+
+
+class BggSearchResponse(BaseModel):
+    query: str
+    exact: bool
+    count: int
+    items: list[BggSearchHitOut]
+
+
 # ---------- match params (унифицированный матчинг) ----------
 
 class MatchWeights(BaseModel):
