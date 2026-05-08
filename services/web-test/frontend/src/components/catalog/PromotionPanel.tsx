@@ -526,7 +526,7 @@ function CandidateRow({
 
 // ─── Log ──────────────────────────────────────────────────────────────────────
 
-function PromotionLogList() {
+export function PromotionLogList() {
   const queryClient = useQueryClient()
   // activeLogId — какая запись журнала открыта в модалке деталей. null = модалка
   // закрыта. Хранится здесь, а не в LogRow, чтобы единственная модалка не
