@@ -49,8 +49,8 @@ services:
 
   catalog:
     build:
-      context: ./services/catalog
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/catalog/Dockerfile
     image: boardgames-catalog:latest
     container_name: bg-catalog
     ports:
@@ -76,8 +76,8 @@ services:
 
   parsers:
     build:
-      context: ./services/parsers
-      dockerfile: Dockerfile
+      context: .
+      dockerfile: services/parsers/Dockerfile
     image: boardgames-parsers:latest
     container_name: bg-parsers
     ports:
