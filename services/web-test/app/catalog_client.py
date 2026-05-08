@@ -60,6 +60,16 @@ class CatalogClient:
         resp = await self._client.get(f"/games/{game_id}")
         return _ok_or_raise(resp)
 
+    async def list_game_offers(self, game_id: int) -> dict[str, Any]:
+        """GET /games/{id}/offers — для drawer-таба «Offers»."""
+        resp = await self._client.get(f"/games/{game_id}/offers")
+        return _ok_or_raise(resp)
+
+    async def list_game_children(self, game_id: int) -> dict[str, Any]:
+        """GET /games/{id}/children — допы/промо/аксессуары базы."""
+        resp = await self._client.get(f"/games/{game_id}/children")
+        return _ok_or_raise(resp)
+
     async def reassess_offer(self, offer_id: int) -> dict[str, Any]:
         """POST /matching/{id}/reassess → пересчитать score для offer."""
         resp = await self._client.post(f"/matching/{offer_id}/reassess")
@@ -197,12 +207,20 @@ class CatalogClient:
 
     async def promotion_log(
         self, *, provider: str | None = None,
+        game_id: int | None = None,
         limit: int = 50, offset: int = 0,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if provider:
             params["provider"] = provider
+        if game_id is not None:
+            params["game_id"] = game_id
         resp = await self._client.get("/promotion/log", params=params)
+        return _ok_or_raise(resp)
+
+    async def promotion_log_details(self, log_id: int) -> dict[str, Any]:
+        """GET /promotion/log/{id}/details — запись + связанные raw/game/alias."""
+        resp = await self._client.get(f"/promotion/log/{log_id}/details")
         return _ok_or_raise(resp)
 
     async def promotion_batch_link(

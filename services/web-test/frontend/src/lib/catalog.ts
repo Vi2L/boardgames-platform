@@ -111,6 +111,7 @@ export type CatalogOffer = {
   title_raw: string
   image_url: string | null
   last_price: number | null
+  last_seen_at: string
   match_status: string
   match_score: number | null
   // Нормализованные поля магазина (миграция 0006)
@@ -132,6 +133,36 @@ export const fetchCatalogHealth = () =>
 
 export const fetchCatalogGame = (id: number) =>
   fetch(`${BASE}/games/${id}`).then(r => json<CatalogGameDetail>(r))
+
+// ── Drawer-табы: offers / children / promotion-log per game ───────────
+
+export type GameOffersResponse = {
+  game_id: number
+  items: CatalogOffer[]
+  total: number
+}
+
+export const fetchGameOffers = (gameId: number) =>
+  fetch(`${BASE}/games/${gameId}/offers`).then(r => json<GameOffersResponse>(r))
+
+export type CatalogGameChild = {
+  id: number
+  slug: string
+  title: string
+  kind: CatalogGameKind
+  year: number | null
+  cover_url: string | null
+  status: string
+}
+
+export type GameChildrenResponse = {
+  parent_game_id: number
+  items: CatalogGameChild[]
+  total: number
+}
+
+export const fetchGameChildren = (gameId: number) =>
+  fetch(`${BASE}/games/${gameId}/children`).then(r => json<GameChildrenResponse>(r))
 
 export const listCatalogGames = (q: string | undefined, limit = 20, offset = 0) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
@@ -445,6 +476,47 @@ export type PromotionLogList = {
   offset: number
 }
 
+// Развёрнутые детали одной записи журнала. Возвращает GET /promotion/log/{id}/details.
+// Связанные сущности подгружены по id из самой записи и могут быть null,
+// если ссылка пустая или объект был удалён (например, alias после revert).
+export type PromotionLogRawSummary = {
+  id: number
+  slug: string
+  title_ru: string | null
+  title_en: string | null
+  publisher: string | null
+  page_url: string
+  preorder_price: number | null  // копейки
+  fetched_at: string
+  status: string
+}
+
+export type PromotionLogGameSummary = {
+  id: number
+  slug: string
+  title: string
+  year: number | null
+  status: string
+}
+
+export type PromotionLogAliasSummary = {
+  id: number
+  game_id: number
+  alias: string
+  alias_norm: string
+  source: string
+  language: string | null
+  verified: boolean
+}
+
+export type PromotionLogDetails = {
+  entry: PromotionLogEntry
+  raw_game: PromotionLogRawSummary | null
+  game: PromotionLogGameSummary | null
+  alias: PromotionLogAliasSummary | null
+  reverted_by_entry_id: number | null
+}
+
 export type PromotionRevertResult = {
   raw_id: number
   revert_log_id: number
@@ -464,6 +536,12 @@ export const fetchPromotionQueue = (
   return fetch(u.toString().replace(window.location.origin, ''))
     .then(r => json<DicefestRawList>(r))
 }
+
+// Получить одну raw-запись dicefest по id. Используется в GameDetailDrawer
+// для side-by-side сравнения canonical поля игры с тем, что лежит в staging.
+export const fetchPromotionDicefestRaw = (rawId: number) =>
+  fetch(`${BASE}/promotion/${PROVIDER}/${rawId}`)
+    .then(r => json<DicefestRawGame>(r))
 
 export const fetchPromotionCandidates = (
   rawId: number, threshold = 0.5, limit = 5,
@@ -500,6 +578,21 @@ export const fetchPromotionLog = (limit = 50, offset = 0) => {
   return fetch(u.toString().replace(window.location.origin, ''))
     .then(r => json<PromotionLogList>(r))
 }
+
+// Журнал промоушенов, отфильтрованный по конкретной игре — для drawer-таба
+// «Аудит». Без provider, чтобы при подключении новых источников все
+// действия по этой game автоматически попали сюда.
+export const fetchPromotionLogForGame = (gameId: number, limit = 20) => {
+  const u = new URL(`${BASE}/promotion/log`, window.location.origin)
+  u.searchParams.set('game_id', String(gameId))
+  u.searchParams.set('limit', String(limit))
+  return fetch(u.toString().replace(window.location.origin, ''))
+    .then(r => json<PromotionLogList>(r))
+}
+
+export const fetchPromotionLogDetails = (logId: number) =>
+  fetch(`${BASE}/promotion/log/${logId}/details`)
+    .then(r => json<PromotionLogDetails>(r))
 
 // ── PR-5: batch auto-link ────────────────────────────────────────────────
 

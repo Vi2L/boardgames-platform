@@ -189,6 +189,27 @@ class GameListOut(BaseModel):
     offset: int
 
 
+class GameChildOut(_ORMBase):
+    """Минимальная карточка для блока «Дети» (допы/промо/аксессуары).
+
+    Используется на /games/{id}/children. Слим — без satellite-данных,
+    чтобы один SELECT покрывал всю выдачу для UI-списка.
+    """
+    id: int
+    slug: str
+    title: str
+    kind: str
+    year: int | None = None
+    cover_url: str | None = None
+    status: str
+
+
+class GameChildrenOut(BaseModel):
+    parent_game_id: int
+    items: list[GameChildOut]
+    total: int
+
+
 class GameMergeRequest(BaseModel):
     """Объединение двух игр: source → target.
 
@@ -289,6 +310,13 @@ class MatchingQueueOut(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+class GameOffersOut(BaseModel):
+    """Список offers, связанных с конкретной игрой (drawer-таб «Offers»)."""
+    game_id: int
+    items: list[OfferOut]
+    total: int
 
 
 class MatchLinkRequest(BaseModel):
@@ -463,6 +491,56 @@ class PromotionRevertResult(BaseModel):
     revert_log_id: int
     original_log_id: int
     status_after_revert: str
+
+
+# Усечённые summary для GET /promotion/log/{log_id}/details — отдаём UI
+# минимум, нужный для модалки деталей. Полные карточки доступны через
+# /games/{id} и /promotion/{provider}/{raw_id}, если оператору нужно глубже.
+class PromotionLogRawGameSummary(_ORMBase):
+    id: int
+    slug: str
+    title_ru: str | None = None
+    title_en: str | None = None
+    publisher: str | None = None
+    page_url: str
+    preorder_price: int | None = None  # копейки
+    fetched_at: datetime
+    status: str
+
+
+class PromotionLogGameSummary(_ORMBase):
+    id: int
+    slug: str
+    title: str
+    year: int | None = None
+    status: str
+
+
+class PromotionLogAliasSummary(_ORMBase):
+    id: int
+    game_id: int
+    alias: str
+    alias_norm: str
+    source: str
+    language: str | None = None
+    verified: bool
+
+
+class PromotionLogDetails(BaseModel):
+    """Развёрнутые детали одной записи журнала промоушена.
+
+    Все вложенные сущности подгружаются по id из самой записи (raw_id /
+    game_id / alias_id) и могут быть None, если ссылка пустая или объект
+    был удалён (например, alias после revert). reverted_by_entry_id —
+    id revert-записи, которая отменила эту операцию (заполняется только
+    если log.reverted_at IS NOT NULL).
+    """
+
+    entry: PromotionLogOut
+    raw_game: PromotionLogRawGameSummary | None = None
+    game: PromotionLogGameSummary | None = None
+    alias: PromotionLogAliasSummary | None = None
+    reverted_by_entry_id: int | None = None
 
 
 # ---------- batch auto-link (PR-5) ----------

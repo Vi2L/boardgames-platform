@@ -167,6 +167,76 @@ async def test_pagination_and_total(client: AsyncClient):
     assert body["offset"] == 1
 
 
+async def test_game_offers_endpoint(client: AsyncClient):
+    """GET /games/{id}/offers — возвращает offers, привязанные к игре,
+    с группировкой по магазину (через сортировку store_slug ASC, last_price)."""
+    g = (await client.post("/games", json={"slug": "g1", "title": "Game 1"})).json()
+    # Два offer'а в разных магазинах с auto-match через ingest.
+    await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "hobbygames",
+            "products": [{"external_id": "h1", "title": "Game 1", "url": "https://h/1",
+                           "price": 10000, "sku": "HB-1", "in_stock": True}],
+        },
+    )
+    await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "lavkaigr",
+            "products": [{"external_id": "l1", "title": "Game 1", "url": "https://l/1",
+                           "price": 9500}],
+        },
+    )
+    r = await client.get(f"/games/{g['id']}/offers")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["game_id"] == g["id"]
+    assert body["total"] == 2
+    # Сортировка по store_slug
+    assert [it["store_slug"] for it in body["items"]] == ["hobbygames", "lavkaigr"]
+    # Нормализованные поля переехали в колонки
+    hg = next(it for it in body["items"] if it["store_slug"] == "hobbygames")
+    assert hg["sku"] == "HB-1"
+    assert hg["in_stock"] is True
+
+
+async def test_game_offers_404(client: AsyncClient):
+    """Запрос offers для несуществующей игры → 404 (важно отличать от
+    «нет offers у существующей»)."""
+    r = await client.get("/games/99999/offers")
+    assert r.status_code == 404
+
+
+async def test_game_children(client: AsyncClient):
+    """GET /games/{id}/children — игры с parent_game_id = текущая.
+    Сортировка по kind (expansion → promo → accessory)."""
+    base = (await client.post("/games", json={"slug": "base", "title": "Base"})).json()
+    # Создаём детей с разными kind через PATCH (POST не принимает parent_game_id?
+    # принимает, см. GameCreate)
+    exp = (await client.post(
+        "/games", json={"slug": "exp", "title": "Expansion", "kind": "expansion",
+                          "parent_game_id": base["id"]},
+    )).json()
+    promo = (await client.post(
+        "/games", json={"slug": "pr", "title": "Promo", "kind": "promo",
+                          "parent_game_id": base["id"]},
+    )).json()
+
+    r = await client.get(f"/games/{base['id']}/children")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["parent_game_id"] == base["id"]
+    assert body["total"] == 2
+    # expansion раньше promo по нашему CASE-ordering
+    assert [c["kind"] for c in body["items"]] == ["expansion", "promo"]
+    assert {c["id"] for c in body["items"]} == {exp["id"], promo["id"]}
+
+    # У ребёнка нет своих детей
+    r = await client.get(f"/games/{exp['id']}/children")
+    assert r.json()["total"] == 0
+
+
 async def test_404_on_missing_game(client: AsyncClient):
     r = await client.get("/games/99999")
     assert r.status_code == 404

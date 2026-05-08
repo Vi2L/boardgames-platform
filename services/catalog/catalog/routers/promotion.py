@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.auth import require_scope
 from catalog.db import get_session
-from catalog.models import DicefestRawGame, ImportPromotionLog
+from catalog.models import DicefestRawGame, Game, GameAlias, ImportPromotionLog
 from catalog.promotion import dicefest as dicefest_promo
 from catalog.schemas import (
     BatchLinkRequest,
@@ -28,8 +28,12 @@ from catalog.schemas import (
     PromotionApplyResult,
     PromotionCandidate,
     PromotionCandidatesOut,
+    PromotionLogAliasSummary,
+    PromotionLogDetails,
+    PromotionLogGameSummary,
     PromotionLogList,
     PromotionLogOut,
+    PromotionLogRawGameSummary,
     PromotionRevertResult,
 )
 
@@ -197,12 +201,85 @@ async def revert_log(
 
 
 @router.get(
+    "/log/{log_id}/details",
+    response_model=PromotionLogDetails,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def get_log_details(
+    log_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> PromotionLogDetails:
+    """Развёрнутые детали одной записи журнала.
+
+    UI показывает в модалке: сама запись + связанные raw-staging /
+    canonical Game / алиас. Если запись reverted — отдаёт id revert-записи,
+    чтобы клиент мог сделать deep-link.
+
+    Объекты, на которые ссылается log, подгружаются раздельными session.get,
+    а не одним JOIN — N+1 здесь несущественен (модалка открывается на одну
+    запись), а код проще читать.
+    """
+    log = await session.get(ImportPromotionLog, log_id)
+    if log is None:
+        raise HTTPException(404, detail=f"log_id={log_id} not found")
+
+    raw_summary: PromotionLogRawGameSummary | None = None
+    # raw_id указывает на provider-specific staging; пока поддерживаем только
+    # dicefest. Когда добавим bga/dicebreaker — расширим switch по log.provider.
+    if log.provider == "dicefest":
+        raw = await session.get(DicefestRawGame, log.raw_id)
+        if raw is not None:
+            raw_summary = PromotionLogRawGameSummary.model_validate(raw)
+
+    game_summary: PromotionLogGameSummary | None = None
+    if log.game_id is not None:
+        game = await session.get(Game, log.game_id)
+        if game is not None:
+            game_summary = PromotionLogGameSummary.model_validate(game)
+
+    alias_summary: PromotionLogAliasSummary | None = None
+    if log.alias_id is not None:
+        alias = await session.get(GameAlias, log.alias_id)
+        if alias is not None:
+            alias_summary = PromotionLogAliasSummary.model_validate(alias)
+
+    # Если эту запись отменили — найти соответствующую revert-запись.
+    # revert() пишет отдельную строку с action='revert', тем же raw_id,
+    # performed_at >= log.reverted_at (см. promotion/dicefest.py:revert).
+    reverted_by_entry_id: int | None = None
+    if log.reverted_at is not None:
+        revert_stmt = (
+            select(ImportPromotionLog.id)
+            .where(
+                ImportPromotionLog.action == "revert",
+                ImportPromotionLog.raw_id == log.raw_id,
+                ImportPromotionLog.provider == log.provider,
+                ImportPromotionLog.performed_at >= log.reverted_at,
+            )
+            .order_by(ImportPromotionLog.performed_at.asc())
+            .limit(1)
+        )
+        reverted_by_entry_id = (await session.execute(revert_stmt)).scalar_one_or_none()
+
+    return PromotionLogDetails(
+        entry=PromotionLogOut.model_validate(log),
+        raw_game=raw_summary,
+        game=game_summary,
+        alias=alias_summary,
+        reverted_by_entry_id=reverted_by_entry_id,
+    )
+
+
+@router.get(
     "/log",
     response_model=PromotionLogList,
     dependencies=[Depends(require_scope("read"))],
 )
 async def list_log(
     provider: str | None = Query(None),
+    game_id: int | None = Query(
+        None, description="фильтр по game_id (для audit-таба drawer)",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -210,6 +287,8 @@ async def list_log(
     stmt = select(ImportPromotionLog)
     if provider:
         stmt = stmt.where(ImportPromotionLog.provider == provider)
+    if game_id is not None:
+        stmt = stmt.where(ImportPromotionLog.game_id == game_id)
     total = (
         await session.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()

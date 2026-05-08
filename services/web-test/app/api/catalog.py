@@ -46,6 +46,28 @@ async def get_game(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.get("/games/{game_id}/offers")
+async def list_game_offers(
+    game_id: int, client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Все offers, связанные с игрой — для drawer-таба «Offers»."""
+    try:
+        return await client.list_game_offers(game_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/games/{game_id}/children")
+async def list_game_children(
+    game_id: int, client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Игры с parent_game_id=game_id (допы/промо/аксессуары базы)."""
+    try:
+        return await client.list_game_children(game_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.get("/matching/stats")
 async def matching_stats(
     client: CatalogClient = Depends(get_catalog_client),
@@ -308,14 +330,27 @@ async def promotion_revert(
 @router.get("/promotion/log")
 async def promotion_log(
     provider: str | None = Query(None),
+    game_id: int | None = Query(
+        None, description="фильтр по game_id (для audit-таба drawer)",
+    ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     client: CatalogClient = Depends(get_catalog_client),
 ) -> dict:
     try:
         return await client.promotion_log(
-            provider=provider, limit=limit, offset=offset,
+            provider=provider, game_id=game_id, limit=limit, offset=offset,
         )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/promotion/log/{log_id:int}/details")
+async def promotion_log_details(
+    log_id: int, client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.promotion_log_details(log_id)
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 

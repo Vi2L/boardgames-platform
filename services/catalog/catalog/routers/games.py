@@ -22,14 +22,18 @@ from catalog.schemas import (
     AliasPatch,
     GameAliasOut,
     GameBggOut,
+    GameChildOut,
+    GameChildrenOut,
     GameCreate,
     GameDetailOut,
     GameListOut,
     GameMergeRequest,
     GameMergeResult,
+    GameOffersOut,
     GameOut,
     GamePatch,
     GameWikidataOut,
+    OfferOut,
 )
 from sqlalchemy import update
 
@@ -145,6 +149,79 @@ async def get_game(
         aliases=[GameAliasOut.model_validate(a) for a in game.aliases],
         bgg=GameBggOut.model_validate(game.bgg) if game.bgg else None,
         wikidata=GameWikidataOut.model_validate(game.wikidata) if game.wikidata else None,
+    )
+
+
+@router.get(
+    "/{game_id}/offers",
+    response_model=GameOffersOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def list_game_offers(
+    game_id: int, session: AsyncSession = Depends(get_session),
+) -> GameOffersOut:
+    """Все offers с этой game_id — для drawer-таба «Offers».
+
+    Сортировка: store_slug ASC, last_price ASC NULLS LAST. Без пагинации:
+    у одной игры не бывает >>20 предложений, лимит лишний.
+    """
+    # Проверяем, что игра существует — иначе 404, не пустой список
+    # (помогает отличить «нет offers» от «нет такой игры»).
+    g = await session.get(Game, game_id)
+    if g is None:
+        raise HTTPException(status_code=404, detail="game not found")
+    stmt = (
+        select(Offer)
+        .where(Offer.game_id == game_id)
+        .order_by(
+            Offer.store_slug.asc(),
+            Offer.last_price.asc().nulls_last(),
+        )
+    )
+    items = (await session.execute(stmt)).scalars().all()
+    return GameOffersOut(
+        game_id=game_id,
+        items=[OfferOut.model_validate(o) for o in items],
+        total=len(items),
+    )
+
+
+@router.get(
+    "/{game_id}/children",
+    response_model=GameChildrenOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def list_game_children(
+    game_id: int, session: AsyncSession = Depends(get_session),
+) -> GameChildrenOut:
+    """Игры, у которых parent_game_id = текущая (миграция 0006).
+
+    Сортировка: kind (по приоритету: expansion → promo → accessory →
+    остальное), потом title. CASE-выражение даёт стабильный порядок,
+    не зависящий от alphabet'а строк kind.
+    """
+    g = await session.get(Game, game_id)
+    if g is None:
+        raise HTTPException(status_code=404, detail="game not found")
+    stmt = (
+        select(Game)
+        .where(Game.parent_game_id == game_id)
+        .order_by(
+            text(
+                "CASE kind "
+                "WHEN 'expansion' THEN 1 "
+                "WHEN 'promo' THEN 2 "
+                "WHEN 'accessory' THEN 3 "
+                "ELSE 4 END"
+            ),
+            Game.title.asc(),
+        )
+    )
+    items = (await session.execute(stmt)).scalars().all()
+    return GameChildrenOut(
+        parent_game_id=game_id,
+        items=[GameChildOut.model_validate(c) for c in items],
+        total=len(items),
     )
 
 
