@@ -240,6 +240,34 @@ class BggImportRequest(BaseModel):
     ids: list[int] | None = None
 
 
+class BggBatchImportRequest(BaseModel):
+    """POST /import/bgg/batch — массовое XML-обогащение топ-N или всех ranked игр.
+
+    Ровно один из `rank_le` / `all_ranked` обязателен (валидация — model_validator
+    в роутере, чтобы 422 был с понятным сообщением).
+    """
+
+    rank_le: int | None = Field(
+        default=None, ge=1,
+        description="обработать только игры с BGG rank ≤ N (топ-N).",
+    )
+    all_ranked: bool = Field(
+        default=False,
+        description="обработать все ranked-игры (~25 минут при rate-limit 1/сек).",
+    )
+    batch_size: int = Field(default=20, ge=1, le=20)
+    skip_recent_days: int = Field(
+        default=30, ge=0,
+        description="не перезапрашивать игры с fetched_at < N дней (0 — форсировать).",
+    )
+    limit: int | None = Field(
+        default=None, ge=1,
+        description="общий потолок (для пробного прогона).",
+    )
+    dry_run: bool = False
+    rate_limit_sec: float = Field(default=1.0, ge=0.0, le=10.0)
+
+
 class TeseraImportRequest(BaseModel):
     """Tesera принимает alias (slug) или числовой id. Можно батчем."""
     alias: str | None = None
