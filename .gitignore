@@ -36,4 +36,7 @@ services/*/data/
 
 # Локальные настройки Claude Code конкретного разработчика
 .claude/settings.local.json
+# Lock-файл scheduled tasks — runtime-состояние, не код. Постоянно
+# появляется при работе агента, шумит в `git status` обоих сессий.
+.claude/scheduled_tasks.lock
 .scratch/
