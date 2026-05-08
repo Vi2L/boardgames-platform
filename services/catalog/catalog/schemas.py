@@ -276,27 +276,9 @@ class TeseraImportRequest(BaseModel):
 
 
 # ---------- ingest от parsers ----------
-
-class IngestOfferIn(BaseModel):
-    external_id: str = Field(min_length=1)
-    title: str = Field(min_length=1)
-    url: str
-    price: int | None = None  # копейки
-    image_url: str | None = None
-    # Нормализованные поля магазина (миграция 0006). Все опциональны:
-    # старый клиент может не отправлять — поведение остаётся прежним
-    # (значения берутся из extra только если parser их положит).
-    sku: str | None = None
-    in_stock: bool | None = None
-    original_price: int | None = None  # копейки до скидки
-    is_preorder: bool | None = None
-    extra: dict[str, Any] | None = None
-
-
-class IngestRequest(BaseModel):
-    store_slug: str = Field(min_length=1, max_length=64)
-    fetched_at: datetime | None = None
-    products: list[IngestOfferIn]
+# Request-side (IngestRequest, IngestOfferIn) живёт в общем пакете
+# bg_shared.ingest — он же используется publisher'ом в services/parsers.
+# Менять контракт — там, не здесь. См. docs/parallel-agents.md §10.2.
 
 
 class IngestResultItem(BaseModel):

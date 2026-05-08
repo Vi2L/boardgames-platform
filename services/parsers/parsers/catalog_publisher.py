@@ -26,6 +26,7 @@ import logging
 from datetime import datetime, timezone
 
 import httpx
+from bg_shared.ingest import IngestOfferIn, IngestRequest
 
 from .models import ParsedProduct
 
@@ -78,21 +79,26 @@ class CatalogPublisher:
             return
         assert self._client is not None and self.url is not None
 
-        payload = {
-            "store_slug": store_slug,
-            "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "products": [self._product_payload(p) for p in products],
-        }
+        # IngestRequest валидирует payload до отправки: если контракт изменился
+        # (новое required-поле, неверный тип) — упадём на producer-side с понятной
+        # ошибкой, а не словим 422 от catalog'а уже после сетевого вызова.
+        request = IngestRequest(
+            store_slug=store_slug,
+            fetched_at=datetime.now(timezone.utc),
+            products=[self._build_offer(p) for p in products],
+        )
+        # mode="json" — datetime сериализуется в ISO-строку, dict готов к httpx.
+        payload = request.model_dump(mode="json")
         await self._send(payload, len(products), store_slug)
 
     @staticmethod
-    def _product_payload(p: ParsedProduct) -> dict:
-        """Формирует один product-элемент для /ingest/offers.
+    def _build_offer(p: ParsedProduct) -> IngestOfferIn:
+        """Конвертирует ParsedProduct в pydantic-модель IngestOfferIn.
 
         Поднимаем нормализованные поля (sku/in_stock/original_price/is_preorder)
-        из ParsedProduct.raw на верхний уровень payload, чтобы catalog мог
-        писать их в типизированные колонки `offers.*`. Каждый магазин кладёт
-        в `raw` свой набор ключей — приводим к единому виду:
+        из ParsedProduct.raw на верхний уровень, чтобы catalog мог писать их
+        в типизированные колонки `offers.*`. Каждый магазин кладёт в `raw`
+        свой набор ключей — приводим к единому виду:
 
         - sku           → HobbyGames кладёт `raw["sku"]` (из JSON-LD Product).
         - in_stock      → HobbyGames `raw["availability"]`, Crowd Games `raw["in_stock"]`.
@@ -119,18 +125,18 @@ class CatalogPublisher:
         if isinstance(v, int) and v > 0:
             original_price = v
 
-        return {
-            "external_id": p.external_id,
-            "title": p.title,
-            "url": p.url,
-            "price": p.price,  # копейки — формат каталога такой же
-            "image_url": p.image_url_hd or p.image_url,
-            "sku": sku,
-            "in_stock": in_stock,
-            "original_price": original_price,
-            "is_preorder": None,
-            "extra": raw,
-        }
+        return IngestOfferIn(
+            external_id=p.external_id,
+            title=p.title,
+            url=p.url,
+            price=p.price,  # копейки — формат каталога такой же
+            image_url=p.image_url_hd or p.image_url,
+            sku=sku,
+            in_stock=in_stock,
+            original_price=original_price,
+            is_preorder=None,
+            extra=raw,
+        )
 
     async def _send(
         self, payload: dict, items_count: int, store_slug: str,

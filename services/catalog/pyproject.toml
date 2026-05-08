@@ -15,6 +15,9 @@ dependencies = [
     # Парсинг HTML карточек dicefest.ru. html.parser stdlib backend (без lxml)
     # — достаточно быстрый для ~1K страниц при rate-limit 1 req/sec.
     "beautifulsoup4>=4.12",
+    # Общие контракты с parsers — IngestRequest/IngestOfferIn.
+    # Workspace-source берёт из packages/shared-py (см. корневой pyproject.toml).
+    "bg-shared",
 ]
 
 [project.optional-dependencies]

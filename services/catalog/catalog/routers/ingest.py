@@ -22,6 +22,8 @@ from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from bg_shared.ingest import IngestRequest
+
 from catalog.auth import require_scope
 from catalog.db import get_session
 from catalog.matching.matcher import (
@@ -31,7 +33,6 @@ from catalog.matching.matcher import (
 )
 from catalog.models import GameAlias, Offer, OfferPrice
 from catalog.schemas import (
-    IngestRequest,
     IngestResult,
     IngestResultItem,
 )

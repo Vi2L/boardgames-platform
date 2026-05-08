@@ -20,12 +20,16 @@ members = [
     "services/catalog",
     "services/parsers",
     "services/web-test",
+    "packages/shared-py",
 ]
 
-# Когда любой member видит зависимость "parsers", uv берёт её из workspace,
-# а не с PyPI. Это и есть замена прежнего `parsers @ file:///...` в web-test.
+# Когда любой member видит зависимость "parsers" / "bg-shared", uv берёт
+# её из workspace, а не с PyPI. Это и есть замена прежнего
+# `parsers @ file:///...` в web-test и единственного источника правды
+# для общих pydantic-схем.
 [tool.uv.sources]
 parsers = { workspace = true }
+bg-shared = { workspace = true }
 
 # === Общие dev-зависимости (PEP 735 dependency-groups) ===
 # Ставятся для всего workspace командой `uv sync --group dev` (или просто

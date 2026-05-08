@@ -8,6 +8,9 @@ dependencies = [
     "uvicorn[standard]>=0.27",
     "httpx>=0.27",
     "aiosqlite>=0.20",
+    # Общие контракты с catalog — IngestRequest/IngestOfferIn.
+    # Workspace-source берёт из packages/shared-py (см. корневой pyproject.toml).
+    "bg-shared",
 ]
 
 [project.optional-dependencies]
