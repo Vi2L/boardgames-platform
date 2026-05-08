@@ -201,6 +201,33 @@ class ParsersClient:
         resp.raise_for_status()
         return resp.json()
 
+    async def get_timeline(self, bucket: str = "hour", hours: int = 24) -> list[dict]:
+        resp = await self._client.get(
+            "/api/stats/timeline", params={"bucket": bucket, "hours": hours},
+        )
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_latency_histogram(self, hours: int = 24) -> list[dict]:
+        resp = await self._client.get("/api/stats/latency-histogram", params={"hours": hours})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_store_distribution(self, hours: int = 24) -> list[dict]:
+        resp = await self._client.get("/api/stats/store-distribution", params={"hours": hours})
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_parser_breakdown(self) -> list[dict]:
+        resp = await self._client.get("/api/stats/parser-breakdown")
+        resp.raise_for_status()
+        return resp.json()
+
+    async def get_raw_keys(self, top_n: int = 10) -> list[dict]:
+        resp = await self._client.get("/api/stats/raw-keys", params={"top_n": top_n})
+        resp.raise_for_status()
+        return resp.json()
+
     async def get_price_distribution(self, store: str | None = None) -> dict:
         params: dict[str, Any] = {}
         if store:

@@ -14,13 +14,10 @@ PRS (parsers), INFRA (общее).
 
 ## Сейчас в работе
 
-- [WT-F4.1-extended] **parsers DB explorer** — реализованы 3 виджета
-  из 8 (Inventory, ProductsBrowser, Analytics). Осталось 5: timeline,
-  latency-histogram, store-distribution, parser-breakdown, raw-keys.
-  Все endpoints parsers уже есть; для каждого нужны три слоя:
-  `parsers_client.py` → `parsers_db.py` proxy → `lib/api.ts` + React-компонент + вкладка `DatabasePage`.
-  После завершения — отключить vanilla `/dashboard` в parsers.
-  Подробности: services/web-test/PLAN.md.
+- [WT-F4.1-extended] **parsers DB explorer** — ✅ **ЗАВЕРШЕНО** (8/8 виджетов).
+  Реализованы: Inventory, ProductsBrowser, Analytics, Timeline, LatencyHistogram,
+  StoreDistribution, ParserBreakdown, RawKeys — новая вкладка «БД парсеров: графики».
+  Vanilla `/dashboard` в parsers можно отключить.
 
 ## Ближайшее (1–2 недели)
 
@@ -43,6 +40,10 @@ PRS (parsers), INFRA (общее).
   странице каталога (catalog уже отдаёт через `Game.offers`).
 - [WT-F2.6] **Bulk-import wizard top-N** — UI вокруг
   `import_bgg_ranks.py`: импорт топ-N по rank.
+- [WT-F2.7] **RU-first автоподсказки** — компонент `GameSuggestRow`
+  с RU-названием как первичным, EN как бледным суффиксом; при выборе
+  подставляется RU; `getDisplayName(game)` в `lib/catalog.ts`
+  как shared-хелпер.
 
 ### Cross-service / инфра
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,

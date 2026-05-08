@@ -213,6 +213,68 @@ export const deleteParsersObservation = async (id: number) => {
   if (!r.ok && r.status !== 204) throw new Error(`${r.status} ${await r.text()}`)
 }
 
+// ── Charts (F4.1-extended: timeline, histogram, distribution, breakdown, raw-keys) ──
+
+export type ParsersTimelinePoint = {
+  ts: string
+  total: number
+  cache: number
+  network: number
+  partial: number
+  errors: number
+  avg_ms: number | null
+  [k: string]: unknown
+}
+
+export type ParsersLatencyBin = {
+  bin: string
+  count: number
+  [k: string]: unknown
+}
+
+export type ParsersStoreDistribution = {
+  store_slug: string
+  calls: number
+  successes: number
+  success_rate: number
+  avg_results: number | null
+  avg_ms: number | null
+  share_pct: number
+  [k: string]: unknown
+}
+
+export type ParsersBreakdownEntry = {
+  store_slug: string
+  calls: number
+  successes: number
+  avg_search_ms: number | null
+  avg_enrich_ms: number | null
+  avg_total_ms: number | null
+  avg_http_requests: number | null
+  [k: string]: unknown
+}
+
+export type ParsersRawKeyEntry = {
+  store_slug: string
+  keys: Array<{ key: string; count: number }>
+  [k: string]: unknown
+}
+
+export const fetchParsersTimeline = (bucket: 'hour' | 'day' = 'hour', hours = 24) =>
+  fetch(`${BASE}/parsers-db/timeline?bucket=${bucket}&hours=${hours}`).then(r => json<ParsersTimelinePoint[]>(r))
+
+export const fetchParsersLatencyHistogram = (hours = 24) =>
+  fetch(`${BASE}/parsers-db/latency-histogram?hours=${hours}`).then(r => json<ParsersLatencyBin[]>(r))
+
+export const fetchParsersStoreDistribution = (hours = 24) =>
+  fetch(`${BASE}/parsers-db/store-distribution?hours=${hours}`).then(r => json<ParsersStoreDistribution[]>(r))
+
+export const fetchParsersParserBreakdown = () =>
+  fetch(`${BASE}/parsers-db/parser-breakdown`).then(r => json<ParsersBreakdownEntry[]>(r))
+
+export const fetchParsersRawKeys = (topN = 10) =>
+  fetch(`${BASE}/parsers-db/raw-keys?top_n=${topN}`).then(r => json<ParsersRawKeyEntry[]>(r))
+
 // ── DLQ (F5.1) ───────────────────────────────────────────────────────
 
 export type DlqItem = {

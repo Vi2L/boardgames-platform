@@ -103,6 +103,61 @@ async def price_distribution(
         raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
 
 
+@router.get("/timeline")
+async def timeline(
+    bucket: str = Query("hour", pattern="^(hour|day)$"),
+    hours: int = Query(24, ge=1, le=24 * 30),
+    client: ParsersClient = Depends(get_parsers_client),
+) -> list[dict]:
+    try:
+        return await client.get_timeline(bucket=bucket, hours=hours)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
+@router.get("/latency-histogram")
+async def latency_histogram(
+    hours: int = Query(24, ge=1, le=24 * 30),
+    client: ParsersClient = Depends(get_parsers_client),
+) -> list[dict]:
+    try:
+        return await client.get_latency_histogram(hours=hours)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
+@router.get("/store-distribution")
+async def store_distribution(
+    hours: int = Query(24, ge=1, le=24 * 30),
+    client: ParsersClient = Depends(get_parsers_client),
+) -> list[dict]:
+    try:
+        return await client.get_store_distribution(hours=hours)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
+@router.get("/parser-breakdown")
+async def parser_breakdown(
+    client: ParsersClient = Depends(get_parsers_client),
+) -> list[dict]:
+    try:
+        return await client.get_parser_breakdown()
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
+@router.get("/raw-keys")
+async def raw_keys(
+    top_n: int = Query(10, ge=1, le=50),
+    client: ParsersClient = Depends(get_parsers_client),
+) -> list[dict]:
+    try:
+        return await client.get_raw_keys(top_n=top_n)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"parsers unreachable: {e}") from e
+
+
 @router.delete("/observations/{observation_id}", status_code=204)
 async def delete_observation(
     observation_id: int, client: ParsersClient = Depends(get_parsers_client),

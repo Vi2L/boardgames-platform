@@ -15,11 +15,12 @@ import { PriceHistogram } from '../components/database/PriceHistogram'
 import { InventoryTab } from '../components/database/parsers/InventoryTab'
 import { AnalyticsTab } from '../components/database/parsers/AnalyticsTab'
 import { ProductsBrowserTab } from '../components/database/parsers/ProductsBrowserTab'
+import { ChartsTab } from '../components/database/parsers/ChartsTab'
 import { SkeletonList } from '../components/shared/Skeleton'
 import type { ProductOut, StoreHealthEntry } from '../types/api'
 
 type Tab = 'products' | 'stores' | 'searches'
-        | 'parsers-inventory' | 'parsers-products' | 'parsers-analytics'
+        | 'parsers-inventory' | 'parsers-products' | 'parsers-analytics' | 'parsers-charts'
 
 const SORT_OPTIONS = [
   { value: 'fetched_desc', label: 'Свежие' },
@@ -62,6 +63,9 @@ export function DatabasePage() {
           <TabButton active={tab === 'parsers-analytics'} onClick={() => setTab('parsers-analytics')}>
             БД парсеров: аналитика
           </TabButton>
+          <TabButton active={tab === 'parsers-charts'} onClick={() => setTab('parsers-charts')}>
+            БД парсеров: графики
+          </TabButton>
         </div>
 
         <div className="p-4">
@@ -71,6 +75,7 @@ export function DatabasePage() {
           {tab === 'parsers-inventory' && <InventoryTab />}
           {tab === 'parsers-products' && <ProductsBrowserTab />}
           {tab === 'parsers-analytics' && <AnalyticsTab />}
+          {tab === 'parsers-charts' && <ChartsTab />}
         </div>
       </div>
     </div>

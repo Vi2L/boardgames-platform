@@ -24,14 +24,12 @@ Web-test превратился из тонкой обёртки над `/api/se
 
 ### Парсеры
 
-- **F4.1-extended (parsers DB explorer)** — реализованы 3 виджета из 8
-  (Inventory, ProductsBrowser, Analytics с latency/top-queries/empty).
-  Осталось 5: timeline, latency-histogram, store-distribution,
-  parser-breakdown, raw-keys. Все endpoints parsers уже есть.
-  Для каждого виджета три слоя: метод в `parsers_client.py` →
-  proxy-endpoint в `app/api/parsers_db.py` →
-  fetch-функция в `lib/api.ts` + React-компонент + вкладка в `DatabasePage.tsx`.
-  После завершения отключить `/dashboard` в parsers (vanilla JS) — будет заменён полностью.
+- **F4.1-extended (parsers DB explorer)** — ✅ **ЗАВЕРШЕНО** (8/8 виджетов).
+  Все реализованы: Inventory, ProductsBrowser, Analytics, + 5 новых в вкладке
+  «БД парсеров: графики» (`ChartsTab.tsx`): Timeline (stacked bar по cache/network/partial),
+  LatencyHistogram (бины), StoreDistribution (доли + карточки), ParserBreakdown
+  (search vs enrich, таблица), RawKeys (extra-ключи per-store).
+  Можно отключить vanilla `/dashboard` в parsers — заменён полностью.
 - **Selectors playground** (исходно P1.2 в плане-источнике) — текущий
   URL probe (F1.4) даёт raw HTML, но не пробует CSS-селекторы.
   Расширение: textarea с селектором + кнопка «применить» к raw HTML →
