@@ -225,43 +225,19 @@ function OverviewTab({ game }: { game: CatalogGameDetail }) {
         </div>
       </div>
 
-      <Section title="Параметры партии">
-        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
-          <InlineEditField game={game} field="players_min" type="number" label="игроков от" />
-          <InlineEditField game={game} field="players_max" type="number" label="игроков до" />
-          <InlineEditField game={game} field="age_min" type="number" label="возраст от" />
-          <InlineEditField game={game} field="playtime_min" type="number" label="время мин" />
-          <InlineEditField game={game} field="playtime_max" type="number" label="время макс" />
-        </div>
+      {/* Порядок секций. Алиасы — единственная открытая по умолчанию,
+          остальное оператор раскрывает по необходимости. Сначала идёт всё,
+          что напрямую связано с матчингом и идентификацией игры (алиасы,
+          внешние ID, satellite-данные, дети), затем — описательные блоки
+          (параметры партии, авторы, описание) и локализация РФ в самом
+          конце. Так оператору-каталожнику не нужно скроллить для попадания
+          в самые частые правки (алиасы и внешние ID). */}
+
+      <Section title={`Алиасы (${game.aliases.length})`} defaultOpen={true}>
+        <AliasesContent game={game} />
       </Section>
 
-      <Section title="Авторы">
-        <div className="space-y-1.5 text-xs">
-          <Field label="дизайнеры" value={fmtArr(game.designers)} />
-          <Field label="издатели" value={fmtArr(game.publishers)} />
-        </div>
-      </Section>
-
-      <Section title="Описание">
-        {game.description ? (
-          <div className="text-sm text-gray-300 leading-relaxed bg-gray-950 p-3 rounded max-h-48 overflow-y-auto">
-            {game.description}
-          </div>
-        ) : (
-          <Empty />
-        )}
-      </Section>
-
-      <Section title="Локализация РФ">
-        <div className="space-y-1.5 text-xs">
-          <InlineEditField game={game} field="ru_publisher" type="text" label="издатель РФ" />
-          <InlineEditField game={game} field="ru_release_year" type="number" label="год РФ" />
-          <InlineEditField game={game} field="is_localized_ru" type="bool" label="is_localized_ru" />
-          <InlineEditField game={game} field="preorder_price" type="kopecks" label="предзаказ" hint="копейки (1 ₽ = 100)" />
-        </div>
-      </Section>
-
-      <Section title="Внешние ID и ссылки">
+      <Section title="Внешние ID и ссылки" defaultOpen={false}>
         <div className="space-y-1.5 text-xs">
           <Field label="bgg_id" value={game.bgg_id != null ? String(game.bgg_id) : ''} mono
                  link={game.bgg_id ? `https://boardgamegeek.com/boardgame/${game.bgg_id}` : undefined} />
@@ -297,13 +273,45 @@ function OverviewTab({ game }: { game: CatalogGameDetail }) {
         {game.wikidata ? <WikidataCard wikidata={game.wikidata} /> : <Empty msg="Запустите python -m catalog.scripts.import_wikidata." />}
       </Section>
 
-      <Section title={`Алиасы (${game.aliases.length})`} defaultOpen={false}>
-        <AliasesContent game={game} />
-      </Section>
-
       {/* Lazy — useQuery запускается только когда секция открыта (mount при render-prop call). */}
       <Section title="Дети (допы / промо / аксессуары)" defaultOpen={false}>
         {() => <ChildrenContent gameId={game.id} />}
+      </Section>
+
+      <Section title="Параметры партии" defaultOpen={false}>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+          <InlineEditField game={game} field="players_min" type="number" label="игроков от" />
+          <InlineEditField game={game} field="players_max" type="number" label="игроков до" />
+          <InlineEditField game={game} field="age_min" type="number" label="возраст от" />
+          <InlineEditField game={game} field="playtime_min" type="number" label="время мин" />
+          <InlineEditField game={game} field="playtime_max" type="number" label="время макс" />
+        </div>
+      </Section>
+
+      <Section title="Авторы" defaultOpen={false}>
+        <div className="space-y-1.5 text-xs">
+          <Field label="дизайнеры" value={fmtArr(game.designers)} />
+          <Field label="издатели" value={fmtArr(game.publishers)} />
+        </div>
+      </Section>
+
+      <Section title="Описание" defaultOpen={false}>
+        {game.description ? (
+          <div className="text-sm text-gray-300 leading-relaxed bg-gray-950 p-3 rounded max-h-48 overflow-y-auto">
+            {game.description}
+          </div>
+        ) : (
+          <Empty />
+        )}
+      </Section>
+
+      <Section title="Локализация РФ" defaultOpen={false}>
+        <div className="space-y-1.5 text-xs">
+          <InlineEditField game={game} field="ru_publisher" type="text" label="издатель РФ" />
+          <InlineEditField game={game} field="ru_release_year" type="number" label="год РФ" />
+          <InlineEditField game={game} field="is_localized_ru" type="bool" label="is_localized_ru" />
+          <InlineEditField game={game} field="preorder_price" type="kopecks" label="предзаказ" hint="копейки (1 ₽ = 100)" />
+        </div>
       </Section>
 
       <div className="text-[10px] text-gray-500 font-mono pt-2 border-t border-gray-800">
