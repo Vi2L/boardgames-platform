@@ -87,12 +87,26 @@ catalog/
 адаптирован из старого проекта `board_game_db` (`GameWikidata`, `TsGame`, `DfGame` etc.).
 
 ```
-games  (canonical, slim)
+games  (canonical, slim + денормализованные внешние ID и локализация РФ)
   ├── game_aliases   (cross-source aliases для матчинга, +language, +verified)
   ├── game_bgg       (1:1) — BGG: rank, scores, designers, mechanics, raw
   ├── game_wikidata  (1:1) — labels/aliases/descriptions per language, entity_id
-  └── (FUTURE) game_tesera, game_dicefest
+  ├── game_dicefest  (N:1) — публикатор РФ, preorder_price, external_links
+  └── (FUTURE) game_tesera
 ```
+
+**Денормализованные поля в `games` (миграция 0006):**
+- `kind` — тип: `base | expansion | promo | accessory`. Default `'base'`.
+  Для `is_expansion=true` из BGG автоматом → `'expansion'` (backfill).
+- `parent_game_id` — self-FK на базу для допов/промо/аксессуаров. Заполняется
+  вручную (без автоматизации).
+- `bgg_id`, `tesera_id`, `dicefest_id`, `nastolio_id` — явные external IDs,
+  partial-UNIQUE WHERE NOT NULL. `dicefest_id` указывает на `dicefest_raw_games.id`
+  (без жёсткого FK — staging может быть очищен). `nastolio_id` — slug или URL.
+- `ru_publisher`, `ru_release_year`, `is_localized_ru`, `preorder_price` —
+  локализационные данные РФ. Источник истины — `game_dicefest` (или ручная
+  правка); при промоушене копируем в `games`, чтобы UI не делал JOIN.
+  При `revert` обнуляем только `dicefest_id` — остальное оператор правит сам.
 
 Источники в `game_aliases.source`:
 | value | language | verified | смысл |

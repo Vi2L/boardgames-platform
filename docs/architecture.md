@@ -16,7 +16,7 @@ FastAPI на Python 3.12, async-стек.
 │                   services/catalog                      │
 │   FastAPI :8002 + Postgres                              │
 │   - games (canonical) + game_aliases + offers           │
-│   - satellite tables: game_bgg, game_wikidata           │
+│   - satellite: game_bgg, game_wikidata, game_dicefest   │
 │   - matching engine (pg_trgm)                           │
 └────▲──────────────────────────────────────────────▲─────┘
      │ POST /ingest/offers                          │ read API

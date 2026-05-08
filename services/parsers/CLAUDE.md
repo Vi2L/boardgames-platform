@@ -91,6 +91,13 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
 - **Контракт webhook'а** — стабильный, **single source of truth**:
   [`services/catalog/CLAUDE.md`](../catalog/CLAUDE.md), секция
   «Контракты с соседями».
+- **Нормализованные поля магазина** (миграция catalog 0006): publisher
+  поднимает из `ParsedProduct.raw` в первоклассные поля payload —
+  `sku`, `in_stock`, `original_price`, `is_preorder` — чтобы catalog
+  писал их в индексируемые колонки `offers`, а не только в `raw_extra`.
+  HobbyGames кладёт `sku`/`availability`/`original_price` в raw,
+  Crowd Games — `in_stock`. Старые клиенты без этих полей продолжают
+  работать (catalog умеет извлекать из `extra` как fallback).
 - **При изменении формата** в `catalog_publisher.py` — синхронно править
   `services/catalog/catalog/routers/ingest.py` и общую схему в
   `services/catalog/catalog/schemas.py:IngestRequest`.

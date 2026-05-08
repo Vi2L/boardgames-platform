@@ -20,8 +20,14 @@
 ## Возможности
 
 - **Satellite-схема для источников**: `games` (canonical) + `game_bgg`,
-  `game_wikidata` (1:1 через `game_id`), каждая с `fetched_at` для TTL.
+  `game_wikidata` (1:1) + `game_dicefest` (N:1 через `game_id`),
+  каждая с `fetched_at` для TTL.
   Reference design — `~/Projects/board_game_db`.
+- **Денормализованные поля в `games`** (миграция 0006): `kind`
+  (base/expansion/promo/accessory), `parent_game_id` (self-FK для допов),
+  `ru_publisher` / `ru_release_year` / `is_localized_ru` / `preorder_price`
+  для локализации РФ, явные external IDs `bgg_id` / `tesera_id` /
+  `dicefest_id` / `nastolio_id` (partial-UNIQUE WHERE NOT NULL).
 - BGG XML API + Tesera JSON импортёры (`POST /import/{bgg,tesera}`,
   идемпотентный upsert по `bgg_id`/`tesera_id`).
 - **CSV-bulk-импорт** boardgames_ranks: 176K за ~50 секунд через
