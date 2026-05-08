@@ -15,8 +15,10 @@ PRS (parsers), INFRA (общее).
 ## Сейчас в работе
 
 - [WT-F4.1-extended] **parsers DB explorer** — реализованы 3 виджета
-  из 9 (Inventory, ProductsBrowser, Analytics). Осталось: timeline,
+  из 8 (Inventory, ProductsBrowser, Analytics). Осталось 5: timeline,
   latency-histogram, store-distribution, parser-breakdown, raw-keys.
+  Все endpoints parsers уже есть; для каждого нужны три слоя:
+  `parsers_client.py` → `parsers_db.py` proxy → `lib/api.ts` + React-компонент + вкладка `DatabasePage`.
   После завершения — отключить vanilla `/dashboard` в parsers.
   Подробности: services/web-test/PLAN.md.
 
