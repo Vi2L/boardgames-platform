@@ -29,7 +29,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from sqlalchemy import bindparam, select, text, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catalog.db import get_engine
@@ -136,6 +136,9 @@ async def _load_existing_hashes(
         return {}
 
     if table == "dicefest_raw_games":
+        # asyncpg сам преобразует Python list → text[]; explicit CAST в SQL
+        # помогает type-inference у driver'а. SQLAlchemy `expanding=True` тут
+        # не подходит — оно генерирует `IN (...)`, а нам нужен ANY(array).
         sql = text(
             """
             SELECT slug,
@@ -154,9 +157,9 @@ async def _load_existing_hashes(
                      'raw', raw
                    ) AS payload_snapshot
             FROM dicefest_raw_games
-            WHERE slug = ANY(:slugs)
+            WHERE slug = ANY(CAST(:slugs AS text[]))
             """
-        ).bindparams(bindparam("slugs", expanding=True))
+        )
         result = await session.execute(sql, {"slugs": slugs})
     else:
         raise NotImplementedError(f"Snapshot loader не реализован для {table!r}")
