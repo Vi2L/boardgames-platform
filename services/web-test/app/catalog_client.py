@@ -263,6 +263,136 @@ class CatalogClient:
                 detail = resp.text[:500]
             raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
 
+    # ── Sources: detection runs ────────────────────────────────────────────
+
+    async def start_source_run(
+        self, provider: str, payload: dict,
+    ) -> dict[str, Any]:
+        """POST /sources/{provider}/runs — запуск сухого прогона.
+
+        Возвращает run сразу с status='running'; реальная обработка идёт
+        фоном, статус меняется на 'ready' / 'failed' через polling.
+        """
+        resp = await self._client.post(
+            f"/sources/{provider}/runs", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def list_source_runs(
+        self, provider: str, *, limit: int = 20, offset: int = 0,
+    ) -> dict[str, Any]:
+        resp = await self._client.get(
+            f"/sources/{provider}/runs",
+            params={"limit": limit, "offset": offset},
+        )
+        return _ok_or_raise(resp)
+
+    async def get_source_run(self, provider: str, run_id: int) -> dict[str, Any]:
+        resp = await self._client.get(f"/sources/{provider}/runs/{run_id}")
+        return _ok_or_raise(resp)
+
+    async def list_source_run_items(
+        self,
+        provider: str,
+        run_id: int,
+        *,
+        change_type: str | None = None,
+        search: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if change_type:
+            params["change_type"] = change_type
+        if search:
+            params["search"] = search
+        resp = await self._client.get(
+            f"/sources/{provider}/runs/{run_id}/items", params=params,
+        )
+        return _ok_or_raise(resp)
+
+    async def apply_source_run(
+        self, provider: str, run_id: int, payload: dict,
+    ) -> dict[str, Any]:
+        resp = await self._client.post(
+            f"/sources/{provider}/runs/{run_id}/apply", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def discard_source_run(
+        self, provider: str, run_id: int,
+    ) -> dict[str, Any]:
+        resp = await self._client.post(
+            f"/sources/{provider}/runs/{run_id}/discard",
+        )
+        return _ok_or_raise(resp)
+
+    # ── Sources: match profiles ────────────────────────────────────────────
+
+    async def list_match_profiles(self, provider: str) -> list[dict[str, Any]]:
+        resp = await self._client.get(f"/sources/{provider}/match-profiles")
+        if resp.is_error:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = resp.text[:500]
+            raise CatalogServiceError(
+                resp.status_code, detail or f"HTTP {resp.status_code}",
+            )
+        return resp.json()
+
+    async def upsert_match_profile(
+        self, provider: str, payload: dict,
+    ) -> dict[str, Any]:
+        resp = await self._client.post(
+            f"/sources/{provider}/match-profiles", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def delete_match_profile(self, provider: str, profile_id: int) -> None:
+        resp = await self._client.delete(
+            f"/sources/{provider}/match-profiles/{profile_id}",
+        )
+        if resp.is_error:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = resp.text[:500]
+            raise CatalogServiceError(
+                resp.status_code, detail or f"HTTP {resp.status_code}",
+            )
+
+    # ── /promotion/.../candidates с MatchParams ────────────────────────────
+
+    async def promotion_candidates_with_params(
+        self,
+        provider: str,
+        raw_id: int,
+        *,
+        threshold: float = 0.5,
+        limit: int = 5,
+        prefer_external_id: bool = False,
+        weight_ru: float = 1.0,
+        weight_en: float = 1.0,
+        weight_alias: float = 1.0,
+    ) -> dict[str, Any]:
+        """GET /promotion/{provider}/{raw_id}/candidates с расширенными
+        параметрами матчинга. UI MatchParamsForm использует эту обёртку,
+        старая `promotion_candidates` остаётся как обратная совместимость.
+        """
+        resp = await self._client.get(
+            f"/promotion/{provider}/{raw_id}/candidates",
+            params={
+                "threshold": threshold,
+                "limit": limit,
+                "prefer_external_id": str(prefer_external_id).lower(),
+                "weight_ru": weight_ru,
+                "weight_en": weight_en,
+                "weight_alias": weight_alias,
+            },
+        )
+        return _ok_or_raise(resp)
+
 
 def _ok_or_raise(resp: httpx.Response) -> dict[str, Any]:
     if resp.is_error:
