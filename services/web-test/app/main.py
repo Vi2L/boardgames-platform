@@ -58,6 +58,7 @@ app.add_middleware(
 app.include_router(search_router_module.router, prefix="/api")
 app.include_router(parsers_router_module.router, prefix="/api")
 app.include_router(history.router, prefix="/api")
+app.include_router(history.offers_router, prefix="/api")
 app.include_router(stores_router_module.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
 app.include_router(stats_router_module.router, prefix="/api")

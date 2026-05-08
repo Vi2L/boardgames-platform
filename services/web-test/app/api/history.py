@@ -10,6 +10,22 @@ from app.deps import get_parsers_client
 from app.schemas import PriceDeltaOut, PricePointOut, PriceStatsOut
 
 router = APIRouter(prefix="/products", tags=["history"])
+offers_router = APIRouter(prefix="/offers", tags=["offers"])
+
+
+@offers_router.get("/history", response_model=list[PricePointOut])
+async def get_offer_history(
+    store_slug: str = Query(..., description="Slug магазина (crowdgames, hobbygames…)"),
+    external_id: str = Query(..., description="external_id оффера в этом магазине"),
+) -> list[PricePointOut]:
+    """История цен catalog-оффера из parsers price_observations.
+
+    Принимает (store_slug, external_id) вместо внутреннего parsers product_id,
+    потому что catalog-офферы идентифицированы именно этой парой.
+    При отсутствии данных возвращает [].
+    """
+    client = get_parsers_client()
+    return await client.get_history_by_external_id(store_slug, external_id)
 
 
 @router.get("/{product_id}/history", response_model=list[PricePointOut])

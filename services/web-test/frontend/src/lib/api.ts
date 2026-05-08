@@ -25,6 +25,10 @@ export const fetchParsers = () =>
 export const fetchHistory = (id: number) =>
   fetch(`${BASE}/products/${id}/history`).then(r => json<PricePointOut[]>(r))
 
+export const fetchOfferHistory = (storeSlug: string, externalId: string) =>
+  fetch(`${BASE}/offers/history?store_slug=${encodeURIComponent(storeSlug)}&external_id=${encodeURIComponent(externalId)}`)
+    .then(r => json<PricePointOut[]>(r))
+
 export const fetchHealth = () =>
   fetch(`${BASE}/health`).then(r => json<HealthOut>(r))
 

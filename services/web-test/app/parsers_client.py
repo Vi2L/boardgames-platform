@@ -114,6 +114,26 @@ class ParsersClient:
             for p in resp.json()
         ]
 
+    async def get_history_by_external_id(
+        self, store_slug: str, external_id: str,
+    ) -> list[PricePointOut]:
+        """GET /history/by-external-id → история цен по (store_slug, external_id)."""
+        resp = await self._client.get(
+            "/history/by-external-id",
+            params={"store_slug": store_slug, "external_id": external_id},
+        )
+        if resp.status_code == 404:
+            return []
+        resp.raise_for_status()
+        return [
+            PricePointOut(
+                price=p["price"],
+                price_rub=round(p["price"] / 100, 2),
+                fetched_at=p["fetched_at"],
+            )
+            for p in resp.json()
+        ]
+
     # ── Debug (диагностические endpoint'ы parsers) ──────────────────────
 
     async def invalidate_cache(

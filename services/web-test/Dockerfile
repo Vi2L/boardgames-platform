@@ -45,8 +45,12 @@ RUN apt-get update \
 # Все Python-зависимости имеют pre-built wheels (pydantic, fastapi, uvicorn,
 # aiosqlite, httpx, python-dotenv) — компилятор не нужен.
 
-# Устанавливаем parsers как пакет (не editable — для production-образа).
+# Сначала устанавливаем shared-пакет, от которого зависит parsers.
 # Build context = корень монорепо (см. docker-compose.yml: web-test.build.context: .)
+COPY packages/shared-py/ /tmp/shared-py/
+RUN pip install --no-cache-dir /tmp/shared-py/ && rm -rf /tmp/shared-py/
+
+# Устанавливаем parsers как пакет (не editable — для production-образа).
 COPY services/parsers/ /tmp/parsers/
 RUN pip install --no-cache-dir /tmp/parsers/ && rm -rf /tmp/parsers/
 

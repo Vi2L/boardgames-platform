@@ -1418,6 +1418,24 @@ class PriceDatabase:
             for r in rows
         ]
 
+    async def get_history_by_external_id(
+        self, store_slug: str, external_id: str,
+    ) -> list[PricePoint]:
+        """История цен по (store_slug, external_id) — для catalog drawer.
+
+        Сначала ищем внутренний product_id по UNIQUE-ключу (store_slug, external_id),
+        затем делегируем в get_history. Если продукт не найден — пустой список.
+        """
+        async with aiosqlite.connect(self._path) as db:
+            async with db.execute(
+                "SELECT id FROM products WHERE store_slug = ? AND external_id = ?",
+                (store_slug, external_id),
+            ) as cur:
+                row = await cur.fetchone()
+        if not row:
+            return []
+        return await self.get_history(row[0])
+
 
 def _row_to_record(r: aiosqlite.Row) -> ProductRecord:
     return ProductRecord(

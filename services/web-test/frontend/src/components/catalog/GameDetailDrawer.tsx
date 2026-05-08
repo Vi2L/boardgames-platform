@@ -39,6 +39,8 @@ import {
   type DicefestRawGame,
   type GamePatchPayload,
 } from '../../lib/catalog'
+import { fetchOfferHistory } from '../../lib/api'
+import { PriceChart } from '../shared/PriceChart'
 import { AliasEditor } from './AliasEditor'
 import { BggCard } from './BggCard'
 import { WikidataCard } from './WikidataCard'
@@ -487,49 +489,91 @@ function OffersTab({ gameId }: { gameId: number }) {
             </thead>
             <tbody>
               {items.map(o => (
-                <tr key={o.id} className="border-t border-gray-800">
-                  <td className="px-2 py-1 text-gray-200">{o.title_raw}</td>
-                  <td className="px-2 py-1 font-mono text-gray-400">{o.sku ?? '—'}</td>
-                  <td className="px-2 py-1">
-                    {o.last_price != null ? (
-                      <span>
-                        <span className="text-gray-200">{fmtKop(o.last_price)}</span>
-                        {o.original_price != null && o.original_price > o.last_price && (
-                          <span className="ml-1 line-through text-gray-500">{fmtKop(o.original_price)}</span>
-                        )}
-                      </span>
-                    ) : <span className="text-gray-500">—</span>}
-                  </td>
-                  <td className="px-2 py-1">
-                    {o.in_stock === true && <span className="text-emerald-400">✓</span>}
-                    {o.in_stock === false && <span className="text-red-400">✗</span>}
-                    {o.in_stock === null && <span className="text-gray-500">?</span>}
-                    {o.is_preorder && <span className="ml-1 text-[10px] px-1 rounded bg-blue-900/40 text-blue-200">preord</span>}
-                  </td>
-                  <td className="px-2 py-1">
-                    <span className={clsx('text-[10px] px-1 rounded',
-                      o.match_status === 'auto' ? 'bg-emerald-900/40 text-emerald-200' :
-                      o.match_status === 'manual' ? 'bg-violet-900/40 text-violet-200' :
-                      o.match_status === 'rejected' ? 'bg-red-900/40 text-red-200' :
-                      'bg-gray-800 text-gray-400',
-                    )}>{o.match_status}{o.match_score != null ? ` ${o.match_score.toFixed(2)}` : ''}</span>
-                  </td>
-                  <td className="px-2 py-1 text-gray-500 font-mono">
-                    {o.last_seen_at.slice(0, 10)}
-                  </td>
-                  <td className="px-2 py-1">
-                    <a href={o.url} target="_blank" rel="noreferrer"
-                       className="text-gray-400 hover:text-gray-200">
-                      <ExternalLink size={11} />
-                    </a>
-                  </td>
-                </tr>
+                <OfferRow key={o.id} offer={o} />
               ))}
             </tbody>
           </table>
         </div>
       ))}
     </div>
+  )
+}
+
+// ─── Строка оффера с раскрывающейся историей цен ─────────────────────
+
+function OfferRow({ offer }: { offer: CatalogOffer }) {
+  const [expanded, setExpanded] = useState(false)
+
+  // Запрос идёт только при раскрытии строки (enabled: expanded).
+  const { data: history, isLoading } = useQuery({
+    queryKey: ['catalog', 'offer-history', offer.store_slug, offer.external_id],
+    queryFn: () => fetchOfferHistory(offer.store_slug, offer.external_id),
+    enabled: expanded,
+    staleTime: 5 * 60_000,
+  })
+
+  return (
+    <>
+      <tr className="border-t border-gray-800">
+        <td className="px-2 py-1 text-gray-200">
+          <button
+            onClick={() => setExpanded(e => !e)}
+            className="mr-1 text-gray-500 hover:text-gray-300 inline-flex items-center"
+            title="История цен"
+          >
+            {expanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+          </button>
+          {offer.title_raw}
+        </td>
+        <td className="px-2 py-1 font-mono text-gray-400">{offer.sku ?? '—'}</td>
+        <td className="px-2 py-1">
+          {offer.last_price != null ? (
+            <span>
+              <span className="text-gray-200">{fmtKop(offer.last_price)}</span>
+              {offer.original_price != null && offer.original_price > offer.last_price && (
+                <span className="ml-1 line-through text-gray-500">{fmtKop(offer.original_price)}</span>
+              )}
+            </span>
+          ) : <span className="text-gray-500">—</span>}
+        </td>
+        <td className="px-2 py-1">
+          {offer.in_stock === true && <span className="text-emerald-400">✓</span>}
+          {offer.in_stock === false && <span className="text-red-400">✗</span>}
+          {offer.in_stock === null && <span className="text-gray-500">?</span>}
+          {offer.is_preorder && <span className="ml-1 text-[10px] px-1 rounded bg-blue-900/40 text-blue-200">preord</span>}
+        </td>
+        <td className="px-2 py-1">
+          <span className={clsx('text-[10px] px-1 rounded',
+            offer.match_status === 'auto' ? 'bg-emerald-900/40 text-emerald-200' :
+            offer.match_status === 'manual' ? 'bg-violet-900/40 text-violet-200' :
+            offer.match_status === 'rejected' ? 'bg-red-900/40 text-red-200' :
+            'bg-gray-800 text-gray-400',
+          )}>{offer.match_status}{offer.match_score != null ? ` ${offer.match_score.toFixed(2)}` : ''}</span>
+        </td>
+        <td className="px-2 py-1 text-gray-500 font-mono">
+          {offer.last_seen_at.slice(0, 10)}
+        </td>
+        <td className="px-2 py-1">
+          <a href={offer.url} target="_blank" rel="noreferrer"
+             className="text-gray-400 hover:text-gray-200">
+            <ExternalLink size={11} />
+          </a>
+        </td>
+      </tr>
+      {expanded && (
+        <tr className="bg-gray-950/30">
+          <td colSpan={7} className="px-3 py-2">
+            {isLoading && <Loader2 size={12} className="animate-spin text-gray-500" />}
+            {!isLoading && history && history.length === 0 && (
+              <div className="text-xs text-gray-500 italic">Нет истории цен в parsers.</div>
+            )}
+            {!isLoading && history && history.length > 0 && (
+              <PriceChart data={history} />
+            )}
+          </td>
+        </tr>
+      )}
+    </>
   )
 }
 
