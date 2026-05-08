@@ -337,7 +337,8 @@ export type ImportProgress = {
 
 export type ImportJob = {
   id: number
-  type: 'bgg' | 'tesera' | 'dicefest'
+  // 'bgg-batch' добавлен этапом 3 (массовое XML-обогащение через /import/bgg/batch).
+  type: 'bgg' | 'tesera' | 'dicefest' | 'bgg-batch'
   status: ImportJobStatus
   payload: Record<string, unknown>
   started_at: string | null
@@ -381,6 +382,57 @@ export const importDicefestReparse = () =>
 
 export const fetchImportJob = (id: number) =>
   fetch(`${BASE}/import/jobs/${id}`).then(r => json<ImportJob>(r))
+
+// ── BGG search + batch enrich (этап 1-3) ────────────────────────────────
+
+export type BggSearchHit = {
+  bgg_id: number
+  title: string
+  year: number | null
+}
+
+export type BggSearchResponse = {
+  query: string
+  exact: boolean
+  count: number
+  items: BggSearchHit[]
+}
+
+// POST /catalog/parsers/bgg/search → поиск кандидатов в BGG XML API.
+// `exact=true` — фильтр по полному совпадению primary name; default — fuzzy.
+export const searchBgg = (
+  query: string,
+  opts: { exact?: boolean; limit?: number } = {},
+) =>
+  fetch(`${BASE}/parsers/bgg/search`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      query,
+      exact: opts.exact ?? false,
+      limit: opts.limit ?? 20,
+    }),
+  }).then(r => json<BggSearchResponse>(r))
+
+export type BggBatchPayload = {
+  // Один из rank_le / all_ranked обязателен (валидация на бэке: 400).
+  rank_le?: number
+  all_ranked?: boolean
+  batch_size?: number      // 1..20
+  skip_recent_days?: number  // 0 = форсировать, 30 = пропускать недавние
+  limit?: number
+  dry_run?: boolean
+  rate_limit_sec?: number  // 0..10, default 1.0
+}
+
+// POST /catalog/import/bgg/batch → запуск фонового batch-enrich'а.
+// Возвращает ImportJob со status='pending'; UI делает polling fetchImportJob(id).
+export const importBggBatch = (payload: BggBatchPayload) =>
+  fetch(`${BASE}/import/bgg/batch`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<ImportJob>(r))
 
 // ── Promotion (двухстадийная схема: staging → canonical) ─────────────────
 

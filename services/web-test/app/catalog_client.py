@@ -146,6 +146,30 @@ class CatalogClient:
         resp = await self._client.post("/import/bgg", json=payload)
         return _ok_or_raise(resp)
 
+    async def bgg_search(
+        self, query: str, *, exact: bool = False, limit: int = 20,
+    ) -> dict[str, Any]:
+        """POST /parsers/bgg/search → поиск игр в BGG XML API.
+
+        Возвращает {query, exact, count, items: [{bgg_id, title, year}]}.
+        Используется UI «Каталог → BGG» для интерактивного выбора игр перед
+        запуском enrich'а.
+        """
+        resp = await self._client.post(
+            "/parsers/bgg/search",
+            json={"query": query, "exact": exact, "limit": limit},
+        )
+        return _ok_or_raise(resp)
+
+    async def import_bgg_batch(self, payload: dict) -> dict[str, Any]:
+        """POST /import/bgg/batch → массовое XML-обогащение топ-N или всех ranked.
+
+        Возвращает ImportJob — затем polling через get_job() для отображения
+        progress.{phase, current, total, current_title} и log_lines в UI.
+        """
+        resp = await self._client.post("/import/bgg/batch", json=payload)
+        return _ok_or_raise(resp)
+
     async def import_tesera(self, payload: dict) -> dict[str, Any]:
         """POST /import/tesera → запустить async-импорт. Возвращает ImportJob."""
         resp = await self._client.post("/import/tesera", json=payload)

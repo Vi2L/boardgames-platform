@@ -211,6 +211,39 @@ async def import_bgg(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.post("/parsers/bgg/search")
+async def bgg_search(
+    body: dict,  # {query: str, exact?: bool, limit?: int}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Поиск игр в BGG XML API (proxy → catalog `/parsers/bgg/search`).
+
+    Без побочных эффектов в БД — UI показывает кандидатов, оператор кликает
+    «Import» → `/catalog/import/bgg` для одной игры или `/import/bgg/batch`
+    для массового обогащения.
+    """
+    try:
+        return await client.bgg_search(
+            query=body.get("query", ""),
+            exact=body.get("exact", False),
+            limit=body.get("limit", 20),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/import/bgg/batch")
+async def import_bgg_batch(
+    body: dict,  # {rank_le?: int, all_ranked?: bool, batch_size?, skip_recent_days?, ...}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Запуск batch BGG XML enrich'а. Возвращает ImportJob — polling /jobs/{id}."""
+    try:
+        return await client.import_bgg_batch(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.post("/import/tesera")
 async def import_tesera(
     body: dict,
