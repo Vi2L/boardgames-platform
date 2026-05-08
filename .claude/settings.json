@@ -16,5 +16,19 @@
       "Bash(git show*)",
       "Bash(npm run*)"
     ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bin/check-alembic-heads.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
   }
 }
