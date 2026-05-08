@@ -147,8 +147,8 @@ boardgames-platform/
 
 | # | Точка | Где | Как часто меняется | Риск конфликта |
 |---|---|---|---|---|
-| 1 | `IngestRequest` (контракт parsers→catalog) | `services/catalog/catalog/schemas.py:268` + `services/parsers/parsers/catalog_publisher.py` | редко | **средний** — два места правки |
-| 2 | Alembic миграции | `services/catalog/alembic/versions/` | высокая (7 за 2 дня) | **высокий** — короткий `revision: "0007"` дублируется легко |
+| 1 | `IngestRequest` (контракт parsers→catalog) | `packages/shared-py/bg_shared/ingest.py` (single source); потребители — `services/catalog/catalog/routers/ingest.py` и `services/parsers/parsers/catalog_publisher.py` | редко | **низкий** — после §10.2 модель в одном файле, два сервиса просто импортируют |
+| 2 | Alembic миграции | `services/catalog/alembic/versions/` | высокая (7 за 2 дня) | **низкий-средний** — после §10.1 revision-id длинный (`YYYYMMDD_HHMMSS_<id>`), случайные коллизии исключены; остаётся следить за `down_revision`-цепочкой |
 | 3 | Корневой `pyproject.toml` | uv workspace, ruff | редко | низкий |
 | 4 | `docker-compose.yml` | стек, порты, имена | редко | низкий, но с сильными последствиями (см. §6) |
 | 5 | `.env.example` | переменные среды | редко | низкий |
@@ -552,17 +552,39 @@ down_revision: Union[str, None] = "0006"
 
 ### 8.3 Изменения в HTTP-контракте `POST /ingest/offers`
 
-**Где живёт контракт (4 точки):**
-- `services/catalog/catalog/schemas.py:268` — Pydantic-модель `IngestRequest` (consumer-side).
-- `services/catalog/catalog/routers/ingest.py` — обработчик endpoint'а.
-- `services/parsers/parsers/catalog_publisher.py` — формирование payload (producer-side).
-- Тесты: `services/catalog/tests/test_ingest_and_matching.py`, `services/parsers/tests/test_catalog_publisher.py`.
+**Где живёт контракт (после roadmap §10.2 — один источник правды + два потребителя):**
+
+- **Source of truth:** `packages/shared-py/bg_shared/ingest.py` —
+  pydantic-модели `IngestRequest` и `IngestOfferIn`. Меняется ТОЛЬКО
+  здесь. После правки `uv sync --all-packages --group dev` подхватит
+  обновление в `.venv` сразу для обоих сервисов.
+- **Consumer (catalog):** `services/catalog/catalog/routers/ingest.py` —
+  обработчик endpoint'а. Импортирует `IngestRequest` из `bg_shared.ingest`.
+  Если контракт ломает обработку — здесь правится логика.
+- **Producer (parsers):** `services/parsers/parsers/catalog_publisher.py` —
+  формирование payload. Импортирует `IngestRequest`/`IngestOfferIn`,
+  строит pydantic-объект и сериализует через `model_dump(mode="json")`.
+  Валидация на producer-side: ошибка сборки ловится до сетевого вызова.
+- **Тесты:** `services/catalog/tests/test_ingest_and_matching.py`
+  (consumer-side scenarios) и `services/parsers/tests/test_catalog_publisher.py`
+  (producer-side payload format). После любой правки в `bg_shared/ingest.py` —
+  прогнать оба набора.
 
 **Правила.**
-1. **Один атомарный коммит** на все 4 точки. Никогда «сначала producer, потом consumer» — это окно, в котором parsers шлёт мусор в catalog, и тот падает.
-2. До правки агент **явно объявляет в чате**: «правлю `IngestRequest`». Второй агент не лезет в эти файлы.
-3. В split C это естественно: backend-агент владеет всеми тремя сервисами, делает один коммит. В split B — это место, где split B ломается.
-4. Долгосрочно — вынести `IngestRequest` в `packages/shared-py/`, тогда контракт станет одним файлом (см. §10).
+
+1. **Атомарный коммит** на все затронутые файлы. Если контракт расширяется
+   (новое поле) — обычно меняется только `bg_shared/ingest.py` + тест в
+   parsers. Если меняется логика обработки — добавляется catalog-сторона
+   тем же коммитом.
+2. **`uv.lock` и `pyproject.toml` пакета** трогать не надо: версия
+   `bg-shared` фиксированная (`0.1.0`), в workspace-режиме всегда editable.
+3. До правки агент **явно объявляет в чате**: «правлю `IngestRequest`».
+   Второй агент не лезет в эти файлы — конфликт коммита почти невозможен,
+   но конкурирующая правка `model_dump()`-логики в `catalog_publisher.py`
+   может создать неожиданный merge.
+4. В split C (backend-агент владеет всем Python-миром) — это
+   естественный паттерн. В split B обновлять контракт без координации
+   двух агентов невозможно: producer и consumer в разных папках.
 
 ### 8.4 `docker-compose.yml` / `.env`
 
@@ -630,47 +652,44 @@ down_revision: Union[str, None] = "0006"
 
 ## 10. Roadmap-улучшения (что починить, чтобы параллелизм стал безопаснее)
 
-Это не обязательная часть плана — это **возможные шаги**, которые снимут самые острые риски. Реализую по запросу.
+Изначально это был список «возможных шагов». В мае 2026 все пять пунктов
+применены — см. историю коммитов после `6208a2a`. Раздел оставлен как
+проектное решение (зачем так, какой эффект), пометки **[применено]** в
+заголовках указывают на финальный статус.
 
-### 10.1 Длинный alembic `revision`-id [высокий приоритет]
-**Проблема.** Сейчас `revision: str = "0007"` — короткий int-string. Коллизии при параллельной работе очень вероятны.
-**Решение.** Перейти на `revision = "20260509_0007_source_scrape_runs"` (полное имя файла без `.py`). Никогда не совпадёт случайно.
-**Что менять:**
-- `services/catalog/alembic/script.py.mako` — шаблон новых миграций.
-- Опционально: разовый rename существующих миграций (риск — переписать `down_revision` цепочкой).
-**Эффект.** Снимает главный риск из §8.2.
+### 10.1 Длинный alembic `revision`-id [применено · `3e464af`]
+**Проблема.** До этого `revision: str = "0007"` — короткий int-string. Коллизии при параллельной работе очень вероятны.
+**Решение.** Шаблон `services/catalog/alembic/script.py.mako` теперь генерирует `revision = "${create_date.strftime('%Y%m%d_%H%M%S')}_${up_revision}"` — например `20260508_172307_398ecb0224b3`.
+**Что поменялось:**
+- `services/catalog/alembic/script.py.mako` — шаблон новых миграций. Существующие миграции `0001`–`0007` оставлены как есть (их revision'ы зафиксированы в `alembic_version` у пользователей).
+**Эффект.** Главный риск из §8.2 снят: два агента в одну секунду могут передать одинаковый `--rev-id`, но timestamp-префикс делает revision уникальным.
 
-### 10.2 Вынести `IngestRequest` в `packages/shared-py/` [высокий приоритет]
-**Проблема.** Контракт parsers↔catalog живёт в двух местах. Атомарный коммит обязателен, легко ошибиться.
-**Решение.** В `packages/shared-py/` создать общий пакет с pydantic-моделью. Catalog и parsers импортируют оттуда.
-**Что менять:**
-- Новый пакет `packages/shared-py/shared/contracts.py`.
-- Зарегистрировать его как member workspace в корневом `pyproject.toml`.
-- `services/catalog/catalog/schemas.py` — убрать `IngestRequest`, заменить на импорт.
-- `services/parsers/parsers/catalog_publisher.py` — убрать локальное dict-описание, импортировать модель и валидировать через неё.
-**Эффект.** Контракт становится одним файлом. Половина рисков из §8.3 снимается.
+### 10.2 Вынести `IngestRequest` в `packages/shared-py/` [применено · `2d89d37`]
+**Проблема.** Контракт parsers↔catalog жил в двух местах (pydantic в catalog + dict в parsers). Атомарный коммит обязателен, легко ошибиться.
+**Решение.** Новый workspace-member `packages/shared-py/` (import name `bg_shared`). `IngestRequest` и `IngestOfferIn` живут в `bg_shared/ingest.py`; catalog и parsers импортируют оттуда.
+**Что поменялось:**
+- `packages/shared-py/{pyproject.toml, bg_shared/__init__.py, bg_shared/ingest.py}` — новый пакет.
+- Корневой `pyproject.toml` — `packages/shared-py` в `members`, `bg-shared = { workspace = true }` в `[tool.uv.sources]`.
+- `services/catalog/pyproject.toml`, `services/parsers/pyproject.toml` — `bg-shared` в `dependencies`.
+- `services/catalog/catalog/schemas.py` — `IngestOfferIn`/`IngestRequest` удалены, оставлен комментарий-указатель.
+- `services/catalog/catalog/routers/ingest.py` — импорт `IngestRequest` из `bg_shared.ingest`.
+- `services/parsers/parsers/catalog_publisher.py` — `IngestRequest(...).model_dump(mode="json")` вместо ручного dict.
+**Эффект.** Контракт стал одним файлом. Producer-side получил pydantic-валидацию: ошибка сборки ловится до сетевого вызова. См. §8.3 — он переписан под новое расположение.
 
-### 10.3 `services/web-test/frontend/CLAUDE.md` [средний приоритет]
-**Проблема.** Сейчас CLAUDE.md есть в trex backend-сервисах, но не во фронте. Frontend-агенту неоткуда узнать local правила.
-**Решение.** Создать `services/web-test/frontend/CLAUDE.md` с инструкциями:
-- «Не трогай Python-код выше этой папки».
-- «Контракты приходят через `services/web-test/app/api/*.py`. Типы для них — в `src/lib/api.ts`.»
-- «Тесты фронта — `npm run test` (если будут).»
-- Стиль кода, паттерны, важные компоненты.
-**Эффект.** Split C становится самоподдерживающимся.
+### 10.3 `services/web-test/frontend/CLAUDE.md` [применено · `4b6e3ce`]
+**Проблема.** CLAUDE.md был в трёх backend-сервисах, но не во фронте. Frontend-агенту в split C неоткуда узнать local правила.
+**Решение.** Тонкий CLAUDE.md в `services/web-test/frontend/`: границы зоны ответственности, npm-команды, паттерны (TanStack Query + Zustand + SSE + sonner), cache-keys, подводные камни (cache invalidation, snapshot diff, tailwind dynamic classes). Родительский `services/web-test/CLAUDE.md` остаётся source of truth по архитектуре — frontend-документ ссылается на него, не дублирует.
+**Эффект.** Split C самоподдерживающийся: frontend-сессия стартует с правильным контекстом, backend-агент не правит React.
 
-### 10.4 `.claude/scheduled_tasks.lock` в `.gitignore` [низкий приоритет]
-**Проблема.** Lock-файл постоянно появляется в `git status` как untracked. Шумит у обоих агентов.
-**Решение.** Одна строка в `.gitignore`:
-```
-.claude/scheduled_tasks.lock
-```
-**Эффект.** Чистый `git status`.
+### 10.4 `.claude/scheduled_tasks.lock` в `.gitignore` [применено · `858787c`]
+**Проблема.** Lock-файл runtime-состояния агента шумел в `git status` обеих сессий.
+**Решение.** Строка `.claude/scheduled_tasks.lock` рядом с `.claude/settings.local.json` в `.gitignore`.
+**Эффект.** Чистый `git status` у обоих агентов.
 
-### 10.5 Pre-commit hook на `alembic heads` [низкий приоритет, после 10.1]
-**Проблема.** Two heads ловится поздно — на CI или при `alembic upgrade`.
-**Решение.** Добавить в `.claude/settings.json` или git pre-commit hook, который перед коммитом миграции запускает `alembic heads` и падает, если голов больше одной.
-**Эффект.** Дешёвый guard-rail для миграций. Имеет смысл только после 10.1, иначе будет ложно срабатывать на коротких revision-id.
+### 10.5 Pre-commit hook на `alembic heads` [применено · `98c42f3`]
+**Проблема.** Two heads ловятся поздно — на CI или при `alembic upgrade`.
+**Решение.** `bin/check-alembic-heads.sh` — guard-скрипт, подключённый через `.claude/settings.json:hooks.PreToolUse[Bash]`. Срабатывает только при `git commit` со staged-файлами в `services/catalog/alembic/versions/`. Запускает `alembic heads` (статическая операция, к БД не ходит) и падает с понятным сообщением, если голов > 1.
+**Эффект.** Дешёвый guard-rail для миграций. Реализован после §10.1: длинные revision'ы делают случайные совпадения почти невозможными, но злонамеренный/устаревший `--rev-id` всё ещё ловится этим хуком.
 
 ---
 
@@ -735,8 +754,9 @@ A: Зависит от ветки. Если на свою feature-ветку —
 - [`CLAUDE.md`](../CLAUDE.md) — каноническая методичка проекта.
 - [`docker-compose.yml`](../docker-compose.yml) — фиксированные имена `bg-*`, источник риска при двух стеках.
 - [`.env.example`](../.env.example) — переменные, которые надо переопределять в worktree.
-- `services/catalog/alembic/script.py.mako` — шаблон новых миграций (точка для roadmap-10.1).
-- `services/catalog/catalog/schemas.py` (`IngestRequest`, ~строка 268) и `services/parsers/parsers/catalog_publisher.py` — две стороны контракта `/ingest/offers`.
-- `.claude/settings.json` — shared-конфиг Claude Code (allow-list разрешённых Bash-команд).
+- `services/catalog/alembic/script.py.mako` — шаблон новых миграций (длинный revision-id, §10.1).
+- `packages/shared-py/bg_shared/ingest.py` — single source of truth для `IngestRequest`/`IngestOfferIn`. Потребители: `services/catalog/catalog/routers/ingest.py` (consumer) и `services/parsers/parsers/catalog_publisher.py` (producer).
+- `.claude/settings.json` — shared-конфиг Claude Code (allow-list + PreToolUse hook на `alembic heads`).
+- `bin/check-alembic-heads.sh` — guard от two heads (§10.5).
 - [`bin/test-all.sh`](../bin/test-all.sh) — правильный способ запустить все тесты.
-- [`.gitignore`](../.gitignore) — куда добавить `.claude/scheduled_tasks.lock` (roadmap-10.4).
+- [`.gitignore`](../.gitignore) — `.claude/scheduled_tasks.lock` уже добавлен (§10.4).
