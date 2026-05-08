@@ -11,22 +11,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Что доступно через UI (по доменам):
 
-- **Парсеры**: SSE-поиск через 4 магазина, одиночный run, Live Test мимо
-  кеша, side-by-side compare cache vs live, raw HTTP-снепшоты, URL probe,
-  contract-validator (схема ParsedProduct + heatmap field-coverage),
-  cache invalidation per-store/query.
+- **Поиск**: SSE через 4 магазина с фильтром out-of-stock и бейджем «не
+  в наличии», бейдж sale (HG `extra.on_sale`), личные программы лояльности
+  (HG бонусы до 15% / Лавка % + донор VK) с пересчётом цены и сортировкой,
+  колонки Min 30д / Min всё (агрегаты по `price_observations`).
+  Лимит по умолчанию 100, потолок 500.
+- **Парсеры**: одиночный run, Live Test мимо кеша, side-by-side compare
+  cache vs live, raw HTTP-снепшоты, URL probe, contract-validator (схема
+  ParsedProduct + heatmap field-coverage), cache invalidation
+  per-store/query.
 - **Каталог**: fuzzy-search games, drawer с полной карточкой (BGG +
   Wikidata + aliases), CRUD алиасов с verified flag, BGG/Tesera Import
   Wizard с polling, ручное создание/редактирование Game, merge двух игр.
 - **Матчинг**: dashboard очереди (по магазинам, score-buckets), top-N
   кандидатов с pg_trgm score прямо в LinkPicker, кнопка reassess (single
   и batch).
-- **БД**: товары портала (локальная SQLite-БД), магазины, журнал поисков,
-  плюс БД parsers (inventory, products browser с удалением observations,
-  аналитика — latency p50/p95/p99, top queries, тихие сбои).
+- **БД** (`/database`): сводный health-блок наверху (4 кликабельные
+  карточки), товары портала с открытием в `ProductDrawer` (как на /search),
+  магазины с сортировкой «проблемные сначала», журнал поисков, БД parsers
+  (inventory с per-column сортировкой, products browser с удалением
+  observations, аналитика — latency p50/p95/p99, top queries с
+  cache_hit_rate, тихие сбои). На каждой вкладке info-блок с назначением
+  и tooltip-ы на фильтрах/метриках.
 - **Тесты (QA)**: snapshots с parser-aware diff (категории: price/lost/
   gained/raw/field), suite-runner с baselines (фиксация expected min_count
-  per query), favorites.
+  per query), favorites с preset (showOutOfStock + конфиг loyalty).
 - **DLQ**: dead-letter queue для catalog ingest, ручной replay при
   downtime catalog'а.
 - **Cross-service health**: popover в сайдбаре с метриками обоих соседей
@@ -103,21 +112,27 @@ services/web-test/
 │
 └── frontend/src/                         # React 18 + Vite + TypeScript + Tailwind
     ├── App.tsx                           # layout: collapsible sidebar + 7 routes
-    ├── store/search.ts                   # Zustand: search SSE state
+    ├── store/
+    │   ├── search.ts                     # Zustand: search-форма + SSE state, persist v2
+    │   └── loyalty.ts                    # Zustand: конфиг личных скидок (HG/Лавка), persist
     ├── lib/
     │   ├── api.ts                        # все fetch-обёртки (~80 функций)
     │   ├── catalog.ts                    # catalog-специфичные типы и мутации
     │   ├── sse.ts                        # useSSE hook (EventSource)
     │   ├── stores.ts                     # STORE_LABELS / colors (single source of truth)
-    │   └── similarity.ts                 # фронтовый fuzzy match
+    │   ├── similarity.ts                 # фронтовый fuzzy match
+    │   ├── offer.ts                      # isInStock / isOnSale / originalPriceRub
+    │   └── loyalty.ts                    # applyLoyalty(products, cfg) → AdjustedPrice map
     ├── pages/
-    │   ├── SearchPage.tsx                # SSE-поиск, watch-mode, snapshots, favorites
+    │   ├── SearchPage.tsx                # SSE-поиск + фильтр out-of-stock + sale бейдж
+    │   │                                 #   + персональные скидки + min-цены, watch-mode,
+    │   │                                 #   snapshots, favorites preset
     │   ├── ParsersPage.tsx               # ParserCard × N
     │   ├── DebugPage.tsx                 # 5 tabs: live / compare / url / contract / snapshots
-    │   ├── DatabasePage.tsx              # 5 tabs: товары / магазины / журнал /
-    │   │                                 #   БД парсеров: inventory / товары / аналитика
+    │   ├── DatabasePage.tsx              # 6 tabs + сводный health-блок наверху;
+    │   │                                 #   товары портала открываются в ProductDrawer
     │   ├── CatalogPage.tsx               # Каталог + Очередь матчинга со stats-header
-    │   ├── ProductPage.tsx               # /products/:id (deep-link)
+    │   ├── ProductPage.tsx               # /products/:id (deep-link, отдельная страница)
     │   ├── TestingPage.tsx               # snapshots / suites / favorites
     │   └── DlqPage.tsx                   # /dlq — DLQ для catalog ingest
     └── components/
@@ -127,6 +142,9 @@ services/web-test/
         ├── catalog/                      # GameDetailDrawer, AliasList/Editor, BggCard,
         │                                 #   WikidataCard, ImportWizard, GameEditor,
         │                                 #   MergeDialog, MatchingStatsHeader
+        ├── search/                       # SearchForm, ResultsTable, ProductDrawer,
+        │                                 #   LoyaltyPanel, SaleBadge, LoyaltyBadge,
+        │                                 #   DiscountCell, StoreProgressBadge
         ├── database/                     # PriceHistogram, parsers/{Inventory,Analytics,
         │                                 #   ProductsBrowser}Tab
         ├── testing/                      # DiffView (с категориями), SuiteRunner (с baselines)
@@ -191,6 +209,10 @@ services/web-test/
   `suite_baselines` (F4.4).
 - Файл: `data/debug.sqlite` (env `DB_PATH`).
 - Цены в копейках, конвертация в рубли в `_row_to_product`.
+- `favorites.preset_json` (v3) — opaque JSON со «всеми остальными»
+  UI-настройками (`show_out_of_stock`, конфиг лояльности). Решение —
+  один JSON-столбец вместо узкоспециализированных колонок: расширения
+  не требуют новых миграций.
 
 ## API endpoints (web-test)
 
@@ -199,7 +221,7 @@ parsers/catalog с error mapping. Свои данные живут в локал
 
 | Префикс | Что | Источник |
 |---|---|---|
-| `/search`, `/products/{id}/history`, `/products/recent-deltas` | SSE поиск, история | parsers |
+| `/search`, `/products/{id}/history`, `/products/recent-deltas`, `/products/price-stats?ids=` | SSE поиск, история, batch-агрегаты (Δ-цена, min-30д, min-all) | parsers |
 | `/parsers`, `/parsers/{slug}/run`, `DELETE /parsers/cache` | Список парсеров, run, cache invalidation | parsers |
 | `/stores` | Список магазинов | parsers |
 | `/debug/parse`, `/debug/compare`, `/debug/fetch-url`, `/debug/contract`, `/debug/field-coverage`, `/debug/features`, `/debug/snapshots[/{id}[/raw]]` | Live Test, compare cache vs live, URL probe, schema, raw HTTP snapshots | parsers |
@@ -267,6 +289,36 @@ Auth: catalog admin-mutations требуют `X-API-Key`. Web-test исполь�
 - **Health popover** держит `position: fixed inset-0` overlay для
   закрытия по клику. Не вкладывать в overflow-hidden родителя — иначе
   popover обрезается.
+- **Имена полей parsers ↔ frontend**: web-test тонко проксирует parsers,
+  поэтому контракт = parsers. Источник правды — реальные ответы parsers,
+  не интуиция. Конкретные поля для типов в `frontend/src/lib/api.ts` и
+  `frontend/src/types/api.ts`:
+  - `ParsersDbMeta`: `db_size_bytes`, `db_size_mb`, `tables.<name>`
+    (counts), `oldest_observation`, `newest_observation`. Нет плоских
+    `product_count` — берём из `tables.products`.
+  - `ParsersStoreInventory`: `products_count`, `observations_count`,
+    `min_price_rub`, `mean_price_rub`, `max_price_rub`, `oldest_obs`,
+    `newest_obs`. Цены **уже в рублях**, не делить на 100.
+  - `StoreHealthEntry` (`/api/stats/stores`): `store_slug`,
+    `success_rate_24h` (0..100, **не fraction**), `avg_response_ms`,
+    `total_calls_24h`, `success_count_24h`, `last_seen`, `last_success`,
+    `last_error`.
+  - `ParsersTopQuery`: `count` (не `hits`), `cache_hits`,
+    `cache_hit_rate` (0..100), `errors`, `last_seen`, `avg_ms`.
+  Эти расхождения когда-то ломали `/database` чёрным экраном — фронт
+  обращался к несуществующим полям.
+- **`extra.on_sale` / `extra.original_price`**: ставит парсер
+  HobbyGames при акционной цене (`original_price` в **копейках**).
+  Используется на `/search` для бейджа «sale» и для блокировки
+  HG-бонусов в loyalty (бонусами оплачивается только товар без акции).
+- **`isInStock(p)`** (`frontend/src/lib/offer.ts`): `extra.availability`
+  для HG, `extra.in_stock` для CrowdGames; для Лавки/GaGa возвращает
+  `true` (нет признака → считаем «в наличии»).
+- **Loyalty стратегия HG-бонусов**: «по каждому товару отдельно» —
+  для каждой строки делаем вид, что весь пул бонусов лёг именно на неё
+  (`min(pool, 0.15 × price)`). Это «оптимистичная» цена, при покупке
+  нескольких товаров одной корзиной суммарная скидка может быть меньше.
+  В `LoyaltyPanel` есть дисклеймер.
 
 ## Запреты
 
