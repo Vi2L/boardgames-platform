@@ -49,6 +49,9 @@ PRS (parsers), INFRA (общее).
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,
   пробующий replay'нуть DLQ-записи с экспоненциальным backoff;
   алерт при `attempt_count > 10`.
+- [PRS-2] **Парсер avito.ru** — C2C classifieds, зависит от [INFRA-5];
+  `ParsedProduct.raw`: condition, location, seller_type;
+  enrich (страница объявления) — не в первой итерации.
 - [WT-F5.3] **Status page** — `/status` с историей пингов и
   timeline'ом unmatched-counter'а (для ретроспектив).
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал
@@ -60,6 +63,10 @@ PRS (parsers), INFRA (общее).
   и `apps/mobile`.
 - [INFRA-4] **`.github/workflows/`** — CI с change detection
   (пересобирать только то, что менялось).
+- [INFRA-5] **`services/browser/`** — browser-as-a-service: FastAPI +
+  Playwright + playwright-stealth, `POST /fetch {url} → {html, cookies, headers}`;
+  профиль `browser` в docker-compose; `browser_client.py` в parsers
+  как тонкий httpx-клиент к этому сервису.
 
 ### Auth и безопасность
 - [WT-F6.1] **Закрыть `/api/debug/*` и `/api/dlq/*`** — nginx
