@@ -297,13 +297,19 @@ async def _attach_dicefest_data(
     """
     alias_id: int | None = None
     if raw.title_ru:
-        # Проверяем существующий alias (на случай повторной привязки той же raw).
+        # Проверяем существующий alias по `alias_norm` (lower+unaccent), а не
+        # по сырому `alias` — иначе пропускаем дубликат если ru-локализация
+        # уже добавлена другим источником (wikidata/manual) с другим регистром.
+        # UNIQUE constraint `uq_alias_per_game (game_id, alias_norm)` иначе даст
+        # IntegrityError при INSERT.
         existing_alias = (
             await session.execute(
-                select(GameAlias).where(
-                    GameAlias.game_id == game_id,
-                    GameAlias.alias == raw.title_ru,
-                )
+                text(
+                    "SELECT id FROM game_aliases "
+                    "WHERE game_id = :gid "
+                    "  AND alias_norm = lower(immutable_unaccent(:alias)) "
+                    "LIMIT 1"
+                ).bindparams(gid=game_id, alias=raw.title_ru)
             )
         ).scalar_one_or_none()
         if existing_alias is None:
@@ -318,7 +324,9 @@ async def _attach_dicefest_data(
             await session.flush()
             alias_id = alias.id
         else:
-            alias_id = existing_alias.id
+            # Alias уже существует (возможно от другого source) — переиспользуем,
+            # не создавая дубль.
+            alias_id = int(existing_alias)
 
     # Satellite. UNIQUE(game_id, slug) защищает от дублей.
     existing_sat = (
