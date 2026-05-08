@@ -341,14 +341,29 @@ function Section({ title, icon, hint, children }: {
       <div className="flex items-center gap-2 text-sm text-gray-300">
         {icon}
         <span className="font-medium">{title}</span>
-        {hint && (
-          <span title={hint} className="text-gray-600 hover:text-gray-400 cursor-help transition-colors">
-            <Info size={13} />
-          </span>
-        )}
+        {hint && <InfoTip text={hint} />}
       </div>
       {children}
     </div>
+  )
+}
+
+function InfoTip({ text }: { text: string }) {
+  return (
+    <span className="relative group inline-flex items-center">
+      <Info
+        size={13}
+        className="text-gray-600 group-hover:text-violet-400 cursor-help transition-colors"
+      />
+      <span className={[
+        'pointer-events-none absolute left-0 top-full mt-1.5 z-50',
+        'w-72 rounded-lg border border-gray-700 bg-gray-900 p-2.5 shadow-xl',
+        'text-xs text-gray-300 leading-relaxed',
+        'opacity-0 group-hover:opacity-100 transition-opacity duration-150',
+      ].join(' ')}>
+        {text}
+      </span>
+    </span>
   )
 }
 
