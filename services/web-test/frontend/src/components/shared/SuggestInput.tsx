@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Search, Clock, X } from 'lucide-react'
 import clsx from 'clsx'
 import { listCatalogGames, type CatalogGame } from '../../lib/catalog'
+import { GameSuggestRow } from './GameSuggestRow'
 import { useSearchHistory } from '../../lib/searchHistory'
 
 interface Props {
@@ -108,7 +109,7 @@ export function SuggestInput({
 
   function pickRow(r: Row) {
     if (r.kind === 'history') onChange(r.q)
-    else onChange(r.game.title)
+    else onChange(r.game.title_ru ?? r.game.title)
     setOpen(false)
     setActive(-1)
     inputRef.current?.focus()
@@ -233,25 +234,7 @@ function SuggestRow({
           )}
         </>
       ) : (
-        <>
-          {row.game.cover_url ? (
-            <img src={row.game.cover_url} alt="" className="w-7 h-7 object-contain rounded bg-gray-950 flex-shrink-0" />
-          ) : (
-            <div className="w-7 h-7 rounded bg-gray-950 flex-shrink-0" />
-          )}
-          <div className="flex-1 min-w-0">
-            <div className="truncate">
-              {row.game.title}
-              {row.game.title_ru && row.game.title_ru !== row.game.title && (
-                <span className="text-gray-500"> · {row.game.title_ru}</span>
-              )}
-            </div>
-            <div className="text-[10px] text-gray-500 font-mono">
-              #{row.game.id}{row.game.year ? ` · ${row.game.year}` : ''}
-              {row.game.kind && row.game.kind !== 'base' ? ` · ${row.game.kind}` : ''}
-            </div>
-          </div>
-        </>
+        <GameSuggestRow game={row.game} />
       )}
     </div>
   )

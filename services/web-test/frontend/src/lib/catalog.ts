@@ -45,6 +45,10 @@ export type CatalogGameList = {
   offset: number
 }
 
+/** RU-название если есть, иначе EN. Единая точка выбора отображаемого имени. */
+export const getDisplayName = (game: CatalogGame): string =>
+  game.title_ru ?? game.title
+
 export type CatalogGameAlias = {
   id: number
   alias: string
