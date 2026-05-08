@@ -23,6 +23,10 @@ from playwright_stealth import Stealth
 from pydantic import BaseModel, Field
 
 _MAX_CONCURRENT = int(os.getenv("BROWSER_MAX_CONCURRENT", "3"))
+# Прокси по умолчанию для всех запросов: SOCKS5/HTTP URL.
+# Авито и ряд других сайтов блокируют non-RU IP — без прокси они вернут 429.
+# Пример: BROWSER_PROXY_URL=socks5://user:pass@proxy.ru:1080
+_DEFAULT_PROXY: str | None = os.getenv("BROWSER_PROXY_URL") or None
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +43,8 @@ class FetchRequest(BaseModel):
     # stealth патчит navigator, WebGL и прочие fingerprint-точки через
     # playwright-stealth — основная причина существования этого сервиса.
     stealth: bool = True
+    # Переопределить прокси для этого запроса. None = использовать BROWSER_PROXY_URL.
+    proxy: str | None = None
 
 
 class FetchResponse(BaseModel):
@@ -94,6 +100,7 @@ async def info(request: Request):
         "playwright": pkg_version("playwright"),
         "chromium": browser.version,
         "max_concurrent": _MAX_CONCURRENT,
+        "proxy_configured": _DEFAULT_PROXY is not None,
     }
 
 
@@ -110,7 +117,11 @@ async def fetch(req: FetchRequest, request: Request):
     t0 = time.monotonic()
 
     async with semaphore:
-        context = await browser.new_context()
+        effective_proxy = req.proxy or _DEFAULT_PROXY
+        context_kwargs = {}
+        if effective_proxy:
+            context_kwargs["proxy"] = {"server": effective_proxy}
+        context = await browser.new_context(**context_kwargs)
         try:
             page = await context.new_page()
 

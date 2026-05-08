@@ -11,6 +11,7 @@ from fastapi import FastAPI, HTTPException, Query
 
 from .browser_client import BrowserClient
 from .catalog_publisher import CatalogPublisher
+from .stores.avito import AvitoParser
 from .db import PriceDatabase
 from .service import PriceService
 from .stats_api import router as stats_router
@@ -53,12 +54,22 @@ async def lifespan(app: FastAPI):
     _catalog_publisher.attach_db(_db)
     await _catalog_publisher.start()
 
+    # Browser-as-a-service: создаём до списка парсеров — AvitoParser получает его в конструктор.
+    if browser_url:
+        _browser_client = BrowserClient(browser_url)
+        import logging
+        logging.getLogger(__name__).info("browser_client initialized: %s", browser_url)
+    app.state.browser_client = _browser_client
+
     parsers = [
         HobbyGamesParser(proxy=proxy),
         LavkaIgrParser(proxy=proxy),
         GagaParser(proxy=proxy),
         CrowdGamesParser(proxy=proxy),
     ]
+    # Авито использует browser-as-a-service: добавляем только если он доступен.
+    if _browser_client:
+        parsers.append(AvitoParser(browser_client=_browser_client))
 
     # Регистрируем магазины в БД и подмешиваем _db для SnapshotRecorder.
     # Парсер не зависит от БД для базовой работы; _db нужен только при
@@ -71,16 +82,6 @@ async def lifespan(app: FastAPI):
         _db, parsers, cache_ttl_hours=ttl, catalog_publisher=_catalog_publisher
     )
     stats_set_db(_db)
-
-    # Опциональный browser-as-a-service клиент. Если BROWSER_SERVICE_URL задан —
-    # создаём клиент и вешаем на app.state для доступа из будущих парсеров.
-    if browser_url:
-        _browser_client = BrowserClient(browser_url)
-        app.state.browser_client = _browser_client
-        import logging
-        logging.getLogger(__name__).info("browser_client initialized: %s", browser_url)
-    else:
-        app.state.browser_client = None
 
     yield  # приложение работает
 

@@ -11,6 +11,8 @@ dependencies = [
     # Общие контракты с catalog — IngestRequest/IngestOfferIn.
     # Workspace-source берёт из packages/shared-py (см. корневой pyproject.toml).
     "bg-shared",
+    # HTML-парсинг для avito.ru (фолбэк при отсутствии embedded JSON)
+    "beautifulsoup4>=4.12",
 ]
 
 [project.optional-dependencies]

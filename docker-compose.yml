@@ -154,6 +154,9 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       # Ограничивает параллельные BrowserContext (~150-200 MB RAM каждый).
       BROWSER_MAX_CONCURRENT: ${BROWSER_MAX_CONCURRENT:-3}
+      # Прокси для всех fetch-запросов. Авито и другие сайты с GeoIP-блокировкой
+      # требуют RU-прокси. Пример: socks5://user:pass@proxy.ru:1080
+      BROWSER_PROXY_URL: ${BROWSER_PROXY_URL:-}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
       interval: 30s

@@ -49,6 +49,7 @@ class BrowserClient:
         timeout_ms: int = 30_000,
         extra_headers: dict[str, str] | None = None,
         stealth: bool = True,
+        proxy: str | None = None,
     ) -> dict:
         """POST /fetch → словарь с ключами:
             html, status, url, headers, cookies, elapsed_ms.
@@ -63,6 +64,8 @@ class BrowserClient:
         }
         if extra_headers:
             payload["extra_headers"] = extra_headers
+        if proxy:
+            payload["proxy"] = proxy
 
         resp = await self._client.post("/fetch", json=payload)
         if resp.is_error:
