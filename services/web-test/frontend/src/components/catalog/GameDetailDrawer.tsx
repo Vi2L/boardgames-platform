@@ -50,15 +50,14 @@ interface Props {
   onClose: () => void
 }
 
-type TabId = 'overview' | 'localization' | 'aliases' | 'offers' | 'children' | 'sources' | 'audit' | 'raw'
+// Все метаданные игры (включая локализацию РФ, алиасы, источники, детей)
+// собраны в одну вкладку «Обзор» — длинный скролл с collapsible-секциями
+// удобнее, чем прыжки между мелкими табами.
+type TabId = 'overview' | 'offers' | 'audit' | 'raw'
 
 const TABS: Array<{ id: TabId; label: string }> = [
   { id: 'overview', label: 'Обзор' },
-  { id: 'localization', label: 'Локализация РФ' },
-  { id: 'aliases', label: 'Алиасы' },
   { id: 'offers', label: 'Offers' },
-  { id: 'children', label: 'Дети' },
-  { id: 'sources', label: 'Источники' },
   { id: 'audit', label: 'Аудит' },
   { id: 'raw', label: 'Raw' },
 ]
@@ -156,11 +155,7 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
               <Inconsistencies game={data} />
 
               {tab === 'overview' && <OverviewTab game={data} />}
-              {tab === 'localization' && <LocalizationTab game={data} />}
-              {tab === 'aliases' && <AliasesTab game={data} />}
               {tab === 'offers' && <OffersTab gameId={data.id} />}
-              {tab === 'children' && <ChildrenTab gameId={data.id} />}
-              {tab === 'sources' && <SourcesTab game={data} />}
               {tab === 'audit' && <AuditTab game={data} />}
               {tab === 'raw' && <RawTab game={data} />}
             </>
@@ -257,19 +252,7 @@ function OverviewTab({ game }: { game: CatalogGameDetail }) {
         )}
       </Section>
 
-      <div className="text-[10px] text-gray-500 font-mono pt-2 border-t border-gray-800">
-        created: {game.created_at.slice(0, 16).replace('T', ' ')} · updated: {game.updated_at.slice(0, 16).replace('T', ' ')}
-      </div>
-    </div>
-  )
-}
-
-// ─── Tab: Локализация РФ ─────────────────────────────────────────────
-
-function LocalizationTab({ game }: { game: CatalogGameDetail }) {
-  return (
-    <div className="space-y-4">
-      <Section title="Издание в РФ">
+      <Section title="Локализация РФ">
         <div className="space-y-1.5 text-xs">
           <InlineEditField game={game} field="ru_publisher" type="text" label="издатель РФ" />
           <InlineEditField game={game} field="ru_release_year" type="number" label="год РФ" />
@@ -278,7 +261,7 @@ function LocalizationTab({ game }: { game: CatalogGameDetail }) {
         </div>
       </Section>
 
-      <Section title="Внешние ID">
+      <Section title="Внешние ID и ссылки">
         <div className="space-y-1.5 text-xs">
           <Field label="bgg_id" value={game.bgg_id != null ? String(game.bgg_id) : ''} mono
                  link={game.bgg_id ? `https://boardgamegeek.com/boardgame/${game.bgg_id}` : undefined} />
@@ -291,36 +274,66 @@ function LocalizationTab({ game }: { game: CatalogGameDetail }) {
                       ? game.nastolio_id
                       : `https://nastolio.ru/games/${game.nastolio_id}/`)
                    : undefined} />
+          <Field label="wikidata" value={game.wikidata?.entity_id ?? ''} mono
+                 link={game.wikidata?.entity_id
+                   ? `https://www.wikidata.org/wiki/${game.wikidata.entity_id}`
+                   : undefined} />
         </div>
       </Section>
 
-      {game.dicefest_id && <DicefestRawSidebar dicefestId={game.dicefest_id} game={game} />}
+      {/* Side-by-side с staging-записью dicefest. Lazy: запрос идёт только
+          при первом раскрытии секции (render-prop в <Section>). */}
+      {game.dicefest_id && (
+        <Section title={`Raw из dicefest_raw_games #${game.dicefest_id}`} defaultOpen={false}>
+          {() => <DicefestRawSidebar dicefestId={game.dicefest_id!} game={game} />}
+        </Section>
+      )}
+
+      <Section title={`BGG satellite${game.bgg ? '' : ' — нет данных'}`} defaultOpen={false}>
+        {game.bgg ? <BggCard bgg={game.bgg} /> : <Empty msg="Запустите POST /import/bgg для обогащения." />}
+      </Section>
+
+      <Section title={`Wikidata satellite${game.wikidata ? '' : ' — нет данных'}`} defaultOpen={false}>
+        {game.wikidata ? <WikidataCard wikidata={game.wikidata} /> : <Empty msg="Запустите python -m catalog.scripts.import_wikidata." />}
+      </Section>
+
+      <Section title={`Алиасы (${game.aliases.length})`} defaultOpen={false}>
+        <AliasesContent game={game} />
+      </Section>
+
+      {/* Lazy — useQuery запускается только когда секция открыта (mount при render-prop call). */}
+      <Section title="Дети (допы / промо / аксессуары)" defaultOpen={false}>
+        {() => <ChildrenContent gameId={game.id} />}
+      </Section>
+
+      <div className="text-[10px] text-gray-500 font-mono pt-2 border-t border-gray-800">
+        created: {game.created_at.slice(0, 16).replace('T', ' ')} · updated: {game.updated_at.slice(0, 16).replace('T', ' ')}
+      </div>
     </div>
   )
 }
 
 function DicefestRawSidebar({ dicefestId, game }: { dicefestId: number; game: CatalogGameDetail }) {
+  // Lazy-mount внутри <Section> — запрос идёт только когда оператор раскрыл
+  // секцию. <Section> уже обёрнута снаружи (см. OverviewTab).
   const { data, isLoading } = useQuery({
     queryKey: ['catalog', 'dicefest-raw', dicefestId],
     queryFn: () => fetchPromotionDicefestRaw(dicefestId),
   })
+  if (isLoading) return <Loader2 size={14} className="animate-spin text-gray-500" />
+  if (!data) return null
   return (
-    <Section title={`Raw из dicefest_raw_games #${dicefestId}`}>
-      {isLoading && <Loader2 size={14} className="animate-spin text-gray-500" />}
-      {data && (
-        <div className="grid grid-cols-2 gap-3 text-xs bg-gray-950/60 rounded p-3 border border-gray-800">
-          <CompareCell label="title_ru" canonical={game.title} raw={data.title_ru} />
-          <CompareCell label="publisher" canonical={game.ru_publisher} raw={data.publisher} />
-          <CompareCell label="preorder" canonical={fmtKop(game.preorder_price)} raw={fmtKop(data.preorder_price)} />
-          <CompareCell label="status (raw)" canonical={null} raw={data.status} />
-          <div className="col-span-2 text-[10px] text-gray-500 font-mono">
-            <a href={data.page_url} target="_blank" rel="noreferrer" className="hover:text-gray-300 underline">
-              {data.page_url}
-            </a>
-          </div>
-        </div>
-      )}
-    </Section>
+    <div className="grid grid-cols-2 gap-3 text-xs bg-gray-950/60 rounded p-3 border border-gray-800">
+      <CompareCell label="title_ru" canonical={game.title} raw={data.title_ru} />
+      <CompareCell label="publisher" canonical={game.ru_publisher} raw={data.publisher} />
+      <CompareCell label="preorder" canonical={fmtKop(game.preorder_price)} raw={fmtKop(data.preorder_price)} />
+      <CompareCell label="status (raw)" canonical={null} raw={data.status} />
+      <div className="col-span-2 text-[10px] text-gray-500 font-mono">
+        <a href={data.page_url} target="_blank" rel="noreferrer" className="hover:text-gray-300 underline">
+          {data.page_url}
+        </a>
+      </div>
+    </div>
   )
 }
 
@@ -339,9 +352,9 @@ function CompareCell({ label, canonical, raw }: { label: string; canonical: stri
   )
 }
 
-// ─── Tab: Алиасы ─────────────────────────────────────────────────────
+// ─── Алиасы (inline-секция в OverviewTab) ────────────────────────────
 
-function AliasesTab({ game }: { game: CatalogGameDetail }) {
+function AliasesContent({ game }: { game: CatalogGameDetail }) {
   const groups = useMemo(() => {
     const by = new Map<string, typeof game.aliases>()
     for (const a of game.aliases) {
@@ -363,10 +376,6 @@ function AliasesTab({ game }: { game: CatalogGameDetail }) {
 
   return (
     <div className="space-y-3">
-      <div className="text-xs text-gray-500">
-        Всего: {game.aliases.length} · группировка по language. CRUD ниже работает через AliasEditor — добавление/правка/удаление мутируют через PATCH /games/{game.id}/aliases.
-      </div>
-
       {groups.map(g => (
         <div key={g.lang} className="space-y-1">
           <div className="text-[10px] uppercase tracking-wide text-gray-500">
@@ -516,9 +525,11 @@ function OffersTab({ gameId }: { gameId: number }) {
   )
 }
 
-// ─── Tab: Дети ───────────────────────────────────────────────────────
+// ─── Дети (inline-секция в OverviewTab, lazy-mount) ──────────────────
 
-function ChildrenTab({ gameId }: { gameId: number }) {
+function ChildrenContent({ gameId }: { gameId: number }) {
+  // Монтируется только при раскрытии секции — useQuery стартует здесь же
+  // и не нагружает первый рендер drawer.
   const { data, isLoading } = useQuery({
     queryKey: ['catalog', 'game-children', gameId],
     queryFn: () => fetchGameChildren(gameId),
@@ -551,57 +562,6 @@ function ChildrenTab({ gameId }: { gameId: number }) {
           </div>
         ))}
       </div>
-    </div>
-  )
-}
-
-// ─── Tab: Источники ──────────────────────────────────────────────────
-
-function SourcesTab({ game }: { game: CatalogGameDetail }) {
-  return (
-    <div className="space-y-3">
-      <Section title="External link badges">
-        <div className="flex flex-wrap gap-2 text-xs">
-          {game.bgg_id && (
-            <Link href={`https://boardgamegeek.com/boardgame/${game.bgg_id}`}
-                  label={`BGG #${game.bgg_id}`} color="bg-orange-900/40 text-orange-200" />
-          )}
-          {game.tesera_id && (
-            <Link href={`https://tesera.ru/game/${game.tesera_id}/`}
-                  label={`Tesera #${game.tesera_id}`} color="bg-cyan-900/40 text-cyan-200" />
-          )}
-          {game.dicefest_id && (
-            <span className="px-2 py-1 rounded bg-purple-900/40 text-purple-200">
-              Dicefest #{game.dicefest_id}
-            </span>
-          )}
-          {game.nastolio_id && (
-            <Link
-              href={game.nastolio_id.startsWith('http')
-                ? game.nastolio_id
-                : `https://nastolio.ru/games/${game.nastolio_id}/`}
-              label="Nastolio"
-              color="bg-emerald-900/40 text-emerald-200"
-            />
-          )}
-          {game.wikidata?.entity_id && (
-            <Link href={`https://www.wikidata.org/wiki/${game.wikidata.entity_id}`}
-                  label={`Wikidata ${game.wikidata.entity_id}`} color="bg-blue-900/40 text-blue-200" />
-          )}
-          {!game.bgg_id && !game.tesera_id && !game.dicefest_id
-            && !game.nastolio_id && !game.wikidata?.entity_id && (
-            <span className="text-xs text-gray-500 italic">Нет привязок к внешним каталогам.</span>
-          )}
-        </div>
-      </Section>
-
-      <Section title={`BGG satellite${game.bgg ? '' : ' — нет данных'}`}>
-        {game.bgg ? <BggCard bgg={game.bgg} /> : <Empty msg="Запустите POST /import/bgg для обогащения." />}
-      </Section>
-
-      <Section title={`Wikidata satellite${game.wikidata ? '' : ' — нет данных'}`}>
-        {game.wikidata ? <WikidataCard wikidata={game.wikidata} /> : <Empty msg="Запустите python -m catalog.scripts.import_wikidata." />}
-      </Section>
     </div>
   )
 }
@@ -834,7 +794,17 @@ function KindBadge({ kind }: { kind: CatalogGameKind }) {
   )
 }
 
-function Section({ title, children, defaultOpen = true }: { title: string; children: React.ReactNode; defaultOpen?: boolean }) {
+function Section({
+  title, children, defaultOpen = true,
+}: {
+  title: string
+  // Render-prop форма (`(open) => ReactNode`) — для тяжёлых секций,
+  // которые делают useQuery: пока секция закрыта, дочерний компонент
+  // не смонтирован и запрос не идёт. Простая ReactNode подходит для
+  // лёгкого статичного контента.
+  children: React.ReactNode | ((open: boolean) => React.ReactNode)
+  defaultOpen?: boolean
+}) {
   const [open, setOpen] = useState(defaultOpen)
   return (
     <div className="space-y-2">
@@ -843,7 +813,7 @@ function Section({ title, children, defaultOpen = true }: { title: string; child
         {open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}
         {title}
       </button>
-      {open && <div>{children}</div>}
+      {open && <div>{typeof children === 'function' ? children(open) : children}</div>}
     </div>
   )
 }
