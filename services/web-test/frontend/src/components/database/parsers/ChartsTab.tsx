@@ -108,7 +108,11 @@ export function ChartsTab() {
       </div>
 
       {/* ── 1. Timeline ─────────────────────────────────────────────── */}
-      <Section title="Timeline запросов" icon={<BarChart2 size={14} />}>
+      <Section
+        title="Timeline запросов"
+        icon={<BarChart2 size={14} />}
+        hint="Распределение запросов /search по источнику ответа за выбранный период. cache — ответ из TTL-кеша parsers (без HTTP к магазинам). network — свежий парсинг хотя бы одного магазина. partial — все магазины упали, вернули устаревший кеш. errors — технические сбои."
+      >
         {timeline.isLoading ? <Loader /> : timeline.data && timeline.data.length > 0 ? (
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={timeline.data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
@@ -135,7 +139,11 @@ export function ChartsTab() {
       </Section>
 
       {/* ── 2. Latency Histogram ────────────────────────────────────── */}
-      <Section title="Гистограмма latency /search" icon={<TrendingUp size={14} />}>
+      <Section
+        title="Гистограмма latency /search"
+        icon={<TrendingUp size={14} />}
+        hint="Сколько запросов /search уложились в каждый временной бин. Большой хвост в «1-3с» или «>3с» указывает на медленные парсеры или rate-limit магазина. Бин «<100мс» — почти всегда cache-hit (HTTP к магазинам не было)."
+      >
         {histogram.isLoading ? <Loader /> : histogram.data && histogram.data.length > 0 ? (
           <ResponsiveContainer width="100%" height={160}>
             <BarChart data={histogram.data} margin={{ top: 4, right: 8, left: 0, bottom: 4 }}>
@@ -153,7 +161,11 @@ export function ChartsTab() {
       </Section>
 
       {/* ── 3. Store Distribution ───────────────────────────────────── */}
-      <Section title="Нагрузка по магазинам" icon={<PieChart size={14} />}>
+      <Section
+        title="Нагрузка по магазинам"
+        icon={<PieChart size={14} />}
+        hint="Доля вызовов каждого парсера за выбранный период. В норме ~25% на каждый из 4 магазинов. avg рез. = 0 при большом числе вызовов — признак тихих сбоев: парсер отвечает успешно, но возвращает 0 товаров (сайт магазина изменился)."
+      >
         {distribution.isLoading ? <Loader /> : distribution.data && distribution.data.length > 0 ? (
           <div className="space-y-3">
             <ResponsiveContainer width="100%" height={150}>
@@ -201,7 +213,11 @@ export function ChartsTab() {
       </Section>
 
       {/* ── 4. Parser Breakdown (Search vs Enrich) ──────────────────── */}
-      <Section title="Search vs Enrich latency" icon={<Cpu size={14} />}>
+      <Section
+        title="Search vs Enrich latency"
+        icon={<Cpu size={14} />}
+        hint="Разбивка времени вызова парсера на две фазы. search — HTTP-запрос к поисковому endpoint магазина. enrich — параллельный fetch страниц отдельных товаров для обогащения данных (фото, описание, players и т.д.). enrich = «—» означает отсутствие фазы обогащения (CrowdGames — локальный поиск по кешу каталога)."
+      >
         {breakdown.isLoading ? <Loader /> : breakdown.data && breakdown.data.length > 0 ? (
           <div className="space-y-3">
             <ResponsiveContainer width="100%" height={180}>
@@ -269,7 +285,11 @@ export function ChartsTab() {
       </Section>
 
       {/* ── 5. Raw Keys ─────────────────────────────────────────────── */}
-      <Section title="Raw-ключи в extra" icon={<Key size={14} />}>
+      <Section
+        title="Raw-ключи в extra"
+        icon={<Key size={14} />}
+        hint="Топ ключей, которые парсеры кладут в поле extra каждого товара. Эти ключи используются для sale-бейджей (on_sale), программ лояльности (original_price, availability), фильтрации наличия (in_stock, availability). Помогает понять, какие данные реально приходят от каждого магазина."
+      >
         <div className="flex items-center gap-2 text-xs mb-3">
           <span className="text-gray-500" title="Топ N ключей per-store">Top N:</span>
           {[5, 10, 20].map(n => (
@@ -313,13 +333,19 @@ export function ChartsTab() {
 
 // ── Helpers ──────────────────────────────────────────────────────────────
 
-function Section({ title, icon, children }: {
-  title: string; icon: React.ReactNode; children: React.ReactNode
+function Section({ title, icon, hint, children }: {
+  title: string; icon: React.ReactNode; hint?: string; children: React.ReactNode
 }) {
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-2 text-sm text-gray-300">
-        {icon} <span className="font-medium">{title}</span>
+        {icon}
+        <span className="font-medium">{title}</span>
+        {hint && (
+          <span title={hint} className="text-gray-600 hover:text-gray-400 cursor-help transition-colors">
+            <Info size={13} />
+          </span>
+        )}
       </div>
       {children}
     </div>
