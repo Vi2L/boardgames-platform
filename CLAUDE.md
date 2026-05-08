@@ -156,10 +156,6 @@ npm run build  # производит dist/, FastAPI отдаёт его как 
 
 ## Roadmap
 
-- `apps/web/` — пользовательский веб-портал (Next.js / Vite + React)
-- `apps/mobile/` — React Native / Expo для записи партий и коллекций
-- `packages/shared-py/` — общие pydantic-схемы (вынести `IngestRequest` из
-  дубликатов в parsers + catalog). Будет workspace member.
-- `packages/shared-ts/` — TypeScript-клиент catalog API (генерируется из
-  `/openapi.json`).
-- `.github/workflows/` — CI с change detection (пересобирать только что менялось).
+Источник правды — [`docs/roadmap.md`](docs/roadmap.md): что в работе,
+что в ближайшем плане, что в бэклоге, архив решений. Корневой CLAUDE.md
+не дублирует, чтобы не расходиться.
