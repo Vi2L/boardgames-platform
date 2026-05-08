@@ -57,6 +57,27 @@ async def ingest_offers(
     unmatched_count = 0
 
     for product in payload.products:
+        # Нормализованные поля: берём из явного поля payload, иначе пытаемся
+        # вытащить из extra (для обратной совместимости со старыми клиентами,
+        # которые ещё не обновлены под новый контракт). Парсеры magasинов
+        # кладут разные ключи в extra — see migration 0006 backfill.
+        extra = product.extra or {}
+        sku = product.sku if product.sku is not None else extra.get("sku")
+        in_stock = product.in_stock
+        if in_stock is None:
+            # HobbyGames → 'availability', Crowd Games → 'in_stock'
+            for key in ("availability", "in_stock"):
+                v = extra.get(key)
+                if isinstance(v, bool):
+                    in_stock = v
+                    break
+        original_price = product.original_price
+        if original_price is None:
+            v = extra.get("original_price")
+            if isinstance(v, int):
+                original_price = v
+        is_preorder = product.is_preorder
+
         # Upsert offer. ON CONFLICT — обновляем last_*, оставляем существующий
         # game_id и match_status (могли быть manual/rejected).
         upsert = (
@@ -71,6 +92,10 @@ async def ingest_offers(
                 last_seen_at=fetched_at,
                 match_status="unmatched",  # будет перезаписан ниже, если auto-match
                 raw_extra=product.extra,
+                sku=sku,
+                in_stock=in_stock,
+                original_price=original_price,
+                is_preorder=is_preorder,
             )
             .on_conflict_do_update(
                 constraint="uq_offer_store_external",
@@ -81,6 +106,10 @@ async def ingest_offers(
                     "last_price": product.price,
                     "last_seen_at": fetched_at,
                     "raw_extra": product.extra,
+                    "sku": sku,
+                    "in_stock": in_stock,
+                    "original_price": original_price,
+                    "is_preorder": is_preorder,
                 },
             )
             .returning(

@@ -217,6 +217,13 @@ X-API-Key: <ingest scope>     ← обязателен только при REQUI
       "url": "https://hobbygames.ru/.../",
       "price": 169500,                          // в копейках, nullable
       "image_url": "https://...",               // nullable
+      // Нормализованные поля магазина (миграция 0006). Все опциональны;
+      // если не указаны — catalog пытается извлечь из `extra` (HobbyGames
+      // кладёт sku/availability, Crowd Games — in_stock).
+      "sku": "HB0001234",                       // nullable
+      "in_stock": true,                          // nullable: true | false | null (неизвестно)
+      "original_price": 199000,                  // nullable, копейки до скидки
+      "is_preorder": false,                      // nullable
       "extra": {                                // ParsedProduct.raw из parsers
         "gallery": ["..."],
         "tags": [...],

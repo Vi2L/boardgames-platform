@@ -222,6 +222,60 @@ async def test_manual_link_freezes_match(client: AsyncClient):
     assert item["game_id"] == gid
 
 
+async def test_ingest_writes_normalized_offer_fields(client: AsyncClient):
+    """Миграция 0006: sku/in_stock/original_price/is_preorder из payload
+    попадают в типизированные колонки offers, а не только в raw_extra.
+
+    Проверяем три источника попадания в БД:
+      - явные поля payload (sku, in_stock, original_price);
+      - извлечение из extra при отсутствии явного поля (HobbyGames кладёт
+        sku в extra; Crowd Games — in_stock; HG — availability/original_price);
+      - is_preorder отдельно (пока приходит только явным полем).
+    """
+    await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "hobbygames",
+            "products": [
+                {
+                    "external_id": "1",
+                    "title": "Carcassonne",
+                    "url": "https://h.ru/1",
+                    "price": 169500,
+                    "sku": "HB-CARC",
+                    "in_stock": True,
+                    "original_price": 199000,
+                    "is_preorder": False,
+                },
+                # Без явных полей — должно подняться из extra (имитация
+                # HobbyGames-старого клиента, который не обновлён под новый
+                # контракт).
+                {
+                    "external_id": "2",
+                    "title": "Pandemic",
+                    "url": "https://h.ru/2",
+                    "price": 250000,
+                    "extra": {
+                        "sku": "HB-PAND",
+                        "availability": False,
+                        "original_price": 270000,
+                    },
+                },
+            ],
+        },
+    )
+    queue = (await client.get("/matching/queue?limit=50")).json()
+    items = {it["external_id"]: it for it in queue["items"]}
+    assert items["1"]["sku"] == "HB-CARC"
+    assert items["1"]["in_stock"] is True
+    assert items["1"]["original_price"] == 199000
+    assert items["1"]["is_preorder"] is False
+    # Поднятие из extra
+    assert items["2"]["sku"] == "HB-PAND"
+    assert items["2"]["in_stock"] is False
+    assert items["2"]["original_price"] == 270000
+
+
 async def test_reject_offer(client: AsyncClient):
     await client.post(
         "/ingest/offers",

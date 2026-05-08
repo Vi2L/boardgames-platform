@@ -116,6 +116,26 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
                   {data.publishers && data.publishers.length > 0 && (
                     <Field label="издатели" value={data.publishers.join(', ')} />
                   )}
+                  {/* Тип игры — показываем только не-base, чтобы не шуметь */}
+                  {data.kind && data.kind !== 'base' && (
+                    <Field label="тип" value={data.kind} mono />
+                  )}
+                  {data.parent_game_id && (
+                    <Field label="parent_game_id" value={`#${data.parent_game_id}`} mono />
+                  )}
+                  {/* Локализация в РФ */}
+                  {data.ru_publisher && (
+                    <Field label="издатель РФ" value={data.ru_publisher} />
+                  )}
+                  {data.ru_release_year && (
+                    <Field label="год РФ" value={String(data.ru_release_year)} />
+                  )}
+                  {data.preorder_price != null && (
+                    <Field
+                      label="предзаказ"
+                      value={`${(data.preorder_price / 100).toLocaleString('ru-RU')} ₽`}
+                    />
+                  )}
                 </div>
               </div>
 
@@ -145,11 +165,30 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
                     <Link href={`https://tesera.ru/game/${data.tesera_id}/`}
                           label={`Tesera #${data.tesera_id}`} color="bg-cyan-900/40 text-cyan-200" />
                   )}
+                  {/* dicefest_id — без публичного URL, у dicefest нет /id/N (только slug). */}
+                  {data.dicefest_id && (
+                    <span className="px-2 py-1 rounded text-xs bg-purple-900/40 text-purple-200">
+                      Dicefest #{data.dicefest_id}
+                    </span>
+                  )}
+                  {/* nastolio_id — это slug или URL (см. catalog миграция 0006) */}
+                  {data.nastolio_id && (
+                    <Link
+                      href={
+                        data.nastolio_id.startsWith('http')
+                          ? data.nastolio_id
+                          : `https://nastolio.ru/games/${data.nastolio_id}/`
+                      }
+                      label="Nastolio"
+                      color="bg-emerald-900/40 text-emerald-200"
+                    />
+                  )}
                   {data.wikidata?.entity_id && (
                     <Link href={`https://www.wikidata.org/wiki/${data.wikidata.entity_id}`}
                           label={`Wikidata ${data.wikidata.entity_id}`} color="bg-blue-900/40 text-blue-200" />
                   )}
-                  {!data.bgg_id && !data.tesera_id && !data.wikidata?.entity_id && (
+                  {!data.bgg_id && !data.tesera_id && !data.dicefest_id
+                    && !data.nastolio_id && !data.wikidata?.entity_id && (
                     <span className="text-xs text-gray-500 italic">Нет привязок к внешним каталогам.</span>
                   )}
                 </div>

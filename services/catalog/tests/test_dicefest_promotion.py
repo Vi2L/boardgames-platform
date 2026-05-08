@@ -189,6 +189,15 @@ async def test_promote_link_creates_alias_and_satellite(session: AsyncSession) -
     assert log.action == "link"
     assert log.satellite_created is True
 
+    # Денормализация в games (миграция 0006): publisher / preorder_price /
+    # dicefest_id / is_localized_ru / bgg_id из external_links.
+    await session.refresh(g)
+    assert g.ru_publisher == "4GAMES"
+    assert g.preorder_price == 290000
+    assert g.dicefest_id == raw.id
+    assert g.is_localized_ru is True
+    assert g.bgg_id == 447570       # извлечён из external_links
+
 
 # ─── 4. promote create → new game + alias + satellite ────────────────────────
 

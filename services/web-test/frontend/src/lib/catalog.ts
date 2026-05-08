@@ -10,6 +10,8 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>
 }
 
+export type CatalogGameKind = 'base' | 'expansion' | 'promo' | 'accessory'
+
 export type CatalogGame = {
   id: number
   slug: string
@@ -17,6 +19,17 @@ export type CatalogGame = {
   year: number | null
   bgg_id: number | null
   tesera_id: number | null
+  // Внешние ID других каталогов (миграция 0006)
+  dicefest_id: number | null
+  nastolio_id: string | null
+  // Тип и связь с базовой игрой (миграция 0006)
+  kind: CatalogGameKind
+  parent_game_id: number | null
+  // Локализация в РФ (миграция 0006)
+  ru_publisher: string | null
+  ru_release_year: number | null
+  is_localized_ru: boolean
+  preorder_price: number | null  // копейки
   source: string
   status: string
   cover_url: string | null
@@ -100,6 +113,11 @@ export type CatalogOffer = {
   last_price: number | null
   match_status: string
   match_score: number | null
+  // Нормализованные поля магазина (миграция 0006)
+  sku: string | null
+  in_stock: boolean | null
+  original_price: number | null   // копейки до скидки
+  is_preorder: boolean | null
 }
 
 export type CatalogQueue = {
@@ -227,8 +245,16 @@ export type GameCreatePayload = {
   playtime_max?: number | null
   bgg_id?: number | null
   tesera_id?: number | null
+  dicefest_id?: number | null
+  nastolio_id?: string | null
   cover_url?: string | null
   description?: string | null
+  kind?: CatalogGameKind
+  parent_game_id?: number | null
+  ru_publisher?: string | null
+  ru_release_year?: number | null
+  is_localized_ru?: boolean
+  preorder_price?: number | null
   source?: string
 }
 

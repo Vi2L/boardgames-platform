@@ -41,9 +41,20 @@ class GameOut(_ORMBase):
     playtime_max: int | None = None
     bgg_id: int | None = None
     tesera_id: int | None = None
+    # External IDs других каталогов (миграция 0006)
+    dicefest_id: int | None = None
+    nastolio_id: str | None = None
     cover_url: str | None = None
     description: str | None = None
     meta: dict[str, Any] | None = None
+    # Тип игры и связь с базой (миграция 0006)
+    kind: str = "base"  # base | expansion | promo | accessory
+    parent_game_id: int | None = None
+    # Локализация в РФ (миграция 0006)
+    ru_publisher: str | None = None
+    ru_release_year: int | None = None
+    is_localized_ru: bool = False
+    preorder_price: int | None = None  # копейки
     source: str
     status: str
     created_at: datetime
@@ -94,6 +105,11 @@ class GameDetailOut(GameOut):
     wikidata: GameWikidataOut | None = None
 
 
+# Допустимые значения kind. Хранится строкой (не PG ENUM), валидация — на
+# уровне Pydantic. Расширять enum в будущем без ALTER TYPE.
+GAME_KINDS = ("base", "expansion", "promo", "accessory")
+
+
 class GameCreate(BaseModel):
     """Ручное создание Game через POST /games."""
     slug: str = Field(min_length=1, max_length=255, pattern=r"^[a-z0-9][a-z0-9\-]*$")
@@ -108,9 +124,17 @@ class GameCreate(BaseModel):
     playtime_max: int | None = None
     bgg_id: int | None = None
     tesera_id: int | None = None
+    dicefest_id: int | None = None
+    nastolio_id: str | None = None
     cover_url: str | None = None
     description: str | None = None
     meta: dict[str, Any] | None = None
+    kind: str = Field(default="base", pattern=r"^(base|expansion|promo|accessory)$")
+    parent_game_id: int | None = None
+    ru_publisher: str | None = None
+    ru_release_year: int | None = None
+    is_localized_ru: bool = False
+    preorder_price: int | None = None
     source: str = "manual"
 
 
@@ -127,10 +151,18 @@ class GamePatch(BaseModel):
     playtime_max: int | None = None
     bgg_id: int | None = None
     tesera_id: int | None = None
+    dicefest_id: int | None = None
+    nastolio_id: str | None = None
     cover_url: str | None = None
     description: str | None = None
     meta: dict[str, Any] | None = None
     status: str | None = None
+    kind: str | None = Field(default=None, pattern=r"^(base|expansion|promo|accessory)$")
+    parent_game_id: int | None = None
+    ru_publisher: str | None = None
+    ru_release_year: int | None = None
+    is_localized_ru: bool | None = None
+    preorder_price: int | None = None
 
 
 class AliasCreate(BaseModel):
@@ -197,6 +229,13 @@ class IngestOfferIn(BaseModel):
     url: str
     price: int | None = None  # копейки
     image_url: str | None = None
+    # Нормализованные поля магазина (миграция 0006). Все опциональны:
+    # старый клиент может не отправлять — поведение остаётся прежним
+    # (значения берутся из extra только если parser их положит).
+    sku: str | None = None
+    in_stock: bool | None = None
+    original_price: int | None = None  # копейки до скидки
+    is_preorder: bool | None = None
     extra: dict[str, Any] | None = None
 
 
@@ -236,6 +275,13 @@ class OfferOut(_ORMBase):
     last_seen_at: datetime
     match_status: str
     match_score: float | None
+    # Нормализованные поля магазина (миграция 0006). nullable во всех случаях
+    # — данные есть не у всех парсеров (HobbyGames кладёт sku/availability,
+    # Crowd Games — in_stock, Лавка/GaGa — пока ничего).
+    sku: str | None = None
+    in_stock: bool | None = None
+    original_price: int | None = None
+    is_preorder: bool | None = None
 
 
 class MatchingQueueOut(BaseModel):

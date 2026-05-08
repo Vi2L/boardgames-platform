@@ -69,12 +69,44 @@ class Game(Base):
 
     bgg_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
     tesera_id: Mapped[int | None] = mapped_column(Integer, unique=True, index=True)
+    # Внешние ID других каталогов (миграция 0006). Денормализуются при
+    # промоушене из dicefest_raw_games (id) и из external_links[kind='nastolio'].
+    # Partial-unique индекс (WHERE NOT NULL) определён в миграции — SQLAlchemy
+    # отдельный декларативный constraint не нужен, ORM просто читает значения.
+    dicefest_id: Mapped[int | None] = mapped_column(BigInteger)
+    nastolio_id: Mapped[str | None] = mapped_column(Text)
 
     cover_url: Mapped[str | None] = mapped_column(Text)
     description: Mapped[str | None] = mapped_column(Text)
     # meta — свободные доп. поля (механики, рейтинг BGG, категории).
     # JSONB позволяет индексировать по ключам, в отличие от JSON.
     meta: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+    # Тип игры: 'base' (базовая), 'expansion' (дополнение), 'promo' (промо/мини-доп),
+    # 'accessory' (аксессуар: органайзер, чехлы, токены и т.п.).
+    # Хранится строкой, не PostgreSQL ENUM — расширять enum в будущем без ALTER TYPE.
+    kind: Mapped[str] = mapped_column(
+        String(16), default="base", server_default="base", nullable=False, index=True,
+    )
+    # Для expansion/promo/accessory — родительская игра-«база», от которой
+    # они зависят. Self-FK с ON DELETE SET NULL: если базу удалили, связь
+    # обнуляется, но допы не удаляются каскадом.
+    parent_game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="SET NULL"), index=True,
+    )
+
+    # Локализация в РФ (миграция 0006). При промоушене из dicefest:
+    #   ru_publisher  ← dicefest_raw_games.publisher
+    #   preorder_price ← dicefest_raw_games.preorder_price
+    #   is_localized_ru = True
+    # Поле `publishers` (выше) — список издателей оригинала (BGG); `ru_publisher`
+    # — конкретный российский локализатор.
+    ru_publisher: Mapped[str | None] = mapped_column(Text)
+    ru_release_year: Mapped[int | None] = mapped_column(Integer)
+    is_localized_ru: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False,
+    )
+    preorder_price: Mapped[int | None] = mapped_column(BigInteger)  # копейки
 
     # Откуда пришла каноническая запись: bgg / tesera / manual / auto-from-parsers.
     source: Mapped[str] = mapped_column(String(32), default="manual")
@@ -102,6 +134,20 @@ class Game(Base):
     )
     wikidata: Mapped["GameWikidata | None"] = relationship(
         back_populates="game", cascade="all, delete-orphan", uselist=False
+    )
+    # Self-referential: parent_game ← база, children → допы/промо/аксессуары.
+    # remote_side=[id] обязателен для self-FK, иначе SQLAlchemy не знает, какая
+    # сторона — «один», а какая — «много».
+    parent_game: Mapped["Game | None"] = relationship(
+        "Game",
+        remote_side="Game.id",
+        back_populates="children",
+        foreign_keys=[parent_game_id],
+    )
+    children: Mapped[list["Game"]] = relationship(
+        "Game",
+        back_populates="parent_game",
+        foreign_keys=[parent_game_id],
     )
 
 
@@ -172,6 +218,15 @@ class Offer(Base):
     # 'unmatched' (висит в очереди), 'rejected' (человек сказал «не игра»).
     match_status: Mapped[str] = mapped_column(String(16), default="unmatched", index=True)
     match_score: Mapped[float | None] = mapped_column(Float)
+
+    # Нормализованные поля магазина (миграция 0006). Дублируют отдельные ключи
+    # из raw_extra для индексируемых фильтров (наличие, скидка, предзаказ).
+    # `external_id` — это идентификатор товара в магазине (для upsert), а
+    # `sku` — внутренний артикул магазина (HobbyGames кладёт его отдельно).
+    sku: Mapped[str | None] = mapped_column(String(64))
+    in_stock: Mapped[bool | None] = mapped_column(Boolean)
+    original_price: Mapped[int | None] = mapped_column(BigInteger)  # копейки до скидки
+    is_preorder: Mapped[bool | None] = mapped_column(Boolean)
 
     raw_extra: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 

@@ -81,19 +81,56 @@ class CatalogPublisher:
         payload = {
             "store_slug": store_slug,
             "fetched_at": datetime.now(timezone.utc).isoformat(),
-            "products": [
-                {
-                    "external_id": p.external_id,
-                    "title": p.title,
-                    "url": p.url,
-                    "price": p.price,  # копейки — формат каталога такой же
-                    "image_url": p.image_url_hd or p.image_url,
-                    "extra": p.raw or {},
-                }
-                for p in products
-            ],
+            "products": [self._product_payload(p) for p in products],
         }
         await self._send(payload, len(products), store_slug)
+
+    @staticmethod
+    def _product_payload(p: ParsedProduct) -> dict:
+        """Формирует один product-элемент для /ingest/offers.
+
+        Поднимаем нормализованные поля (sku/in_stock/original_price/is_preorder)
+        из ParsedProduct.raw на верхний уровень payload, чтобы catalog мог
+        писать их в типизированные колонки `offers.*`. Каждый магазин кладёт
+        в `raw` свой набор ключей — приводим к единому виду:
+
+        - sku           → HobbyGames кладёт `raw["sku"]` (из JSON-LD Product).
+        - in_stock      → HobbyGames `raw["availability"]`, Crowd Games `raw["in_stock"]`.
+        - original_price → HobbyGames `raw["original_price"]` (цена до скидки).
+        - is_preorder   → пока не вытаскиваем (Crowd Games косвенно через
+                           CSS-классы, требует доработки парсера).
+
+        `raw` всё равно отправляется целиком в `extra` для аудита и поиска
+        по нетипизированным полям.
+        """
+        raw = p.raw or {}
+
+        sku = raw.get("sku") if isinstance(raw.get("sku"), str) else None
+
+        in_stock: bool | None = None
+        for key in ("availability", "in_stock"):
+            v = raw.get(key)
+            if isinstance(v, bool):
+                in_stock = v
+                break
+
+        original_price: int | None = None
+        v = raw.get("original_price")
+        if isinstance(v, int) and v > 0:
+            original_price = v
+
+        return {
+            "external_id": p.external_id,
+            "title": p.title,
+            "url": p.url,
+            "price": p.price,  # копейки — формат каталога такой же
+            "image_url": p.image_url_hd or p.image_url,
+            "sku": sku,
+            "in_stock": in_stock,
+            "original_price": original_price,
+            "is_preorder": None,
+            "extra": raw,
+        }
 
     async def _send(
         self, payload: dict, items_count: int, store_slug: str,

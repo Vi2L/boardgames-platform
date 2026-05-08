@@ -235,6 +235,10 @@ async def promote(
         alias_id, satellite_id = await _attach_dicefest_data(
             session, raw, game_id=game_id,
         )
+        # Денормализуем dicefest-данные в games (миграция 0006). Заполняем
+        # только пустые поля — не перезатираем то, что уже было задано
+        # вручную или другим источником.
+        _denormalize_dicefest_into_game(target, raw)
 
     elif action == "create":
         # Создаём новую canonical Game со slug-префиксом.
@@ -243,12 +247,16 @@ async def promote(
         # year оставляем None — release_year раньше парсился из РФ-релиза
         # (не оригинал). Корректный год игры подтянет последующее обогащение
         # через wikidata/BGG.
+        # Поля локализации (ru_publisher / preorder_price / dicefest_id /
+        # is_localized_ru / nastolio_id / bgg_id / tesera_id из external_links)
+        # денормализуем сразу из raw — миграция 0006.
         game = Game(
             slug=canonical_slug,
             title=new_title,
             source="dicefest",
             status="active",
         )
+        _denormalize_dicefest_into_game(game, raw)
         session.add(game)
         await session.flush()       # получаем game.id без commit'а
         game_id = game.id
@@ -285,6 +293,57 @@ async def promote(
         "satellite_id": satellite_id,
         "status": new_status,
     }
+
+
+def _denormalize_dicefest_into_game(game: Game, raw: DicefestRawGame) -> None:
+    """Копирует dicefest-данные в денормализованные колонки `games` (миграция 0006).
+
+    Заполняем только пустые поля — это позволяет:
+      - не перезатирать ручные правки оператора;
+      - при повторном промоушене после revert восстанавливать прежнее состояние;
+      - при `link` к существующей игре дополнять, а не подменять.
+
+    Поведение для каждого поля:
+      ru_publisher / preorder_price — из raw.publisher / raw.preorder_price.
+      dicefest_id — всегда обновляем на raw.id (текущая активная связь).
+      is_localized_ru — выставляется True, если есть publisher или title_ru.
+      nastolio_id — из raw.external_links[kind='nastolio'] (slug или url).
+      bgg_id / tesera_id — из external_links, ТОЛЬКО если у игры ещё пусто
+        (не перебиваем существующие ID; uniqueness проверять при ALTER не
+        нужно — UNIQUE-индекс БД отвергнет дубль на коммите).
+    """
+    if game.ru_publisher is None and raw.publisher:
+        game.ru_publisher = raw.publisher
+    if game.preorder_price is None and raw.preorder_price is not None:
+        game.preorder_price = raw.preorder_price
+    # dicefest_id — текущая активная связь, обновляем безусловно. Старая
+    # связь была сброшена в revert (если был), либо это первый промоушен.
+    game.dicefest_id = raw.id
+    if raw.publisher or raw.title_ru:
+        game.is_localized_ru = True
+
+    # external_links — массив dict'ов: [{kind, url, label, external_id?}].
+    # Перебираем один раз, выдёргиваем nastolio/bgg/tesera id.
+    for link in raw.external_links or []:
+        kind = (link.get("kind") or "").lower() if isinstance(link, dict) else ""
+        if not kind:
+            continue
+        ext_id = link.get("external_id")
+        url = link.get("url")
+        if kind == "nastolio" and game.nastolio_id is None:
+            # external_id парсится не всегда; URL — гарантированный fallback.
+            game.nastolio_id = ext_id or url
+        elif kind == "bgg" and game.bgg_id is None and ext_id:
+            try:
+                game.bgg_id = int(ext_id)
+            except (ValueError, TypeError):
+                # Кривой external_id из dicefest — игнорируем, не падаем.
+                pass
+        elif kind == "tesera" and game.tesera_id is None and ext_id:
+            try:
+                game.tesera_id = int(ext_id)
+            except (ValueError, TypeError):
+                pass
 
 
 async def _attach_dicefest_data(
@@ -422,6 +481,16 @@ async def revert(
         ).scalar_one_or_none()
         if sat is not None:
             await session.delete(sat)
+
+        # 2b) Сбрасываем dicefest_id у game — связь разорвана. Остальные
+        # денормализованные поля (ru_publisher / preorder_price / nastolio_id
+        # / bgg_id / tesera_id / is_localized_ru) НЕ трогаем: оператор мог
+        # их исправить вручную, и они полезны независимо от dicefest. Тот же
+        # принцип, что для offers.game_id (см. docstring модуля).
+        if log.game_id is not None:
+            game = await session.get(Game, log.game_id)
+            if game is not None and game.dicefest_id == raw.id:
+                game.dicefest_id = None
 
         # 3) Если action='create' — пытаемся удалить game, но осторожно.
         if log.action == "create" and log.game_id is not None:
