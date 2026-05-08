@@ -17,14 +17,16 @@
 import { useState } from 'react'
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { CheckCircle2, AlertTriangle, RotateCcw, X, Plus, Loader2, Bot } from 'lucide-react'
+import { CheckCircle2, AlertTriangle, RotateCcw, X, Plus, Loader2, Bot, Info } from 'lucide-react'
 import clsx from 'clsx'
 import {
   fetchPromotionQueue, fetchPromotionCandidates,
   applyPromotion, revertPromotion, fetchPromotionLog,
+  fetchPromotionLogDetails,
   batchAutoLinkPromotion,
   type DicefestRawGame, type ExternalLink, type PromotionCandidate,
-  type PromotionLogEntry, type BatchLinkResult, type BatchLinkRequest,
+  type PromotionLogEntry, type PromotionLogDetails,
+  type BatchLinkResult, type BatchLinkRequest,
 } from '../../lib/catalog'
 
 // Цены везде в проекте хранятся в копейках. Форматируем в рубли с разделителем.
@@ -526,6 +528,10 @@ function CandidateRow({
 
 function PromotionLogList() {
   const queryClient = useQueryClient()
+  // activeLogId — какая запись журнала открыта в модалке деталей. null = модалка
+  // закрыта. Хранится здесь, а не в LogRow, чтобы единственная модалка не
+  // переезжала при перерисовке таблицы.
+  const [activeLogId, setActiveLogId] = useState<number | null>(null)
   const log = useInfiniteQuery({
     queryKey: ['catalog', 'promotion-log'],
     queryFn: ({ pageParam }) => fetchPromotionLog(50, pageParam),
@@ -564,7 +570,13 @@ function PromotionLogList() {
           </thead>
           <tbody className="divide-y divide-gray-800">
             {items.map(it => (
-              <LogRow key={it.id} it={it} onRevert={revert.mutate} disabled={revert.isPending} />
+              <LogRow
+                key={it.id}
+                it={it}
+                onRevert={revert.mutate}
+                onOpenDetails={() => setActiveLogId(it.id)}
+                disabled={revert.isPending}
+              />
             ))}
             {items.length === 0 && (
               <tr><td colSpan={7} className="px-3 py-6 text-center text-gray-500">
@@ -583,22 +595,36 @@ function PromotionLogList() {
           Показать ещё
         </button>
       )}
+      {activeLogId !== null && (
+        <PromotionLogDetailsModal
+          logId={activeLogId}
+          onClose={() => setActiveLogId(null)}
+          onJumpToLog={(id) => setActiveLogId(id)}
+        />
+      )}
     </div>
   )
 }
 
 function LogRow({
-  it, onRevert, disabled,
+  it, onRevert, onOpenDetails, disabled,
 }: {
   it: PromotionLogEntry
   onRevert: (id: number) => void
+  onOpenDetails: () => void
   disabled: boolean
 }) {
   const reverted = it.reverted_at != null
   const isRevertEntry = it.action === 'revert'
   const canRevert = !reverted && !isRevertEntry
+  // Клик по любой ячейке (кроме action-кнопок) открывает модалку деталей.
+  // Точечные кнопки делают stopPropagation, чтобы не дублировать действие
+  // и не открывать модалку вместе с revert-confirm.
   return (
-    <tr className={clsx('hover:bg-gray-900', reverted && 'opacity-50')}>
+    <tr
+      className={clsx('hover:bg-gray-900 cursor-pointer', reverted && 'opacity-50')}
+      onClick={onOpenDetails}
+    >
       <td className="px-3 py-2 font-mono text-xs text-gray-500">{it.id}</td>
       <td className="px-3 py-2">
         <span className="font-mono text-xs uppercase text-gray-300 flex items-center gap-1">
@@ -618,27 +644,293 @@ function LogRow({
       </td>
       <td className="px-3 py-2 text-xs text-gray-400">{it.performed_by ?? '—'}</td>
       <td className="px-3 py-2">
-        {reverted && (
-          <span className="text-[10px] text-gray-500 italic">
-            reverted {new Date(it.reverted_at!).toLocaleString('ru-RU')}
-          </span>
-        )}
-        {canRevert && (
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => {
-              if (window.confirm(`Отменить действие «${it.action}» на raw#${it.raw_id}?`)) {
-                onRevert(it.id)
-              }
-            }}
-            disabled={disabled}
-            className="px-2 py-1 text-xs bg-amber-900/40 hover:bg-amber-900 disabled:opacity-40 text-amber-200 rounded flex items-center gap-1"
+            onClick={e => { e.stopPropagation(); onOpenDetails() }}
+            title="Подробности операции"
+            className="px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 rounded flex items-center gap-1"
           >
-            <RotateCcw size={11} /> Отменить
+            <Info size={11} /> Детали
           </button>
-        )}
+          {reverted && (
+            <span className="text-[10px] text-gray-500 italic">
+              reverted {new Date(it.reverted_at!).toLocaleString('ru-RU')}
+            </span>
+          )}
+          {canRevert && (
+            <button
+              type="button"
+              onClick={e => {
+                e.stopPropagation()
+                if (window.confirm(`Отменить действие «${it.action}» на raw#${it.raw_id}?`)) {
+                  onRevert(it.id)
+                }
+              }}
+              disabled={disabled}
+              className="px-2 py-1 text-xs bg-amber-900/40 hover:bg-amber-900 disabled:opacity-40 text-amber-200 rounded flex items-center gap-1"
+            >
+              <RotateCcw size={11} /> Отменить
+            </button>
+          )}
+        </div>
       </td>
     </tr>
+  )
+}
+
+// ─── Log details modal ───────────────────────────────────────────────────────
+
+function PromotionLogDetailsModal({
+  logId, onClose, onJumpToLog,
+}: {
+  logId: number
+  onClose: () => void
+  onJumpToLog: (id: number) => void
+}) {
+  const details = useQuery({
+    queryKey: ['catalog', 'promotion-log', logId, 'details'],
+    queryFn: () => fetchPromotionLogDetails(logId),
+  })
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800">
+        <h2 className="text-sm font-semibold text-gray-100 flex items-center gap-2">
+          <Info size={14} /> Операция #{logId}
+          {details.data && (
+            <span className="font-mono text-xs uppercase text-gray-400 ml-1">
+              · {details.data.entry.action}
+            </span>
+          )}
+        </h2>
+        <button onClick={onClose} className="p-1 text-gray-400 hover:text-gray-200 rounded">
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        {details.isLoading && (
+          <div className="text-sm text-gray-400 flex items-center gap-2">
+            <Loader2 size={14} className="animate-spin" /> Загрузка деталей…
+          </div>
+        )}
+        {details.isError && (
+          <div className="text-sm text-red-400">
+            Не удалось загрузить детали: {String(details.error)}
+            <button
+              type="button"
+              onClick={() => details.refetch()}
+              className="ml-2 px-2 py-0.5 text-xs bg-gray-800 hover:bg-gray-700 rounded"
+            >
+              Повторить
+            </button>
+          </div>
+        )}
+        {details.data && (
+          <LogDetailsBody data={details.data} onJumpToLog={onJumpToLog} />
+        )}
+      </div>
+    </Modal>
+  )
+}
+
+// Один <dt>/<dd> блок: метка + значение. Используется внутри секций модалки.
+function DRow({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="grid grid-cols-[140px_1fr] gap-2 text-xs">
+      <dt className="text-gray-500">{label}</dt>
+      <dd className="text-gray-200 break-words">{children}</dd>
+    </div>
+  )
+}
+
+function Section({
+  title, children, empty,
+}: {
+  title: string
+  children?: React.ReactNode
+  empty?: string
+}) {
+  return (
+    <div className="border border-gray-800 rounded">
+      <div className="px-3 py-2 border-b border-gray-800 bg-gray-950 text-xs font-semibold text-gray-300 uppercase tracking-wide">
+        {title}
+      </div>
+      <div className="p-3">
+        {children ?? <div className="text-xs text-gray-500 italic">{empty ?? '—'}</div>}
+      </div>
+    </div>
+  )
+}
+
+function LogDetailsBody({
+  data, onJumpToLog,
+}: {
+  data: PromotionLogDetails
+  onJumpToLog: (id: number) => void
+}) {
+  const { entry, raw_game, game, alias, reverted_by_entry_id } = data
+
+  return (
+    <>
+      <Section title="Запись журнала">
+        <dl className="space-y-1.5">
+          <DRow label="id">
+            <span className="font-mono text-gray-400">{entry.id}</span>
+          </DRow>
+          <DRow label="provider">
+            <span className="font-mono text-gray-400">{entry.provider}</span>
+          </DRow>
+          <DRow label="action">
+            <span className="font-mono uppercase text-gray-200">{entry.action}</span>
+          </DRow>
+          <DRow label="raw_id">
+            <span className="font-mono text-gray-400">{entry.raw_id}</span>
+          </DRow>
+          <DRow label="game_id">
+            {entry.game_id != null
+              ? <span className="font-mono text-gray-400">#{entry.game_id}</span>
+              : <span className="text-gray-600">—</span>}
+          </DRow>
+          <DRow label="alias_id">
+            {entry.alias_id != null
+              ? <span className="font-mono text-gray-400">#{entry.alias_id}</span>
+              : <span className="text-gray-600">—</span>}
+          </DRow>
+          <DRow label="satellite_created">
+            {entry.satellite_created
+              ? <span className="text-emerald-400">✓ да</span>
+              : <span className="text-gray-500">— нет</span>}
+          </DRow>
+          <DRow label="performed_at">
+            {new Date(entry.performed_at).toLocaleString('ru-RU')}
+          </DRow>
+          <DRow label="performed_by">
+            {entry.performed_by ?? <span className="text-gray-600">—</span>}
+          </DRow>
+          {entry.reverted_at && (
+            <>
+              <DRow label="reverted_at">
+                <span className="text-amber-300">
+                  {new Date(entry.reverted_at).toLocaleString('ru-RU')}
+                </span>
+              </DRow>
+              <DRow label="reverted_by">
+                {entry.reverted_by ?? <span className="text-gray-600">—</span>}
+              </DRow>
+              {reverted_by_entry_id != null && (
+                <DRow label="revert-запись">
+                  <button
+                    type="button"
+                    onClick={() => onJumpToLog(reverted_by_entry_id)}
+                    className="font-mono text-violet-300 hover:underline"
+                  >
+                    Открыть #{reverted_by_entry_id}
+                  </button>
+                </DRow>
+              )}
+            </>
+          )}
+          {entry.notes && (
+            <DRow label="notes">
+              <span className="whitespace-pre-wrap text-gray-300">{entry.notes}</span>
+            </DRow>
+          )}
+        </dl>
+      </Section>
+
+      <Section title="Raw-игра (Dicefest staging)" empty="raw-запись не найдена (возможно, удалена)">
+        {raw_game && (
+          <dl className="space-y-1.5">
+            <DRow label="id">
+              <span className="font-mono text-gray-400">{raw_game.id}</span>
+            </DRow>
+            <DRow label="title">
+              <span className="text-gray-100 font-semibold">{raw_game.title_ru ?? raw_game.slug}</span>
+              {raw_game.title_en && (
+                <span className="block text-gray-400 italic mt-0.5">{raw_game.title_en}</span>
+              )}
+            </DRow>
+            <DRow label="slug / URL">
+              <a
+                href={raw_game.page_url}
+                target="_blank"
+                rel="noreferrer"
+                className="font-mono text-violet-300 hover:underline break-all"
+              >
+                {raw_game.slug}
+              </a>
+            </DRow>
+            {raw_game.publisher && (
+              <DRow label="publisher (РФ)">{raw_game.publisher}</DRow>
+            )}
+            {raw_game.preorder_price != null && (
+              <DRow label="preorder">
+                <span className="font-mono">{formatRub(raw_game.preorder_price)}</span>
+              </DRow>
+            )}
+            <DRow label="status">
+              <StatusBadge status={raw_game.status as DicefestRawGame['status']} />
+            </DRow>
+            <DRow label="fetched_at">
+              <span className="text-gray-400">
+                {new Date(raw_game.fetched_at).toLocaleString('ru-RU')}
+              </span>
+            </DRow>
+          </dl>
+        )}
+      </Section>
+
+      <Section title="Игра в каталоге" empty="не привязана">
+        {game && (
+          <dl className="space-y-1.5">
+            <DRow label="id">
+              <span className="font-mono text-gray-400">#{game.id}</span>
+            </DRow>
+            <DRow label="title">
+              <span className="text-gray-100 font-semibold">{game.title}</span>
+              {game.year != null && (
+                <span className="text-gray-500 ml-2">({game.year})</span>
+              )}
+            </DRow>
+            <DRow label="slug">
+              <span className="font-mono text-gray-400">{game.slug}</span>
+            </DRow>
+            <DRow label="status">
+              <span className="font-mono text-gray-300">{game.status}</span>
+            </DRow>
+          </dl>
+        )}
+      </Section>
+
+      <Section title="Alias" empty="не создан">
+        {alias && (
+          <dl className="space-y-1.5">
+            <DRow label="id">
+              <span className="font-mono text-gray-400">#{alias.id}</span>
+            </DRow>
+            <DRow label="alias">
+              <span className="text-gray-100">{alias.alias}</span>
+            </DRow>
+            <DRow label="alias_norm">
+              <span className="font-mono text-gray-500 text-[11px]">{alias.alias_norm}</span>
+            </DRow>
+            <DRow label="source / language">
+              <span className="font-mono text-gray-300">{alias.source}</span>
+              {alias.language && (
+                <span className="font-mono text-gray-500 ml-2">/ {alias.language}</span>
+              )}
+            </DRow>
+            <DRow label="verified">
+              {alias.verified
+                ? <span className="text-emerald-400">✓ да</span>
+                : <span className="text-gray-500">— нет</span>}
+            </DRow>
+          </dl>
+        )}
+      </Section>
+    </>
   )
 }
 

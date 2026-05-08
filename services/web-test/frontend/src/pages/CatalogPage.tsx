@@ -8,8 +8,15 @@
  * Намеренно простой layout (без drag&drop / modal'ок): прототип ручного
  * матчинга, нагружать визуалом будем по мере живого использования.
  */
-import { useState } from 'react'
+import { useMemo, useState, type ReactNode } from 'react'
 import { useQuery, useQueryClient, useMutation, useInfiniteQuery } from '@tanstack/react-query'
+import {
+  useReactTable,
+  getCoreRowModel,
+  flexRender,
+  type ColumnDef as TanColumnDef,
+  type ColumnSizingState,
+} from '@tanstack/react-table'
 import { toast } from 'sonner'
 import {
   fetchCatalogHealth,
@@ -30,7 +37,8 @@ import { GameEditor } from '../components/catalog/GameEditor'
 import { MatchingStatsHeader } from '../components/catalog/MatchingStatsHeader'
 import { BackupButton } from '../components/catalog/BackupButton'
 import { PromotionPanel } from '../components/catalog/PromotionPanel'
-import { Download, Plus } from 'lucide-react'
+import { useCatalogTableStore } from '../store/catalog'
+import { Download, Plus, Settings2 } from 'lucide-react'
 
 type Tab = 'catalog' | 'matching' | 'promotion'
 
@@ -109,9 +117,138 @@ export function CatalogPage() {
 // конкретную игру, остановится как только найдёт.
 const PAGE_SIZE = 50
 
+// Декларативный список колонок таблицы каталога. id используется как
+// стабильный ключ для useCatalogTableStore (persist → localStorage), label —
+// заголовок <th>, render — содержимое ячейки. defaultVisible определяет,
+// какие колонки попадают в дефолтный набор после resetColumns(). defaultSize
+// — стартовая ширина в пикселях; пользователь меняет её drag'ом за правый
+// край th (TanStack columnResizeMode='onChange'), результат складывается в
+// store.columnSizes.
+type LocalColumnDef = {
+  id: string
+  label: string
+  render: (g: CatalogGame) => ReactNode
+  defaultVisible: boolean
+  defaultSize: number
+  cellClass?: string
+}
+
+const COLUMNS: LocalColumnDef[] = [
+  {
+    id: 'id', label: 'id', defaultVisible: true, defaultSize: 60,
+    cellClass: 'font-mono text-xs text-gray-500',
+    render: g => g.id,
+  },
+  {
+    id: 'slug', label: 'slug', defaultVisible: true, defaultSize: 180,
+    cellClass: 'font-mono text-xs text-gray-400 truncate',
+    render: g => g.slug,
+  },
+  {
+    id: 'title', label: 'title', defaultVisible: true, defaultSize: 280,
+    cellClass: 'text-gray-100 truncate',
+    render: g => g.title,
+  },
+  {
+    id: 'title_ru', label: 'RU название', defaultVisible: true, defaultSize: 240,
+    cellClass: 'text-gray-200 truncate',
+    render: g => g.title_ru ?? <span className="text-gray-600">—</span>,
+  },
+  {
+    id: 'year', label: 'year', defaultVisible: true, defaultSize: 70,
+    cellClass: 'text-gray-300',
+    render: g => g.year ?? '—',
+  },
+  {
+    id: 'source', label: 'source', defaultVisible: true, defaultSize: 90,
+    render: g => <SourceBadge source={g.source} />,
+  },
+  {
+    id: 'bgg_tesera', label: 'BGG / Tesera', defaultVisible: true, defaultSize: 160,
+    cellClass: 'text-xs text-gray-400',
+    render: g => (
+      <>
+        {g.bgg_id && <span title="BGG">BGG#{g.bgg_id}</span>}
+        {g.bgg_id && g.tesera_id && ' · '}
+        {g.tesera_id && <span title="Tesera">T#{g.tesera_id}</span>}
+        {!g.bgg_id && !g.tesera_id && '—'}
+      </>
+    ),
+  },
+  {
+    id: 'kind', label: 'kind', defaultVisible: false, defaultSize: 100,
+    cellClass: 'text-xs text-gray-300',
+    render: g => g.kind,
+  },
+  {
+    id: 'parent_game_id', label: 'parent', defaultVisible: false, defaultSize: 80,
+    cellClass: 'font-mono text-xs text-gray-400',
+    render: g => g.parent_game_id ?? '—',
+  },
+  {
+    id: 'ru_publisher', label: 'ru_publisher', defaultVisible: false, defaultSize: 160,
+    cellClass: 'text-xs text-gray-300 truncate',
+    render: g => g.ru_publisher ?? '—',
+  },
+  {
+    id: 'ru_release_year', label: 'ru_year', defaultVisible: false, defaultSize: 80,
+    cellClass: 'text-xs text-gray-300',
+    render: g => g.ru_release_year ?? '—',
+  },
+  {
+    id: 'is_localized_ru', label: 'RU?', defaultVisible: false, defaultSize: 60,
+    cellClass: 'text-center text-xs',
+    render: g => g.is_localized_ru
+      ? <span className="text-emerald-400">✓</span>
+      : <span className="text-gray-600">—</span>,
+  },
+  {
+    id: 'preorder_price', label: 'preorder', defaultVisible: false, defaultSize: 100,
+    cellClass: 'text-xs text-gray-300 text-right',
+    // preorder_price хранится в копейках — конвертим в рубли для отображения,
+    // как и везде в UI портала (см. правило в корневом CLAUDE.md).
+    render: g => g.preorder_price != null ? `${(g.preorder_price / 100).toFixed(0)} ₽` : '—',
+  },
+  {
+    id: 'status', label: 'status', defaultVisible: false, defaultSize: 100,
+    cellClass: 'text-xs text-gray-400',
+    render: g => g.status,
+  },
+  {
+    id: 'dicefest_id', label: 'dicefest', defaultVisible: false, defaultSize: 90,
+    cellClass: 'font-mono text-xs text-gray-400',
+    render: g => g.dicefest_id ?? '—',
+  },
+  {
+    id: 'nastolio_id', label: 'nastolio', defaultVisible: false, defaultSize: 100,
+    cellClass: 'font-mono text-xs text-gray-400',
+    render: g => g.nastolio_id ?? '—',
+  },
+  {
+    id: 'cover_url', label: 'cover', defaultVisible: false, defaultSize: 64,
+    render: g => g.cover_url
+      ? <img src={g.cover_url} alt="" className="w-8 h-8 object-cover rounded" />
+      : <span className="text-gray-600 text-xs">—</span>,
+  },
+]
+
+const ALL_COLUMN_IDS = COLUMNS.map(c => c.id)
+
 function CatalogSection() {
   const [q, setQ] = useState('')
   const [openId, setOpenId] = useState<number | null>(null)
+  const visibleColumnIds = useCatalogTableStore(s => s.visibleColumns)
+  const columnSizes = useCatalogTableStore(s => s.columnSizes)
+  const setColumnSize = useCatalogTableStore(s => s.setColumnSize)
+
+  // Колонки, которые реально показываются: фильтруем декларацию COLUMNS
+  // по сохранённому visibleColumns. При пустом сторе (первый заход или
+  // сброс мусора) откатываемся на defaultVisible.
+  const renderedColumns = useMemo(() => {
+    const visible = COLUMNS.filter(c => visibleColumnIds.includes(c.id))
+    return visible.length > 0 ? visible : COLUMNS.filter(c => c.defaultVisible)
+  }, [visibleColumnIds])
+
   const games = useInfiniteQuery({
     queryKey: ['catalog', 'games', q],
     queryFn: ({ pageParam }) =>
@@ -125,19 +262,63 @@ function CatalogSection() {
   })
 
   // flatMap собирает все загруженные страницы в один массив для рендера.
-  const items = games.data?.pages.flatMap(p => p.items) ?? []
+  const items = useMemo(
+    () => games.data?.pages.flatMap(p => p.items) ?? [],
+    [games.data],
+  )
   const total = games.data?.pages[0]?.total ?? 0
   const remaining = Math.max(0, total - items.length)
 
+  // Адаптер LocalColumnDef → TanStack ColumnDef.
+  const tanColumns = useMemo<TanColumnDef<CatalogGame>[]>(
+    () => renderedColumns.map(c => ({
+      id: c.id,
+      header: c.label,
+      cell: ({ row }) => c.render(row.original),
+      size: columnSizes[c.id] ?? c.defaultSize,
+      minSize: 40,
+      maxSize: 800,
+      meta: { cellClass: c.cellClass },
+    })),
+    [renderedColumns, columnSizes],
+  )
+
+  // TanStack хранит ширины во внутреннем state. На каждый change синхронизируем
+  // в zustand-стор (persist → localStorage). Используем функциональную форму
+  // setState, потому что react-table передаёт `updater` как функцию.
+  const handleSizingChange = (
+    updater: ColumnSizingState | ((prev: ColumnSizingState) => ColumnSizingState),
+  ) => {
+    const prev = columnSizes
+    const next = typeof updater === 'function'
+      ? (updater as (p: ColumnSizingState) => ColumnSizingState)(prev)
+      : updater
+    for (const id of Object.keys(next)) {
+      if (next[id] !== prev[id]) setColumnSize(id, next[id])
+    }
+  }
+
+  const table = useReactTable({
+    data: items,
+    columns: tanColumns,
+    getCoreRowModel: getCoreRowModel(),
+    columnResizeMode: 'onChange',
+    state: { columnSizing: columnSizes },
+    onColumnSizingChange: handleSizingChange,
+  })
+
   return (
     <div className="space-y-3">
-      <input
-        type="text"
-        placeholder="Поиск по названию (substring + fuzzy: «каркасон» найдёт «Каркассон», «Azul» найдёт всю серию)"
-        value={q}
-        onChange={e => setQ(e.target.value)}
-        className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-500 focus:border-violet-500 focus:outline-none"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          type="text"
+          placeholder="Поиск по названиям (RU/EN aliases + fuzzy)"
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-100 placeholder-gray-500 focus:border-violet-500 focus:outline-none"
+        />
+        <ColumnsPicker />
+      </div>
       {games.isError && (
         <div className="text-sm text-red-400">Не удалось получить каталог: {String(games.error)}</div>
       )}
@@ -146,24 +327,61 @@ function CatalogSection() {
           ? 'загрузка...'
           : `показано ${items.length} из ${total} игр`}
       </div>
-      <div className="border border-gray-800 rounded overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-900 text-gray-400 text-left">
-            <tr>
-              <th className="px-3 py-2">id</th>
-              <th className="px-3 py-2">slug</th>
-              <th className="px-3 py-2">title</th>
-              <th className="px-3 py-2">year</th>
-              <th className="px-3 py-2">source</th>
-              <th className="px-3 py-2">BGG / Tesera</th>
-            </tr>
+      <div className="border border-gray-800 rounded overflow-x-auto">
+        <table
+          className="text-sm"
+          style={{ width: table.getCenterTotalSize(), tableLayout: 'fixed' }}
+        >
+          <thead className="bg-gray-900 text-gray-400 text-left select-none">
+            {table.getHeaderGroups().map(hg => (
+              <tr key={hg.id}>
+                {hg.headers.map(header => (
+                  <th
+                    key={header.id}
+                    style={{ width: header.getSize() }}
+                    className="relative px-3 py-2 truncate"
+                  >
+                    {flexRender(header.column.columnDef.header, header.getContext())}
+                    {/* Resize-handle: 4px полоска у правого края, drag меняет ширину
+                        в реальном времени (columnResizeMode='onChange'). */}
+                    <div
+                      onMouseDown={header.getResizeHandler()}
+                      onTouchStart={header.getResizeHandler()}
+                      className={`absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none ${
+                        header.column.getIsResizing()
+                          ? 'bg-violet-500'
+                          : 'bg-transparent hover:bg-violet-700/60'
+                      }`}
+                    />
+                  </th>
+                ))}
+              </tr>
+            ))}
           </thead>
           <tbody className="divide-y divide-gray-800">
-            {items.map(g => (
-              <GameRow key={g.id} g={g} onOpen={() => setOpenId(g.id)} />
+            {table.getRowModel().rows.map(row => (
+              <tr
+                key={row.id}
+                className="hover:bg-gray-900 cursor-pointer"
+                onClick={() => setOpenId(row.original.id)}
+              >
+                {row.getVisibleCells().map(cell => {
+                  const meta = cell.column.columnDef.meta as
+                    | { cellClass?: string } | undefined
+                  return (
+                    <td
+                      key={cell.id}
+                      style={{ width: cell.column.getSize() }}
+                      className={`px-3 py-2 truncate ${meta?.cellClass ?? ''}`}
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  )
+                })}
+              </tr>
             ))}
             {!games.isLoading && items.length === 0 && (
-              <tr><td colSpan={6} className="px-3 py-6 text-center text-gray-500">
+              <tr><td colSpan={renderedColumns.length} className="px-3 py-6 text-center text-gray-500">
                 Нет игр {q && <>по запросу «{q}»</>}
               </td></tr>
             )}
@@ -191,21 +409,81 @@ function CatalogSection() {
   )
 }
 
-function GameRow({ g, onOpen }: { g: CatalogGame; onOpen: () => void }) {
+// Popover-меню выбора видимых колонок таблицы каталога. Паттерн повторяет
+// HealthPopover (components/shared/HealthBadge.tsx): fixed-overlay ловит клик
+// мимо, absolute-контейнер позиционируется под кнопкой. Без сторонних
+// dropdown-библиотек — в портале их нет.
+function ColumnsPicker() {
+  const [open, setOpen] = useState(false)
+  const visible = useCatalogTableStore(s => s.visibleColumns)
+  const toggle = useCatalogTableStore(s => s.toggleColumn)
+  const reset = useCatalogTableStore(s => s.resetColumns)
+  const showAll = useCatalogTableStore(s => s.showAllColumns)
+  const resetSizes = useCatalogTableStore(s => s.resetColumnSizes)
+
   return (
-    <tr className="hover:bg-gray-900 cursor-pointer" onClick={onOpen}>
-      <td className="px-3 py-2 font-mono text-xs text-gray-500">{g.id}</td>
-      <td className="px-3 py-2 font-mono text-xs text-gray-400">{g.slug}</td>
-      <td className="px-3 py-2 text-gray-100">{g.title}</td>
-      <td className="px-3 py-2 text-gray-300">{g.year ?? '—'}</td>
-      <td className="px-3 py-2"><SourceBadge source={g.source} /></td>
-      <td className="px-3 py-2 text-xs text-gray-400">
-        {g.bgg_id && <span title="BGG">BGG#{g.bgg_id}</span>}
-        {g.bgg_id && g.tesera_id && ' · '}
-        {g.tesera_id && <span title="Tesera">T#{g.tesera_id}</span>}
-        {!g.bgg_id && !g.tesera_id && '—'}
-      </td>
-    </tr>
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        title="Выбрать видимые колонки"
+        className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded text-gray-200"
+      >
+        <Settings2 size={12} /> Колонки
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-gray-900 border border-gray-700 rounded shadow-lg p-2 max-h-96 overflow-y-auto">
+            <div className="text-xs text-gray-500 px-2 py-1 mb-1">
+              Видимые колонки таблицы
+            </div>
+            {COLUMNS.map(c => (
+              <label
+                key={c.id}
+                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-800 cursor-pointer"
+              >
+                <input
+                  type="checkbox"
+                  checked={visible.includes(c.id)}
+                  onChange={() => toggle(c.id)}
+                  className="accent-violet-500"
+                />
+                <span className="text-sm text-gray-200">{c.label}</span>
+                <span className="ml-auto text-[10px] font-mono text-gray-500">{c.id}</span>
+              </label>
+            ))}
+            <div className="flex gap-2 mt-2 pt-2 border-t border-gray-800 px-2">
+              <button
+                type="button"
+                onClick={() => reset()}
+                className="flex-1 px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 rounded"
+              >
+                Сбросить
+              </button>
+              <button
+                type="button"
+                onClick={() => showAll(ALL_COLUMN_IDS)}
+                className="flex-1 px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 rounded"
+              >
+                Все
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => resetSizes()}
+              className="w-full mt-2 px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded"
+              title="Вернуть стандартные ширины колонок"
+            >
+              Сбросить ширины
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
