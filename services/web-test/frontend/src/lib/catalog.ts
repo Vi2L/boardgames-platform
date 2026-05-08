@@ -16,6 +16,9 @@ export type CatalogGame = {
   id: number
   slug: string
   title: string
+  // Производное на бэкенде: лучший alias-ru (verified-manual > dicefest >
+  // wikidata). Не хранится в БД, а вычисляется при выдаче в /games и /games/{id}.
+  title_ru: string | null
   year: number | null
   bgg_id: number | null
   tesera_id: number | null

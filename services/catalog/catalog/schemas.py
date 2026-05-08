@@ -31,6 +31,11 @@ class GameOut(_ORMBase):
     id: int
     slug: str
     title: str
+    # Производное поле: лучший alias с language='ru' по приоритету
+    # verified-manual > dicefest > wikidata. Проставляется на уровне роутера
+    # (см. list_games / get_game), не хранится в БД. Не приходит из ORM
+    # автоматически — отсюда дефолт None и явный set после model_validate.
+    title_ru: str | None = None
     year: int | None = None
     designers: list[str] | None = None
     publishers: list[str] | None = None

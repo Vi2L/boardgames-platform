@@ -9,7 +9,7 @@ POST /games/{id}/aliases — добавить альтернативное на�
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select, text
+from sqlalchemy import and_, case, func, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -113,12 +113,37 @@ async def list_games(
         stmt = stmt.order_by(Game.id.desc())
     stmt = stmt.limit(limit).offset(offset)
     result = await session.execute(stmt)
-    items = result.scalars().all()
+    items = list(result.scalars().all())
+
+    # title_ru — лучший alias с language='ru'. Один доп. SELECT с DISTINCT ON
+    # (per game_id) по приоритету источников: verified+manual → dicefest →
+    # wikidata → остальные. PG-only (DISTINCT ON), но catalog и так Postgres.
+    ru_titles: dict[int, str] = {}
+    if items:
+        game_ids = [g.id for g in items]
+        priority = case(
+            (and_(GameAlias.source == "manual", GameAlias.verified.is_(True)), 1),
+            (GameAlias.source == "dicefest", 2),
+            (GameAlias.source == "wikidata", 3),
+            else_=4,
+        )
+        ru_stmt = (
+            select(GameAlias.game_id, GameAlias.alias)
+            .where(GameAlias.language == "ru", GameAlias.game_id.in_(game_ids))
+            # DISTINCT ON в PG берёт первую строку группы по ORDER BY,
+            # ключ группы — первый аргумент distinct() и ведущий ORDER BY.
+            .order_by(GameAlias.game_id, priority, GameAlias.id)
+            .distinct(GameAlias.game_id)
+        )
+        ru_titles = dict((await session.execute(ru_stmt)).all())
+
+    out_items: list[GameOut] = []
+    for g in items:
+        out = GameOut.model_validate(g)
+        out.title_ru = ru_titles.get(g.id)
+        out_items.append(out)
     return GameListOut(
-        items=[GameOut.model_validate(g) for g in items],
-        total=total,
-        limit=limit,
-        offset=offset,
+        items=out_items, total=total, limit=limit, offset=offset,
     )
 
 
@@ -144,12 +169,39 @@ async def get_game(
     game = (await session.execute(stmt)).scalar_one_or_none()
     if game is None:
         raise HTTPException(status_code=404, detail="game not found")
+    base = GameOut.model_validate(game)
+    # Те же приоритеты, что и в list_games — но здесь aliases уже подгружены
+    # через selectinload, так что считаем в Python без доп. запроса.
+    base.title_ru = _pick_ru_title(game.aliases)
     return GameDetailOut(
-        **GameOut.model_validate(game).model_dump(),
+        **base.model_dump(),
         aliases=[GameAliasOut.model_validate(a) for a in game.aliases],
         bgg=GameBggOut.model_validate(game.bgg) if game.bgg else None,
         wikidata=GameWikidataOut.model_validate(game.wikidata) if game.wikidata else None,
     )
+
+
+def _pick_ru_title(aliases: list[GameAlias]) -> str | None:
+    """Лучший alias-ru — то же ранжирование, что и DISTINCT ON в list_games.
+
+    1) manual + verified=true, 2) dicefest, 3) wikidata, 4) остальные.
+    При ничье — самый ранний (по id), это детерминированно и совпадает с SQL.
+    """
+    def rank(a: GameAlias) -> tuple[int, int]:
+        if a.source == "manual" and a.verified:
+            p = 1
+        elif a.source == "dicefest":
+            p = 2
+        elif a.source == "wikidata":
+            p = 3
+        else:
+            p = 4
+        return (p, a.id)
+
+    ru = [a for a in aliases if a.language == "ru"]
+    if not ru:
+        return None
+    return min(ru, key=rank).alias
 
 
 @router.get(
