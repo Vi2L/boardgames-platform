@@ -450,6 +450,13 @@ class DicefestRawGame(Base):
     )
     notes: Mapped[str | None] = mapped_column(Text)
 
+    # sha256 от значимых полей карточки (без raw_html и fetched_at).
+    # Используется detection-логикой: при повторном скрапе сравниваем хеш и
+    # сразу понимаем, изменилась ли карточка. Заполняется при apply из run'а
+    # или одноразовым backfill-скриптом. NULL для исторических записей —
+    # detection-runner на лету пересчитает и сохранит.
+    content_hash: Mapped[str | None] = mapped_column(String(64))
+
 
 class ImportPromotionLog(Base):
     """Универсальный аудит-журнал промоушенов из staging в canonical БД.
@@ -522,4 +529,117 @@ class GameDicefest(Base):
 
     __table_args__ = (
         UniqueConstraint("game_id", "slug", name="uq_game_dicefest_game_slug"),
+    )
+
+
+class SourceScrapeRun(Base):
+    """Изолированный «сухой прогон» скрапа источника (миграция 0007).
+
+    Парсер пишет items сюда (через `SourceScrapeItem`), а не в провайдер-
+    специфичный staging. В staging они переезжают только при явном
+    `apply_run`. Так оператор может посмотреть, что изменилось на сайте,
+    и решить — применять или отбросить (`discard_run`).
+
+    Универсальная: `provider` — varchar, не enum, чтобы добавлять источники
+    без миграций (BGA, Dicebreaker, Wikidata).
+    """
+
+    __tablename__ = "source_scrape_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    # running → ready → applied | discarded
+    #                ↘ failed (error_message заполнен)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="running", server_default="running"
+    )
+    # Параметры запуска: max_items, only_year, performed_by и т.д.
+    params: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, nullable=False, server_default="{}"
+    )
+    # Агрегаты для UI: {new, updated, unchanged, total_slugs, errors, applied?}.
+    totals: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, nullable=False, server_default="{}"
+    )
+    error_message: Mapped[str | None] = mapped_column(Text)
+    # Ring-buffer строк прогресса (как в ImportJob.log_lines). Хранится
+    # JSONB-массивом, чтобы UI получал готовый список без парсинга.
+    log_lines: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, nullable=False, server_default="[]"
+    )
+    started_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    performed_by: Mapped[str | None] = mapped_column(Text)
+
+
+class SourceScrapeItem(Base):
+    """Item внутри run'а: одна страница источника + её diff (миграция 0007).
+
+    payload — сырые поля карточки (DicefestGame as dict, без raw_html).
+    raw_html в отдельной колонке — большой объём, не нужен для UI-diff'а,
+    тащить его в каждый GET items было бы расточительно.
+
+    `change_type`:
+      new       — slug'а нет в staging
+      updated   — slug есть, но content_hash отличается
+      unchanged — slug есть, content_hash совпадает
+    """
+
+    __tablename__ = "source_scrape_items"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    run_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey("source_scrape_runs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    slug: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    raw_html: Mapped[str | None] = mapped_column(Text)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    prev_hash: Mapped[str | None] = mapped_column(String(64))
+    change_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    # `{field: {before, after}}` для UI. NULL для new/unchanged — экономим место.
+    field_diffs: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+
+class MatchProfile(Base):
+    """Сохранённая конфигурация матчинга для одного провайдера (миграция 0007).
+
+    params — JSONB, чтобы добавлять параметры без миграций. Ожидаемая схема:
+
+      {
+        "threshold": 0.6,
+        "prefer_external_id": true,
+        "weights": {"ru": 1.0, "en": 1.0, "alias": 1.0}
+      }
+
+    is_default — отметка «дефолтный профиль провайдера». Partial UNIQUE
+    `(provider) WHERE is_default = true` (создан в миграции) гарантирует
+    ровно одного дефолта на провайдера.
+    """
+
+    __tablename__ = "match_profiles"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, nullable=False, server_default="false"
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        default=_now,
+        onupdate=_now,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("provider", "name", name="uq_match_profiles_provider_name"),
     )

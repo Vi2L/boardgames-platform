@@ -33,6 +33,7 @@ from catalog.models import (
     GameDicefest,
     ImportPromotionLog,
 )
+from catalog.schemas import MatchParams
 
 PROVIDER = "dicefest"
 DEFAULT_THRESHOLD = 0.5
@@ -40,6 +41,31 @@ MIN_THRESHOLD = 0.0  # для UI: «показать всех» — любой �
 DEFAULT_LIMIT = 5
 
 PromoAction = Literal["link", "create", "skip", "reject"]
+
+
+def _extract_external_ids(
+    external_links: list[dict] | None,
+) -> dict[str, int]:
+    """Из raw.external_links вытащить {kind: external_id_int} для bgg/tesera.
+
+    Использует поле `external_id` (парсер dicefest уже нормализует BGG ID и
+    Tesera slug → int — мы фильтруем только числовые). Для tesera external_id
+    может быть строкой-slug'ом — в этом случае пропускаем (deterministic
+    матч по slug пока не делаем).
+    """
+    out: dict[str, int] = {}
+    for link in external_links or []:
+        if not isinstance(link, dict):
+            continue
+        kind = (link.get("kind") or "").lower()
+        ext = link.get("external_id")
+        if kind not in ("bgg", "tesera") or ext is None:
+            continue
+        try:
+            out[kind] = int(ext)
+        except (ValueError, TypeError):
+            continue
+    return out
 
 
 # ─── Match candidates ────────────────────────────────────────────────────────
@@ -51,84 +77,183 @@ async def match_candidates(
     *,
     threshold: float = DEFAULT_THRESHOLD,
     limit: int = DEFAULT_LIMIT,
+    params: MatchParams | None = None,
 ) -> tuple[DicefestRawGame, list[dict]]:
     """Кандидаты-canonical-Game для raw-записи, отсортированные по score DESC.
 
-    pg_trgm поверх title_norm games + alias_norm game_aliases (используя те
-    же индексы, что matcher.py:94-133). Кандидаты возвращаются с score
-    ≥threshold, дополнительно помечаются `has_satellite_for_provider` (уже
-    привязан другой dicefest-страницей) и `year_diff` (разница годов с raw).
+    Без `params` — поведение обратно-совместимое (веса 1.0, без external_id).
+    С `params`:
+      * threshold: переопределяет аргумент `threshold` (если передан).
+      * weights: умножают similarity на коэффициент per источник матча.
+        title_ru → weights.ru, title_en → weights.en, alias → weights.alias
+        (поверх отдельных весов ru/en для языка алиаса).
+      * prefer_external_id: если у raw есть BGG/Tesera external_link с
+        числовым ID — добавляем deterministic-кандидата (score=1.0) поверх
+        результатов trgm. Если такая Game есть — она обычно поднимается на
+        первое место; если нет — fuzzy-результаты остаются нетронутыми.
 
-    Если raw не имеет ни title_ru, ни title_en — возвращаем пустой список
-    (нечего матчить).
+    Если raw не имеет ни title_ru, ни title_en — fuzzy-часть пуста; но
+    external_id-кандидат может всё равно вернуться (полезно для очень
+    кривых названий).
     """
     raw = await session.get(DicefestRawGame, raw_id)
     if raw is None:
         raise HTTPException(404, detail=f"raw_id={raw_id} not found")
 
-    queries = [t for t in (raw.title_ru, raw.title_en) if t]
-    if not queries:
-        return raw, []
+    if params is not None:
+        threshold = params.threshold
+    weights = params.weights if params is not None else None
 
-    # CTE объединяет матчи по двум источникам (title + aliases) для каждого
-    # из max-2 query-строк (title_ru/title_en). Берём MAX(score) per game.
-    sql = text(
-        """
-        WITH q AS (
-            SELECT unnest(CAST(:queries AS text[])) AS norm
-        ),
-        from_title AS (
-            SELECT g.id AS game_id,
-                   g.title AS title,
-                   g.year AS year,
-                   GREATEST(
-                       similarity(g.title_norm, lower(immutable_unaccent(q.norm))),
-                       0
-                   ) AS score,
-                   'title'::text AS via,
-                   g.title AS matched_text
-            FROM games g, q
-            WHERE g.title_norm % lower(immutable_unaccent(q.norm))
-              AND (g.status IS NULL OR g.status != 'merged')
-        ),
-        from_alias AS (
-            SELECT a.game_id,
-                   g.title AS title,
-                   g.year AS year,
-                   similarity(a.alias_norm, lower(immutable_unaccent(q.norm))) AS score,
-                   ('alias_' || COALESCE(a.language, 'unknown'))::text AS via,
-                   a.alias AS matched_text
-            FROM game_aliases a
-            JOIN games g ON g.id = a.game_id
-            CROSS JOIN q
-            WHERE a.alias_norm % lower(immutable_unaccent(q.norm))
-              AND (g.status IS NULL OR g.status != 'merged')
-        ),
-        all_matches AS (
-            SELECT * FROM from_title
-            UNION ALL
-            SELECT * FROM from_alias
-        ),
-        per_game AS (
-            SELECT game_id,
-                   MAX(score) AS score,
-                   (ARRAY_AGG(via ORDER BY score DESC))[1] AS via,
-                   (ARRAY_AGG(matched_text ORDER BY score DESC))[1] AS matched_text,
-                   (ARRAY_AGG(title ORDER BY score DESC))[1] AS title,
-                   (ARRAY_AGG(year ORDER BY score DESC))[1] AS year
-            FROM all_matches
-            WHERE score >= :threshold
-            GROUP BY game_id
+    # Веса; 1.0 как fallback. Делаем строкой формата на python-стороне, чтобы
+    # SQL остался чистым (не плодим bindparams).
+    w_ru = float(weights.ru) if weights else 1.0
+    w_en = float(weights.en) if weights else 1.0
+    w_alias = float(weights.alias) if weights else 1.0
+
+    title_ru = raw.title_ru
+    title_en = raw.title_en
+    if not title_ru and not title_en:
+        # Без названий fuzzy-часть пуста, но external_id мы ещё можем найти.
+        rows: list[dict] = []
+    else:
+        # Разделённые ветки: title_ru × w_ru, title_en × w_en, alias × w_alias
+        # (с дополнительным языковым весом). Пустые title подставляем как
+        # пустую строку и вес 0 — индекс % не матчит пустую строку.
+        sql = text(
+            """
+            WITH from_title_ru AS (
+                SELECT g.id AS game_id,
+                       g.title AS title,
+                       g.year AS year,
+                       similarity(g.title_norm, lower(immutable_unaccent(:q_ru))) * :w_ru AS score,
+                       'title_ru'::text AS via,
+                       g.title AS matched_text
+                FROM games g
+                WHERE :q_ru <> ''
+                  AND g.title_norm % lower(immutable_unaccent(:q_ru))
+                  AND (g.status IS NULL OR g.status != 'merged')
+            ),
+            from_title_en AS (
+                SELECT g.id AS game_id,
+                       g.title AS title,
+                       g.year AS year,
+                       similarity(g.title_norm, lower(immutable_unaccent(:q_en))) * :w_en AS score,
+                       'title_en'::text AS via,
+                       g.title AS matched_text
+                FROM games g
+                WHERE :q_en <> ''
+                  AND g.title_norm % lower(immutable_unaccent(:q_en))
+                  AND (g.status IS NULL OR g.status != 'merged')
+            ),
+            from_alias_ru AS (
+                SELECT a.game_id,
+                       g.title AS title,
+                       g.year AS year,
+                       similarity(a.alias_norm, lower(immutable_unaccent(:q_ru))) * :w_alias * :w_ru AS score,
+                       ('alias_' || COALESCE(a.language, 'unknown'))::text AS via,
+                       a.alias AS matched_text
+                FROM game_aliases a
+                JOIN games g ON g.id = a.game_id
+                WHERE :q_ru <> ''
+                  AND a.alias_norm % lower(immutable_unaccent(:q_ru))
+                  AND (g.status IS NULL OR g.status != 'merged')
+            ),
+            from_alias_en AS (
+                SELECT a.game_id,
+                       g.title AS title,
+                       g.year AS year,
+                       similarity(a.alias_norm, lower(immutable_unaccent(:q_en))) * :w_alias * :w_en AS score,
+                       ('alias_' || COALESCE(a.language, 'unknown'))::text AS via,
+                       a.alias AS matched_text
+                FROM game_aliases a
+                JOIN games g ON g.id = a.game_id
+                WHERE :q_en <> ''
+                  AND a.alias_norm % lower(immutable_unaccent(:q_en))
+                  AND (g.status IS NULL OR g.status != 'merged')
+            ),
+            all_matches AS (
+                SELECT * FROM from_title_ru
+                UNION ALL SELECT * FROM from_title_en
+                UNION ALL SELECT * FROM from_alias_ru
+                UNION ALL SELECT * FROM from_alias_en
+            ),
+            per_game AS (
+                SELECT game_id,
+                       MAX(score) AS score,
+                       (ARRAY_AGG(via ORDER BY score DESC))[1] AS via,
+                       (ARRAY_AGG(matched_text ORDER BY score DESC))[1] AS matched_text,
+                       (ARRAY_AGG(title ORDER BY score DESC))[1] AS title,
+                       (ARRAY_AGG(year ORDER BY score DESC))[1] AS year
+                FROM all_matches
+                WHERE score >= :threshold
+                GROUP BY game_id
+            )
+            SELECT pg.game_id,
+                   pg.score,
+                   pg.via,
+                   pg.matched_text,
+                   pg.title,
+                   pg.year,
+                   EXISTS(SELECT 1 FROM game_dicefest gd WHERE gd.game_id = pg.game_id)
+                       AS has_satellite_for_provider
+            FROM per_game pg
+            ORDER BY pg.score DESC, pg.game_id
+            LIMIT :limit
+            """
+        ).bindparams(
+            q_ru=title_ru or "",
+            q_en=title_en or "",
+            w_ru=w_ru,
+            w_en=w_en,
+            w_alias=w_alias,
+            threshold=threshold,
+            limit=limit,
         )
-        SELECT pg.game_id, pg.score, pg.via, pg.matched_text, pg.title, pg.year,
-               EXISTS(SELECT 1 FROM game_dicefest gd WHERE gd.game_id = pg.game_id)
-                   AS has_satellite_for_provider
-        FROM per_game pg
-        ORDER BY pg.score DESC, pg.game_id
-        LIMIT :limit
-        """
-    ).bindparams(queries=queries, threshold=threshold, limit=limit)
-    rows = (await session.execute(sql)).mappings().all()
+        rows = list((await session.execute(sql)).mappings().all())
+
+    # ── Опциональный deterministic-кандидат по external_id ─────────────────
+    # Если raw содержит BGG/Tesera ID и `prefer_external_id=True`, пытаемся
+    # найти canonical Game по числовому полю. Если такая существует — добавляем
+    # её со score=1.0 via='external_id:{bgg|tesera}'. Если она уже была в
+    # fuzzy-выдаче — заменяем, чтобы UI показал deterministic-источник.
+    if params is not None and params.prefer_external_id:
+        ext_ids = _extract_external_ids(raw.external_links)
+        for kind, ext_id in ext_ids.items():
+            col = "bgg_id" if kind == "bgg" else "tesera_id"
+            ext_sql = text(
+                f"SELECT id, title, year FROM games "
+                f"WHERE {col} = :ext_id "
+                f"  AND (status IS NULL OR status != 'merged') "
+                f"LIMIT 1"
+            ).bindparams(ext_id=ext_id)
+            ext_row = (await session.execute(ext_sql)).mappings().first()
+            if ext_row is None:
+                continue
+            via = f"external_id:{kind}"
+            # Удалить дубль из fuzzy-выдачи, если он там есть.
+            rows = [r for r in rows if r["game_id"] != ext_row["id"]]
+            sat_exists = (
+                await session.execute(
+                    text(
+                        "SELECT 1 FROM game_dicefest WHERE game_id = :gid LIMIT 1"
+                    ).bindparams(gid=ext_row["id"]),
+                )
+            ).first() is not None
+            rows.insert(
+                0,
+                {
+                    "game_id": ext_row["id"],
+                    "score": 1.0,
+                    "via": via,
+                    "matched_text": str(ext_id),
+                    "title": ext_row["title"],
+                    "year": ext_row["year"],
+                    "has_satellite_for_provider": sat_exists,
+                },
+            )
+        # Лимит может быть превышен, если external_id добавил кандидата
+        # сверх fuzzy-результатов. Обрезаем явно.
+        rows = rows[:limit]
 
     # Подгружаем aliases для каждого кандидата (для контекста в UI: какие у
     # canonical игры локализации). N+1 не страшно: limit≤10.
@@ -564,20 +689,28 @@ async def batch_auto_link(
     dry_run: bool = True,
     skip_with_satellite: bool = True,
     performed_by: str = "operator-batch",
+    params: MatchParams | None = None,
 ) -> dict:
     """Авто-link raw → canonical Game для уверенных совпадений (PR-5).
 
     Алгоритм:
       1. SELECT raw WHERE status='new' ORDER BY id LIMIT max_items.
-      2. Для каждой raw: match_candidates(threshold=threshold, limit=1).
+      2. Для каждой raw: match_candidates(threshold=threshold, limit=1, params=params).
       3. Если top-1 score ≥ threshold:
          - skip_with_satellite=True и has_satellite_for_provider → skip
          - dry_run=True: добавляем в items (без записи в БД)
          - dry_run=False: promote(action='link', notes='auto-batch threshold=…')
       4. Иначе → skipped[reason='low_score' | 'no_candidates'].
 
+    `params` — расширенные параметры матчинга (weights, prefer_external_id).
+    Если переданы, его `threshold` переопределяет аргумент `threshold`.
+
     Возвращает dict, который сериализуется в BatchLinkResult (см. schemas.py).
     """
+    # Если params задан — он master для threshold (UI в одной форме настраивает
+    # и тот, и другой — несинхронизация была бы багом).
+    if params is not None:
+        threshold = params.threshold
     if not (0.0 <= threshold <= 1.0):
         raise HTTPException(400, detail="threshold должен быть в [0, 1]")
     if max_items <= 0:
@@ -602,7 +735,7 @@ async def batch_auto_link(
     for rid in raw_ids:
         # match_candidates сам читает raw из БД и возвращает топ-1.
         raw, cands = await match_candidates(
-            session, rid, threshold=threshold, limit=1,
+            session, rid, threshold=threshold, limit=1, params=params,
         )
         if not cands:
             skipped.append({
