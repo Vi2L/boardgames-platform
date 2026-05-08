@@ -44,8 +44,11 @@ PRS (parsers), INFRA (общее).
 ### web-test
 
 **Catalog / matching UI**
-- [WT-F2.5] **Offer history page** — вкладка «офферы игры» на
-  странице каталога (catalog уже отдаёт через `Game.offers`).
+- [WT-F2.5] **Offer history page** — ✅ **ЗАВЕРШЕНО**.
+  Chevron-раскрытие каждого оффера в Offers-табе `GameDetailDrawer` с
+  `PriceChart` (история цен из parsers `price_observations`).
+  Новый endpoint `GET /history/by-external-id?store_slug=&external_id=` в parsers;
+  proxy `GET /api/offers/history` в web-test. Коммит `c86b198`.
 - [WT-F2.6] **Bulk-import wizard top-N** — UI вокруг
   `import_bgg_ranks.py`: импорт топ-N по rank.
 - [WT-F2.7] **RU-first автоподсказки** — компонент `GameSuggestRow`
