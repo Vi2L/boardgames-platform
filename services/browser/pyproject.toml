@@ -1,0 +1,20 @@
+[project]
+name = "browser"
+version = "0.1.0"
+description = "Browser-as-a-service: headless Chromium via Playwright для JS-rendered страниц и обхода антибот-защиты."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.27",
+    "playwright>=1.40",
+    "playwright-stealth>=2.0",
+    "pydantic>=2.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["browser*"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"

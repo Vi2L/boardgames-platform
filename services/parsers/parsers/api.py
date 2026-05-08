@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
 
+from .browser_client import BrowserClient
 from .catalog_publisher import CatalogPublisher
 from .db import PriceDatabase
 from .service import PriceService
@@ -26,15 +27,17 @@ from .stores.lavkaigr import LavkaIgrParser
 _db: PriceDatabase
 _service: PriceService
 _catalog_publisher: CatalogPublisher
+_browser_client: BrowserClient | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db, _service, _catalog_publisher
+    global _db, _service, _catalog_publisher, _browser_client
 
     db_path = os.getenv("DB_PATH", "data/prices.sqlite")
     ttl = float(os.getenv("CACHE_TTL_HOURS", "4"))
     proxy = os.getenv("PROXY")
+    browser_url = os.getenv("BROWSER_SERVICE_URL")
 
     _db = PriceDatabase(db_path)
     await _db.init()
@@ -69,9 +72,21 @@ async def lifespan(app: FastAPI):
     )
     stats_set_db(_db)
 
+    # Опциональный browser-as-a-service клиент. Если BROWSER_SERVICE_URL задан —
+    # создаём клиент и вешаем на app.state для доступа из будущих парсеров.
+    if browser_url:
+        _browser_client = BrowserClient(browser_url)
+        app.state.browser_client = _browser_client
+        import logging
+        logging.getLogger(__name__).info("browser_client initialized: %s", browser_url)
+    else:
+        app.state.browser_client = None
+
     yield  # приложение работает
 
     await _catalog_publisher.close()
+    if _browser_client is not None:
+        await _browser_client.close()
 
 
 app = FastAPI(title="Board Game Price Parser", lifespan=lifespan)
@@ -108,6 +123,22 @@ async def search(
         "errors": result.errors,
         "products": [_product_to_dict(p) for p in result.products],
     }
+
+
+@app.get("/history/by-external-id")
+async def price_history_by_external_id(
+    store_slug: str = Query(..., description="Slug магазина, например crowdgames"),
+    external_id: str = Query(..., description="external_id товара в этом магазине"),
+):
+    """История цен по (store_slug, external_id) — для catalog offer drawer.
+
+    Маршрут зарегистрирован до /history/{product_id}, чтобы FastAPI не пытался
+    преобразовать строку «by-external-id» в int.
+    """
+    points = await _db.get_history_by_external_id(store_slug, external_id)
+    if not points:
+        raise HTTPException(status_code=404, detail="Продукт не найден или истории нет")
+    return [{"price": p.price, "fetched_at": p.fetched_at.isoformat()} for p in points]
 
 
 @app.get("/history/{product_id}")

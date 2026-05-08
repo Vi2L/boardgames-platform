@@ -14,6 +14,12 @@ PRS (parsers), INFRA (общее).
 
 ## Сейчас в работе
 
+- [INFRA-5] **`services/browser/`** — ✅ **ЗАВЕРШЕНО**.
+  FastAPI + Playwright + playwright-stealth. `POST /fetch {url} → {html, cookies, headers}`.
+  Профиль `browser` в docker-compose (не входит в `full` — образ ~700 MB).
+  `browser_client.py` в parsers; активируется при `BROWSER_SERVICE_URL`.
+  Запуск: `docker compose --profile browser up -d --build`.
+
 - [WT-F4.1-extended] **parsers DB explorer** — ✅ **ЗАВЕРШЕНО** (8/8 виджетов).
   Реализованы: Inventory, ProductsBrowser, Analytics, Timeline, LatencyHistogram,
   StoreDistribution, ParserBreakdown, RawKeys — новая вкладка «БД парсеров: графики».
@@ -85,10 +91,6 @@ PRS (parsers), INFRA (общее).
   и `apps/mobile`.
 - [INFRA-4] **`.github/workflows/`** — CI с change detection
   (пересобирать только то, что менялось).
-- [INFRA-5] **`services/browser/`** — browser-as-a-service: FastAPI +
-  Playwright + playwright-stealth, `POST /fetch {url} → {html, cookies, headers}`;
-  профиль `browser` в docker-compose; `browser_client.py` в parsers
-  как тонкий httpx-клиент к этому сервису.
 
 ### Известные ограничения (не баги, а константы)
 - **Парсеры — только 4 магазина** (hobbygames, lavkaigr, gaga,

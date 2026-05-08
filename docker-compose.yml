@@ -1,9 +1,11 @@
 # Единый docker-compose для всего монорепо.
 #
 # Profiles позволяют поднимать подмножества сервисов:
-#   docker compose --profile minimal up -d   # только postgres
-#   docker compose --profile catalog up -d   # postgres + catalog
-#   docker compose --profile full up -d      # всё (postgres+catalog+parsers+web-test)
+#   docker compose --profile minimal up -d          # только postgres
+#   docker compose --profile catalog up -d          # postgres + catalog
+#   docker compose --profile full up -d             # всё (postgres+catalog+parsers+web-test)
+#   docker compose --profile browser up -d          # только browser-as-a-service
+#   docker compose --profile full --profile browser up -d  # full + browser
 #
 # Все сервисы общаются по именам через сеть `bg`. Внешние порты можно
 # переопределять переменными в .env (например POSTGRES_PORT=5434).
@@ -89,6 +91,10 @@ services:
       # В сети bg catalog доступен по имени сервиса.
       CATALOG_INGEST_URL: http://catalog:8002/ingest/offers
       CATALOG_API_KEY: ${CATALOG_API_KEY:-}
+      # Опциональный browser-as-a-service. Если задан — parsers инициализируют
+      # BrowserClient и вешают его на app.state.browser_client.
+      # Используется при запуске с --profile browser.
+      BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-}
     volumes:
       - prices-data:/data
     depends_on:
@@ -135,6 +141,30 @@ services:
     networks:
       - bg
     profiles: ["full"]
+
+  browser:
+    build:
+      context: .
+      dockerfile: services/browser/Dockerfile
+    image: boardgames-browser:latest
+    container_name: bg-browser
+    ports:
+      - "${BROWSER_PORT:-8003}:8003"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Ограничивает параллельные BrowserContext (~150-200 MB RAM каждый).
+      BROWSER_MAX_CONCURRENT: ${BROWSER_MAX_CONCURRENT:-3}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      # Playwright + Chromium долго стартуют при первом запуске контейнера.
+      start_period: 60s
+    restart: unless-stopped
+    networks:
+      - bg
+    profiles: ["browser"]
 
 volumes:
   pgdata:

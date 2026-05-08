@@ -20,6 +20,7 @@ members = [
     "services/catalog",
     "services/parsers",
     "services/web-test",
+    "services/browser",
     "packages/shared-py",
 ]
 
