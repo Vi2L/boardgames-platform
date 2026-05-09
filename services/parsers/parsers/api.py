@@ -318,6 +318,38 @@ async def dlq_delete(dlq_id: int):
         raise HTTPException(status_code=404, detail="DLQ item not found")
 
 
+@app.post("/api/avito/cookies")
+async def upload_avito_cookies(cookies: list[dict]):
+    """Принять куки avito.ru от Chrome-расширения и сохранить в .scratch/avito_cookies.json.
+
+    Chrome extensions могут читать httpOnly куки (через chrome.cookies API), включая
+    _avisc, который не экспортируется обычными инструментами. Расширение вызывает
+    этот endpoint автоматически при каждом визите на avito.ru.
+
+    После записи файла AvitoParser подхватывает новые куки при следующем поиске
+    (динамический перезагрузчик проверяет mtime файла).
+    """
+    import json as _json
+    cookie_path = os.path.join(".scratch", "avito_cookies.json")
+    os.makedirs(".scratch", exist_ok=True)
+    with open(cookie_path, "w") as f:
+        _json.dump(cookies, f, ensure_ascii=False, indent=2)
+
+    # Notify the AvitoParser instance to reload cookies on next search
+    for p in _service._parsers.values():
+        if hasattr(p, "_cookie_file_mtime"):
+            p._cookie_file_mtime = 0  # force reload
+
+    key_names = {c.get("name") for c in cookies}
+    has_avisc = "_avisc" in key_names
+    return {
+        "received": len(cookies),
+        "has_avisc": has_avisc,
+        "has_v": "v" in key_names,
+        "path": cookie_path,
+    }
+
+
 @app.delete("/api/cache")
 async def clear_cache(
     store: str | None = Query(None, description="Магазин (slug). Без — все магазины"),

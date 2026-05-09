@@ -95,8 +95,14 @@ services:
       # BrowserClient и вешают его на app.state.browser_client.
       # Используется при запуске с --profile browser.
       BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-}
+      # Куки Авито из реального браузера (JSON-строка или путь к файлу).
+      # Позволяет обойти Qrator без прокси. См. .env.example для инструкций.
+      AVITO_COOKIES: ${AVITO_COOKIES:-}
     volumes:
       - prices-data:/data
+      # Bind на .scratch (gitignored) — удобно класть avito_cookies.json туда.
+      # Внутри контейнера доступно как /scratch/avito_cookies.json.
+      - ./.scratch:/scratch:ro
     depends_on:
       catalog:
         condition: service_healthy
@@ -157,6 +163,16 @@ services:
       # Прокси для всех fetch-запросов. Авито и другие сайты с GeoIP-блокировкой
       # требуют RU-прокси. Пример: socks5://user:pass@proxy.ru:1080
       BROWSER_PROXY_URL: ${BROWSER_PROXY_URL:-}
+      # "chrome" на AMD64 (облако) — лучше обходит bot-detection (другой TLS fingerprint).
+      # На ARM64 (Mac Apple Silicon) нативный запуск: BROWSER_CHANNEL=chrome (system Chrome).
+      BROWSER_CHANNEL: ${BROWSER_CHANNEL:-}
+      # CDP к реальному Chrome: ws://host.docker.internal:9222
+      # Запустить Chrome: open -a "Google Chrome" --args --remote-debugging-port=9222
+      CHROME_CDP_URL: ${CHROME_CDP_URL:-}
+      # Директория для persistent Playwright-профилей (Qrator cookie persistence).
+      BROWSER_PROFILES_DIR: /data/profiles
+    volumes:
+      - browser-profiles:/data/profiles
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
       interval: 30s
@@ -173,6 +189,7 @@ volumes:
   pgdata:
   prices-data:
   portal-data:
+  browser-profiles:
 
 networks:
   bg:

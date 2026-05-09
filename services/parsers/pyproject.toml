@@ -13,6 +13,9 @@ dependencies = [
     "bg-shared",
     # HTML-парсинг для avito.ru (фолбэк при отсутствии embedded JSON)
     "beautifulsoup4>=4.12",
+    # TLS-impersonation для обхода Qrator на avito.ru без браузера.
+    # curl-cffi использует libcurl + BoringSSL и точно имитирует Chrome TLS handshake.
+    "curl-cffi>=0.7",
 ]
 
 [project.optional-dependencies]

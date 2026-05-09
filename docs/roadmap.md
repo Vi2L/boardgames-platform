@@ -57,10 +57,10 @@ PRS (parsers), INFRA (общее).
   proxy `GET /api/offers/history` в web-test. Коммит `c86b198`.
 - [WT-F2.6] **Bulk-import wizard top-N** — UI вокруг
   `import_bgg_ranks.py`: импорт топ-N по rank.
-- [WT-F2.7] **RU-first автоподсказки** — компонент `GameSuggestRow`
-  с RU-названием как первичным, EN как бледным суффиксом; при выборе
-  подставляется RU; `getDisplayName(game)` в `lib/catalog.ts`
-  как shared-хелпер.
+- [WT-F2.7] **RU-first автоподсказки** — ✅ **ЗАВЕРШЕНО**.
+  `GameSuggestRow` (`components/shared/`): RU-название как первичное,
+  EN — бледный суффикс (`text-gray-500`); при выборе подставляется RU.
+  `getDisplayName(game)` в `lib/catalog.ts` как shared-хелпер.
 
 **Диагностика**
 - [WT-F5.3] **Status page** — `/status` с историей пингов и

@@ -1,14 +1,23 @@
-FROM python:3.12-slim-bookworm
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Зависимости сервиса отдельным слоем — пересборка только при изменении pyproject.toml.
+# Зависимости сервиса — отдельный кешируемый слой.
 COPY services/browser/pyproject.toml .
 RUN pip install --no-cache-dir -e .
 
-# Установка Chromium + все системные зависимости (~400 MB, тяжёлый кешируемый слой).
-# --with-deps автоматически ставит нужные apt-пакеты (libnss3, libatk и др.).
-RUN playwright install --with-deps chromium
+# На AMD64 (облако, x86_64) устанавливаем реальный Google Chrome —
+# у него другой TLS-отпечаток и headless-режим, которые Qrator воспринимает
+# как доверенный браузер. На ARM64 (Mac Apple Silicon) Chrome недоступен
+# для Linux — используем Chromium.
+ARG TARGETARCH
+RUN if [ "$TARGETARCH" = "amd64" ]; then \
+      echo "AMD64: устанавливаем Google Chrome" && \
+      playwright install --with-deps chrome; \
+    else \
+      echo "ARM64: Google Chrome недоступен, устанавливаем Chromium" && \
+      playwright install --with-deps chromium; \
+    fi
 
 COPY services/browser/browser/ browser/
 

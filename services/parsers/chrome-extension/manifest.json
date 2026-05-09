@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Avito Cookie Sync",
+  "version": "1.0",
+  "description": "Синхронизирует куки avito.ru (включая httpOnly) с локальным парсером boardgames-platform.",
+  "permissions": ["cookies", "scripting", "activeTab"],
+  "host_permissions": [
+    "https://*.avito.ru/*",
+    "http://localhost:8001/*"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Sync Avito Cookies",
+    "default_icon": {
+      "16": "icon.png",
+      "48": "icon.png",
+      "128": "icon.png"
+    }
+  },
+  "icons": {
+    "16": "icon.png",
+    "48": "icon.png",
+    "128": "icon.png"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://*.avito.ru/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

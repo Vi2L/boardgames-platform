@@ -45,13 +45,18 @@ class BrowserClient:
         self,
         url: str,
         *,
-        wait_until: str = "networkidle",
+        wait_until: str = "domcontentloaded",
         timeout_ms: int = 30_000,
         extra_headers: dict[str, str] | None = None,
         stealth: bool = True,
         proxy: str | None = None,
+        warm_up_url: str | None = None,
+        wait_ms: int = 0,
         wait_for_selector: str | None = None,
         wait_for_selector_timeout_ms: int = 15_000,
+        evaluate_js: str | None = None,
+        profile_id: str | None = None,
+        cookies: list[dict] | None = None,
     ) -> dict:
         """POST /fetch → словарь с ключами:
             html, status, url, headers, cookies, elapsed_ms.
@@ -72,9 +77,19 @@ class BrowserClient:
             payload["extra_headers"] = extra_headers
         if proxy:
             payload["proxy"] = proxy
+        if warm_up_url:
+            payload["warm_up_url"] = warm_up_url
+        if wait_ms:
+            payload["wait_ms"] = wait_ms
         if wait_for_selector:
             payload["wait_for_selector"] = wait_for_selector
             payload["wait_for_selector_timeout_ms"] = wait_for_selector_timeout_ms
+        if evaluate_js:
+            payload["evaluate_js"] = evaluate_js
+        if profile_id:
+            payload["profile_id"] = profile_id
+        if cookies:
+            payload["cookies"] = cookies
 
         resp = await self._client.post("/fetch", json=payload)
         if resp.is_error:
