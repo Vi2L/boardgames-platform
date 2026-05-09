@@ -158,32 +158,53 @@ services:
       - "${BROWSER_PORT:-8003}:8003"
     environment:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      # Ограничивает параллельные BrowserContext (~150-200 MB RAM каждый).
+      # Ограничивает параллельные BrowserContext.
       BROWSER_MAX_CONCURRENT: ${BROWSER_MAX_CONCURRENT:-3}
-      # Прокси для всех fetch-запросов. Авито и другие сайты с GeoIP-блокировкой
-      # требуют RU-прокси. Пример: socks5://user:pass@proxy.ru:1080
+      # Прокси для всех fetch-запросов.
       BROWSER_PROXY_URL: ${BROWSER_PROXY_URL:-}
-      # "chrome" на AMD64 (облако) — лучше обходит bot-detection (другой TLS fingerprint).
-      # На ARM64 (Mac Apple Silicon) нативный запуск: BROWSER_CHANNEL=chrome (system Chrome).
+      # AMD64 cloud: BROWSER_BACKEND=playwright + BROWSER_CHANNEL=chrome (Chrome в Dockerfile)
+      # ARM64 local: BROWSER_BACKEND=camoufox (Camoufox в Dockerfile) или нативный Mac Chrome
+      BROWSER_BACKEND: ${BROWSER_BACKEND:-camoufox}
       BROWSER_CHANNEL: ${BROWSER_CHANNEL:-}
       # CDP к реальному Chrome: ws://host.docker.internal:9222
-      # Запустить Chrome: open -a "Google Chrome" --args --remote-debugging-port=9222
       CHROME_CDP_URL: ${CHROME_CDP_URL:-}
-      # Директория для persistent Playwright-профилей (Qrator cookie persistence).
+      # Директория для persistent профилей (куки/localStorage сохраняются между запросами).
       BROWSER_PROFILES_DIR: /data/profiles
     volumes:
       - browser-profiles:/data/profiles
+    # Firefox + Xvfb требуют больше shared memory, чем Chromium.
+    shm_size: 2gb
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
-      # Playwright + Chromium долго стартуют при первом запуске контейнера.
-      start_period: 60s
+      # Camoufox + Firefox + Xvfb дольше стартуют при первом запуске.
+      start_period: 90s
     restart: unless-stopped
     networks:
       - bg
     profiles: ["browser"]
+
+  # Опциональный Chrome с noVNC для ручной прогревки сессии Авито.
+  # Запуск: docker compose --profile vnc up -d chrome-vnc
+  # Доступ: http://localhost:7900 (пароль: boardgames)
+  # Сценарий: открыть avito.ru → решить капчу → экспортировать куки через Cookie-Editor
+  # → POST /fetch с cookies=[] для инжекции в camoufox-профиль.
+  chrome-vnc:
+    image: selenium/standalone-chrome:latest
+    container_name: bg-chrome-vnc
+    ports:
+      - "7900:7900"
+      - "4444:4444"
+    environment:
+      SE_VNC_PASSWORD: boardgames
+      SE_SCREEN_WIDTH: 1920
+      SE_SCREEN_HEIGHT: 1080
+    shm_size: 2gb
+    networks:
+      - bg
+    profiles: ["vnc"]
 
 volumes:
   pgdata:

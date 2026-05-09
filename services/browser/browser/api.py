@@ -1,16 +1,20 @@
-"""Browser-as-a-service: headless Chromium через Playwright.
+"""Browser-as-a-service: Camoufox (primary) + Playwright (fallback).
 
-Два режима работы:
+Два backend'а, переключаемых через BROWSER_BACKEND env var:
 
-1. **Shared browser** (по умолчанию) — один Browser-процесс, новый
-   BrowserContext на каждый запрос. Изолированные cookies, быстро.
+1. **camoufox** (default) — Firefox с C++-level fingerprint patches.
+   Обходит Qrator и аналогичные anti-bot системы без JS-патчинга.
+   headless="virtual" использует встроенный Xvfb — скрывает headless-маркеры.
 
-2. **Persistent profile** (profile_id задан) — отдельный Playwright-процесс
-   с PersistentContext для каждого profile_id. Cookies/localStorage сохраняются
-   между запросами — ключевой механизм для обхода bot-challenge (Qrator).
+2. **playwright** (fallback) — Playwright Chromium/Chrome. Работает для сайтов
+   без жёсткого bot-detection. Может быть заблокирован Qrator на avito.ru.
 
-Семафор BROWSER_MAX_CONCURRENT ограничивает суммарное число одновременных
-запросов независимо от режима.
+Три режима навигации (общие для обоих backend'ов):
+
+A. **Shared browser** (profile_id не задан) — новый BrowserContext на каждый запрос.
+B. **Persistent profile** (profile_id задан) — один контекст на profile_id,
+   cookies/localStorage сохраняются между запросами.
+C. **CDP mode** (CHROME_CDP_URL задан) — подключение к реальному Chrome по CDP.
 """
 from __future__ import annotations
 
@@ -21,6 +25,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
 
+from camoufox.async_api import AsyncCamoufox
 from fastapi import FastAPI, HTTPException, Request
 from playwright.async_api import (
     Browser, BrowserContext, Playwright,
@@ -34,13 +39,15 @@ from pydantic import BaseModel, Field
 _MAX_CONCURRENT = int(os.getenv("BROWSER_MAX_CONCURRENT", "3"))
 _DEFAULT_PROXY: str | None = os.getenv("BROWSER_PROXY_URL") or None
 _PROFILES_DIR = Path(os.getenv("BROWSER_PROFILES_DIR", "/data/profiles"))
-# "chrome" на AMD64 (облако), "chromium" на ARM64 (Mac Apple Silicon).
-# Задаётся через BROWSER_CHANNEL в .env / docker-compose.
+# "camoufox" (default) — Firefox + C++-level anti-detect, работает в Docker.
+# "playwright" — Chromium fallback, требует playwright install в Dockerfile.
+_BROWSER_BACKEND = os.getenv("BROWSER_BACKEND", "camoufox")
+# Только для playwright-fallback: "chrome" или "chromium".
 _BROWSER_CHANNEL: str | None = os.getenv("BROWSER_CHANNEL") or None
 # CDP URL реального Chrome (напр. ws://host.docker.internal:9222).
 _CDP_URL: str | None = os.getenv("CHROME_CDP_URL") or None
 
-# Патчим маркеры автоматизации — Авито проверяет их через JS.
+# Playwright-only stealth JS (не нужен для camoufox — патчится на C++ уровне).
 _STEALTH_JS = """\
 try { Object.defineProperty(navigator, 'webdriver', { get: () => undefined }); } catch(e) {}
 if (!window.chrome) window.chrome = {};
@@ -55,6 +62,7 @@ try {
 } catch(e) {}
 """
 
+# Playwright-only launch args.
 _LAUNCH_ARGS = [
     "--disable-blink-features=AutomationControlled",
     "--no-sandbox",
@@ -65,7 +73,7 @@ _LAUNCH_ARGS = [
 
 
 # ---------------------------------------------------------------------------
-# Схемы
+# Schemas
 # ---------------------------------------------------------------------------
 
 class FetchRequest(BaseModel):
@@ -76,20 +84,13 @@ class FetchRequest(BaseModel):
     stealth: bool = True
     proxy: str | None = None
 
-    # Warm-up: зайти на этот URL перед основным (Авито — прогрев сессии).
     warm_up_url: str | None = None
-    # Задержка после основного goto (мс). Даёт странице достроить DOM.
     wait_ms: int = Field(default=0, ge=0, le=15_000)
-    # CSS-селектор — ждать появления элемента перед возвратом HTML.
     wait_for_selector: str | None = None
     wait_for_selector_timeout_ms: int = Field(default=15_000, ge=1_000, le=60_000)
-    # JS для выполнения в контексте страницы; результат → поле evaluated.
     evaluate_js: str | None = None
-    # ID профиля для persistent context (Qrator cookie persistence).
     profile_id: str | None = None
     # Куки для инжекции (формат Playwright: name/value/domain/path/...).
-    # Применяются поверх профиля или в свежем контексте. Позволяет передать
-    # реальные куки из браузера пользователя для обхода Qrator.
     cookies: list[dict] = []
 
 
@@ -100,7 +101,7 @@ class FetchResponse(BaseModel):
     headers: dict[str, str]
     cookies: list[dict]
     elapsed_ms: int
-    evaluated: Any = None       # результат evaluate_js
+    evaluated: Any = None
 
 
 # ---------------------------------------------------------------------------
@@ -108,43 +109,70 @@ class FetchResponse(BaseModel):
 # ---------------------------------------------------------------------------
 
 class _PersistentSession:
-    """Обёртка над launch_persistent_context для одного profile_id."""
+    """Persistent browser context для одного profile_id.
+
+    Camoufox path: AsyncCamoufox(persistent_context=True, user_data_dir=...).
+    Playwright path: launch_persistent_context (как раньше).
+    """
 
     def __init__(self, profile_dir: Path, proxy: str | None) -> None:
         self.profile_dir = profile_dir
         self.proxy = proxy
         self.lock = asyncio.Lock()
+        # Camoufox fields
+        self._cam: AsyncCamoufox | None = None
+        # Playwright fields (fallback)
         self._pw: Playwright | None = None
+        # Общий: BrowserContext (оба path возвращают совместимый объект)
         self._ctx: BrowserContext | None = None
 
     async def start(self) -> None:
         self.profile_dir.mkdir(parents=True, exist_ok=True)
-        self._pw = await async_playwright().start()
-        kwargs: dict = {
-            "headless": True,
-            "args": _LAUNCH_ARGS,
-            "viewport": {"width": 1366, "height": 768},
-            "user_agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "locale": "ru-RU",
-            "extra_http_headers": {"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8"},
-        }
-        if self.proxy:
-            kwargs["proxy"] = {"server": self.proxy}
-        if _BROWSER_CHANNEL:
-            kwargs["channel"] = _BROWSER_CHANNEL
-        self._ctx = await self._pw.chromium.launch_persistent_context(
-            str(self.profile_dir), **kwargs,
-        )
-        await self._ctx.add_init_script(_STEALTH_JS)
+
+        if _BROWSER_BACKEND == "camoufox":
+            cam_kwargs: dict = {
+                "headless": "virtual",   # Xvfb: скрывает headless-маркеры
+                "persistent_context": True,
+                "user_data_dir": str(self.profile_dir),
+            }
+            if self.proxy:
+                cam_kwargs["proxy"] = {"server": self.proxy}
+            self._cam = AsyncCamoufox(**cam_kwargs)
+            # __aenter__ возвращает BrowserContext (как playwright's launch_persistent_context)
+            self._ctx = await self._cam.__aenter__()
+            # Fingerprint патчится на C++ уровне — add_init_script не нужен
+        else:
+            # Playwright fallback (без изменений)
+            self._pw = await async_playwright().start()
+            kwargs: dict = {
+                "headless": True,
+                "args": _LAUNCH_ARGS,
+                "viewport": {"width": 1366, "height": 768},
+                "user_agent": (
+                    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+                ),
+                "locale": "ru-RU",
+                "extra_http_headers": {"Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8"},
+            }
+            if self.proxy:
+                kwargs["proxy"] = {"server": self.proxy}
+            if _BROWSER_CHANNEL:
+                kwargs["channel"] = _BROWSER_CHANNEL
+            self._ctx = await self._pw.chromium.launch_persistent_context(
+                str(self.profile_dir), **kwargs,
+            )
+            await self._ctx.add_init_script(_STEALTH_JS)
 
     async def close(self) -> None:
-        if self._ctx:
-            await self._ctx.close()
-        if self._pw:
-            await self._pw.stop()
+        if self._cam:
+            # __aexit__ закрывает и context, и Firefox процесс
+            await self._cam.__aexit__(None, None, None)
+        else:
+            if self._ctx:
+                await self._ctx.close()
+            if self._pw:
+                await self._pw.stop()
 
     @property
     def ctx(self) -> BrowserContext:
@@ -172,25 +200,36 @@ async def _get_persistent_session(profile_id: str, proxy: str | None) -> _Persis
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    pw = await async_playwright().start()
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
 
     if _CDP_URL:
-        # Режим CDP: подключаемся к реальному Chrome пользователя.
-        # Chrome запускается на хосте с --remote-debugging-port=9222.
-        # На Mac с Docker Desktop: CHROME_CDP_URL=ws://host.docker.internal:9222
+        # CDP mode: подключаемся к реальному Chrome.
+        # BROWSER_BACKEND игнорируется — всегда используется playwright CDP.
+        pw = await async_playwright().start()
         import logging
         logging.getLogger(__name__).info("CDP mode: connecting to %s", _CDP_URL)
         browser = await pw.chromium.connect_over_cdp(_CDP_URL)
+        app.state.playwright = pw
+        app.state.cam_cm = None
+
+    elif _BROWSER_BACKEND == "camoufox":
+        # Camoufox shared browser (один Browser, новый context на запрос)
+        cam_cm = AsyncCamoufox(headless="virtual")
+        browser = await cam_cm.__aenter__()   # возвращает Browser-совместимый объект
+        app.state.playwright = None
+        app.state.cam_cm = cam_cm
+
     else:
+        # Playwright fallback
+        pw = await async_playwright().start()
         launch_kwargs: dict = {"headless": True, "args": _LAUNCH_ARGS}
         if _BROWSER_CHANNEL:
             launch_kwargs["channel"] = _BROWSER_CHANNEL
         browser = await pw.chromium.launch(**launch_kwargs)
+        app.state.playwright = pw
+        app.state.cam_cm = None
 
-    semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
     app.state.browser = browser
-    app.state.playwright = pw
     app.state.semaphore = semaphore
     app.state.cdp_mode = bool(_CDP_URL)
 
@@ -201,9 +240,13 @@ async def lifespan(app: FastAPI):
         await s.close()
     _persistent_sessions.clear()
 
-    if not _CDP_URL:
-        await browser.close()
-    await pw.stop()
+    if app.state.cam_cm:
+        await app.state.cam_cm.__aexit__(None, None, None)
+    else:
+        if not _CDP_URL:
+            await browser.close()
+        if app.state.playwright:
+            await app.state.playwright.stop()
 
 
 app = FastAPI(title="browser-service", lifespan=lifespan)
@@ -214,10 +257,7 @@ app = FastAPI(title="browser-service", lifespan=lifespan)
 # ---------------------------------------------------------------------------
 
 async def _navigate_page(page, req: FetchRequest) -> Any:
-    """Выполнить навигацию + все опциональные шаги. Возвращает (response, evaluated)."""
-    effective_proxy = req.proxy or _DEFAULT_PROXY  # noqa: F841 (used via context)
-
-    # Warm-up
+    """Навигация + опциональные шаги. Возвращает (response, evaluated)."""
     if req.warm_up_url:
         try:
             await page.goto(req.warm_up_url, wait_until="domcontentloaded", timeout=req.timeout_ms)
@@ -261,24 +301,32 @@ async def _navigate_page(page, req: FetchRequest) -> Any:
 
 @app.get("/health")
 async def health(request: Request):
-    browser: Browser = request.app.state.browser
+    browser = request.app.state.browser
     if not browser.is_connected():
-        raise HTTPException(status_code=503, detail="chromium disconnected")
+        raise HTTPException(status_code=503, detail="browser disconnected")
     return {"status": "ok"}
 
 
 @app.get("/info")
 async def info(request: Request):
     from importlib.metadata import version as pkg_version
-    browser: Browser = request.app.state.browser
-    return {
-        "playwright": pkg_version("playwright"),
-        "chromium": browser.version,
+    browser = request.app.state.browser
+    result: dict = {
+        "backend": _BROWSER_BACKEND,
         "max_concurrent": _MAX_CONCURRENT,
         "proxy_configured": _DEFAULT_PROXY is not None,
         "profiles_dir": str(_PROFILES_DIR),
         "active_profiles": list(_persistent_sessions.keys()),
     }
+    if _BROWSER_BACKEND == "camoufox" and not _CDP_URL:
+        result["camoufox"] = pkg_version("camoufox")
+    else:
+        try:
+            result["playwright"] = pkg_version("playwright")
+            result["chromium"] = browser.version
+        except Exception:
+            pass
+    return result
 
 
 @app.post("/fetch", response_model=FetchResponse)
@@ -294,7 +342,8 @@ async def fetch(req: FetchRequest, request: Request):
             session = await _get_persistent_session(req.profile_id, effective_proxy)
             async with session.lock:
                 page = await session.ctx.new_page()
-                if req.stealth:
+                # Stealth применяется только для playwright (camoufox — на C++ уровне)
+                if req.stealth and _BROWSER_BACKEND != "camoufox":
                     await Stealth().apply_stealth_async(page)
                 if req.cookies:
                     await session.ctx.add_cookies(req.cookies)
@@ -315,7 +364,7 @@ async def fetch(req: FetchRequest, request: Request):
             context = await request.app.state.browser.new_context(**context_kwargs)
             try:
                 page = await context.new_page()
-                if req.stealth:
+                if req.stealth and _BROWSER_BACKEND != "camoufox":
                     await Stealth().apply_stealth_async(page)
                 if req.cookies:
                     await context.add_cookies(req.cookies)

@@ -1,11 +1,17 @@
 [project]
 name = "browser"
 version = "0.1.0"
-description = "Browser-as-a-service: headless Chromium via Playwright для JS-rendered страниц и обхода антибот-защиты."
+description = "Browser-as-a-service: Camoufox (Firefox anti-detect) + Playwright fallback для JS-rendered страниц и обхода антибот-защиты."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.110",
     "uvicorn[standard]>=0.27",
+    # Camoufox — основной backend: Firefox с C++-level fingerprint patches.
+    # Обходит Qrator и аналогичные anti-bot системы без playwright-stealth.
+    "camoufox[geoip]>=0.4",
+    # Playwright + stealth остаются как Python-зависимости для fallback-пути
+    # (BROWSER_BACKEND=playwright). Браузерный бинарь НЕ устанавливается в
+    # Dockerfile — только camoufox fetch.
     "playwright>=1.40",
     "playwright-stealth>=2.0",
     "pydantic>=2.6",
