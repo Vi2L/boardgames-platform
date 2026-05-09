@@ -4,7 +4,7 @@
 
 1. **camoufox** (default) — Firefox с C++-level fingerprint patches.
    Обходит Qrator и аналогичные anti-bot системы без JS-патчинга.
-   headless="virtual" использует встроенный Xvfb — скрывает headless-маркеры.
+   headless=_CAMOUFOX_HEADLESS использует встроенный Xvfb — скрывает headless-маркеры.
 
 2. **playwright** (fallback) — Playwright Chromium/Chrome. Работает для сайтов
    без жёсткого bot-detection. Может быть заблокирован Qrator на avito.ru.
@@ -20,10 +20,15 @@ from __future__ import annotations
 
 import asyncio
 import os
+import platform
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal
+
+# Camoufox headless=_CAMOUFOX_HEADLESS использует Xvfb и доступен только на Linux.
+# На macOS/Windows используем headless=True (стандартный headless-режим).
+_CAMOUFOX_HEADLESS = "virtual" if platform.system() == "Linux" else True
 
 from camoufox.async_api import AsyncCamoufox
 from fastapi import FastAPI, HTTPException, Request
@@ -214,7 +219,7 @@ async def lifespan(app: FastAPI):
 
     elif _BROWSER_BACKEND == "camoufox":
         # Camoufox shared browser (один Browser, новый context на запрос)
-        cam_cm = AsyncCamoufox(headless="virtual")
+        cam_cm = AsyncCamoufox(headless=_CAMOUFOX_HEADLESS)
         browser = await cam_cm.__aenter__()   # возвращает Browser-совместимый объект
         app.state.playwright = None
         app.state.cam_cm = cam_cm
