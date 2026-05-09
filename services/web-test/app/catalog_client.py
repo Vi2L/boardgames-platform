@@ -102,11 +102,17 @@ class CatalogClient:
         return _ok_or_raise(resp)
 
     async def matching_queue(
-        self, store: str | None = None, limit: int = 50, offset: int = 0
+        self,
+        store: str | None = None,
+        was_linked: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
     ) -> dict[str, Any]:
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if store:
             params["store"] = store
+        if was_linked is not None:
+            params["was_linked"] = str(was_linked).lower()
         resp = await self._client.get("/matching/queue", params=params)
         return _ok_or_raise(resp)
 
@@ -114,6 +120,11 @@ class CatalogClient:
         resp = await self._client.post(
             f"/matching/{offer_id}/link", json={"game_id": game_id}
         )
+        return _ok_or_raise(resp)
+
+    async def unlink_offer(self, offer_id: int) -> dict[str, Any]:
+        """POST /matching/{id}/unlink — отвязать оффер, вернуть в очередь."""
+        resp = await self._client.post(f"/matching/{offer_id}/unlink")
         return _ok_or_raise(resp)
 
     async def reject_offer(self, offer_id: int) -> dict[str, Any]:

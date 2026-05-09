@@ -18,10 +18,12 @@ import {
   type ColumnSizingState,
 } from '@tanstack/react-table'
 import { toast } from 'sonner'
+import { useEffect } from 'react'
 import {
   fetchCatalogHealth,
   fetchMatchCandidates,
   fetchMatchingQueue,
+  fetchMatchingStats,
   linkOffer,
   listCatalogGames,
   reassessAll,
@@ -509,172 +511,325 @@ function SourceBadge({ source }: { source: string }) {
   )
 }
 
-// ─── Очередь матчинга ─────────────────────────────────────────────────────
+// ─── Очередь матчинга: split-view ────────────────────────────────────────────
+
+type BucketFilter = 'good' | 'candidate' | 'cold'
 
 function MatchingSection() {
   const queryClient = useQueryClient()
-  const queue = useQuery({
-    queryKey: ['catalog', 'matching-queue'],
-    queryFn: () => fetchMatchingQueue(undefined, 100, 0),
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [storeFilter, setStoreFilter] = useState<string | undefined>(undefined)
+  const [bucketFilter, setBucketFilter] = useState<BucketFilter | undefined>(undefined)
+  const [limit, setLimit] = useState(50)
+  const [selectedSet, setSelectedSet] = useState<Set<number>>(new Set())
+
+  const stats = useQuery({
+    queryKey: ['catalog', 'matching-stats'],
+    queryFn: fetchMatchingStats,
+    refetchInterval: 30_000,
   })
 
-  const invalidateQueueAndStats = () => {
+  const queue = useQuery({
+    queryKey: ['catalog', 'matching-queue', storeFilter, limit],
+    queryFn: () => fetchMatchingQueue(storeFilter, limit, 0),
+  })
+
+  const AUTO = stats.data?.thresholds.auto ?? 0.6
+  const CAND = stats.data?.thresholds.candidate ?? 0.3
+
+  // Bucket-фильтрация на клиенте — data уже отсортирована was_linked.desc() сервером
+  const filteredItems = useMemo(() => {
+    if (!queue.data?.items) return []
+    if (!bucketFilter) return queue.data.items
+    return queue.data.items.filter(o => {
+      const s = o.match_score
+      if (bucketFilter === 'good') return s != null && s >= AUTO
+      if (bucketFilter === 'candidate') return s != null && s >= CAND && s < AUTO
+      return s == null || s < CAND
+    })
+  }, [queue.data?.items, bucketFilter, AUTO, CAND])
+
+  const returnedItems = filteredItems.filter(o => o.was_linked)
+  const regularItems = filteredItems.filter(o => !o.was_linked)
+  const selectedOffer = filteredItems.find(o => o.id === selectedId) ?? null
+
+  const invalidateAll = () => {
     queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })
     queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-stats'] })
   }
 
-  const reject = useMutation({
-    mutationFn: rejectOffer,
-    onSuccess: () => { toast.success('Оффер отклонён'); invalidateQueueAndStats() },
-    onError: (e) => toast.error(`Не удалось отклонить: ${e}`),
-  })
-
-  const reassess = useMutation({
-    mutationFn: reassessOffer,
-    onSuccess: (o) => {
-      const status = o.match_status === 'auto' ? 'auto-сматчен ✓' : 'остался unmatched'
-      toast.success(`#${o.id}: ${status} (score ${o.match_score?.toFixed(2) ?? '—'})`)
-      invalidateQueueAndStats()
-    },
-    onError: (e) => toast.error(`Reassess failed: ${e}`),
-  })
-
   const reassessBatch = useMutation({
-    mutationFn: () => reassessAll(),
+    mutationFn: () => reassessAll({ store: storeFilter }),
     onSuccess: (r) => {
       toast.success(
         `Пересчитано ${r.scanned}: → auto ${r.promoted_to_auto}, ` +
-        `улучшено ${r.score_improved}, без изменений ${r.unchanged}`,
+        `улучшено ${r.score_improved}, без изм. ${r.unchanged}`,
       )
-      invalidateQueueAndStats()
+      invalidateAll()
     },
     onError: (e) => toast.error(`Batch reassess failed: ${e}`),
   })
 
+  const batchReject = useMutation({
+    mutationFn: async () => {
+      const ids = Array.from(selectedSet)
+      await Promise.all(ids.map(id => rejectOffer(id)))
+      return ids.length
+    },
+    onSuccess: (count) => {
+      toast.success(`Отклонено ${count} офферов`)
+      setSelectedSet(new Set())
+      invalidateAll()
+    },
+    onError: (e) => toast.error(`Ошибка: ${e}`),
+  })
+
+  const toggleSelect = (id: number) =>
+    setSelectedSet(prev => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+
+  const stores = stats.data?.by_store ?? []
+
   return (
     <div className="space-y-3">
       <MatchingStatsHeader />
-      <div className="flex items-center justify-between">
-        <div className="text-xs text-gray-500">
-          {queue.data
-            ? `${queue.data.total} unmatched-оффер'ов в очереди (сортировка по match_score)`
-            : 'загрузка...'}
-        </div>
-        <button
-          type="button"
-          onClick={() => {
-            if (window.confirm(
-              'Запустить batch-reassess для всех unmatched?\nЭто перепрогонит find_best_match по каждому offer и может «продвинуть» некоторые в auto.',
-            )) reassessBatch.mutate()
-          }}
-          disabled={reassessBatch.isPending}
-          className="px-3 py-1 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
-        >
-          {reassessBatch.isPending ? 'Пересчёт…' : 'Reassess всё'}
-        </button>
-      </div>
-      <div className="border border-gray-800 rounded overflow-hidden">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-900 text-gray-400 text-left">
-            <tr>
-              <th className="px-3 py-2">store</th>
-              <th className="px-3 py-2">title_raw</th>
-              <th className="px-3 py-2">price</th>
-              <th className="px-3 py-2">score</th>
-              <th className="px-3 py-2">действия</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-800">
-            {queue.data?.items.map(o => (
-              <OfferRow
+
+      <div className="flex gap-3" style={{ minHeight: '580px' }}>
+        {/* ── Левая панель ─────────────────────────────── */}
+        <div className="w-[40%] flex flex-col gap-2 min-w-0">
+
+          {/* Store tabs */}
+          <div className="flex flex-wrap gap-1">
+            <button
+              onClick={() => { setStoreFilter(undefined); setSelectedId(null) }}
+              className={`px-2 py-0.5 text-xs rounded ${!storeFilter ? 'bg-violet-700 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+            >
+              все
+            </button>
+            {stores.map(s => (
+              <button
+                key={s.store_slug}
+                onClick={() => { setStoreFilter(s.store_slug); setSelectedId(null) }}
+                className={`px-2 py-0.5 text-xs rounded ${storeFilter === s.store_slug ? 'bg-violet-700 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+              >
+                {s.store_slug} <span className="opacity-60">{s.total}</span>
+              </button>
+            ))}
+          </div>
+
+          {/* Bucket filter */}
+          <div className="flex gap-1">
+            {(['good', 'candidate', 'cold'] as BucketFilter[]).map(b => (
+              <button
+                key={b}
+                onClick={() => setBucketFilter(bucketFilter === b ? undefined : b)}
+                className={`px-2 py-0.5 text-xs rounded ${bucketFilter === b
+                  ? b === 'good' ? 'bg-emerald-700 text-white'
+                    : b === 'candidate' ? 'bg-amber-700 text-white'
+                    : 'bg-gray-600 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+              >
+                {b} {stats.data?.by_bucket[b] ?? ''}
+              </button>
+            ))}
+          </div>
+
+          {/* Offer list */}
+          <div className="flex-1 border border-gray-800 rounded overflow-y-auto">
+            {/* Группа «Возвращены» */}
+            {returnedItems.length > 0 && (
+              <div>
+                <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-amber-400 bg-amber-900/10 border-b border-amber-900/30 flex items-center gap-1">
+                  <span>⚠</span> Возвращены из матчинга ({returnedItems.length})
+                </div>
+                {returnedItems.map(o => (
+                  <QueueOfferRow
+                    key={o.id}
+                    offer={o}
+                    selected={selectedId === o.id}
+                    checked={selectedSet.has(o.id)}
+                    onSelect={() => setSelectedId(o.id)}
+                    onToggleCheck={() => toggleSelect(o.id)}
+                    autoThreshold={AUTO}
+                  />
+                ))}
+                <div className="border-t border-gray-800" />
+              </div>
+            )}
+
+            {/* Основная очередь */}
+            {regularItems.map(o => (
+              <QueueOfferRow
                 key={o.id}
-                o={o}
-                onLinked={invalidateQueueAndStats}
-                onReject={() => reject.mutate(o.id)}
-                onReassess={() => reassess.mutate(o.id)}
+                offer={o}
+                selected={selectedId === o.id}
+                checked={selectedSet.has(o.id)}
+                onSelect={() => setSelectedId(o.id)}
+                onToggleCheck={() => toggleSelect(o.id)}
+                autoThreshold={AUTO}
               />
             ))}
-            {queue.data?.items.length === 0 && (
-              <tr><td colSpan={5} className="px-3 py-6 text-center text-gray-500">
-                Очередь пуста — все оффер'ы сматчены или отклонены.
-              </td></tr>
+
+            {filteredItems.length === 0 && !queue.isLoading && (
+              <div className="px-3 py-8 text-center text-xs text-gray-500">
+                {queue.data?.total === 0
+                  ? 'Очередь пуста — все офферы сматчены.'
+                  : 'Нет офферов по текущему фильтру.'}
+              </div>
             )}
-          </tbody>
-        </table>
+
+            {queue.isLoading && (
+              <div className="px-3 py-4 text-center text-xs text-gray-500">загрузка…</div>
+            )}
+          </div>
+
+          {/* Footer: load more + batch actions */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {queue.data && queue.data.total > limit && (
+              <button
+                onClick={() => setLimit(l => l + 50)}
+                className="px-2 py-1 text-xs bg-gray-800 text-gray-300 rounded hover:bg-gray-700"
+              >
+                Загрузить ещё ({queue.data.total - filteredItems.length} скрыто)
+              </button>
+            )}
+            {selectedSet.size > 0 && (
+              <button
+                onClick={() => {
+                  if (window.confirm(`Отклонить ${selectedSet.size} офферов?`))
+                    batchReject.mutate()
+                }}
+                disabled={batchReject.isPending}
+                className="px-2 py-1 text-xs bg-red-900/60 text-red-200 rounded hover:bg-red-900 disabled:opacity-40"
+              >
+                {batchReject.isPending ? '…' : `Отклонить ${selectedSet.size}`}
+              </button>
+            )}
+            <button
+              onClick={() => {
+                if (window.confirm(
+                  'Запустить batch-reassess?\nПересчитает find_best_match для всех unmatched в текущем фильтре.',
+                )) reassessBatch.mutate()
+              }}
+              disabled={reassessBatch.isPending}
+              className="ml-auto px-2 py-1 text-xs bg-violet-800/60 text-violet-200 rounded hover:bg-violet-700 disabled:opacity-40"
+            >
+              {reassessBatch.isPending ? 'Пересчёт…' : 'Reassess всё'}
+            </button>
+          </div>
+        </div>
+
+        {/* ── Правая панель ────────────────────────────── */}
+        <div className="flex-1 min-w-0 border border-gray-800 rounded">
+          {selectedOffer
+            ? (
+              <MatchingOfferDetail
+                key={selectedOffer.id}
+                offer={selectedOffer}
+                autoThreshold={AUTO}
+                candidateThreshold={CAND}
+                onLinked={() => { invalidateAll(); setSelectedId(null) }}
+                onRejected={() => { invalidateAll(); setSelectedId(null) }}
+                onReassessed={invalidateAll}
+              />
+            )
+            : (
+              <div className="h-full flex items-center justify-center text-sm text-gray-500">
+                Выбери оффер слева для матчинга
+              </div>
+            )}
+        </div>
       </div>
     </div>
   )
 }
 
-function OfferRow({
-  o, onLinked, onReject, onReassess,
+// ─── Строка в левой панели очереди ───────────────────────────────────────────
+
+function QueueOfferRow({
+  offer, selected, checked, onSelect, onToggleCheck, autoThreshold,
 }: {
-  o: CatalogOffer
-  onLinked: () => void
-  onReject: () => void
-  onReassess: () => void
+  offer: CatalogOffer
+  selected: boolean
+  checked: boolean
+  onSelect: () => void
+  onToggleCheck: () => void
+  autoThreshold: number
 }) {
-  const [linkOpen, setLinkOpen] = useState(false)
+  const scoreColor = offer.match_score == null ? 'text-gray-600'
+    : offer.match_score >= autoThreshold ? 'text-emerald-400'
+    : offer.match_score >= 0.3 ? 'text-amber-400'
+    : 'text-gray-500'
+
   return (
-    <>
-      <tr className="hover:bg-gray-900">
-        <td className="px-3 py-2 text-xs font-mono text-gray-400">{o.store_slug}</td>
-        <td className="px-3 py-2 text-gray-100">
-          <a href={o.url} target="_blank" rel="noreferrer" className="hover:text-violet-300">
-            {o.title_raw}
-          </a>
-        </td>
-        <td className="px-3 py-2 text-gray-300">
-          {o.last_price ? `${(o.last_price / 100).toFixed(0)} ₽` : '—'}
-        </td>
-        <td className="px-3 py-2 text-xs text-gray-400">
-          {o.match_score != null ? o.match_score.toFixed(2) : '—'}
-        </td>
-        <td className="px-3 py-2 space-x-2">
-          <button
-            type="button"
-            onClick={() => setLinkOpen(v => !v)}
-            className="px-2 py-1 text-xs bg-violet-900/50 text-violet-200 rounded hover:bg-violet-900"
-          >
-            Связать
-          </button>
-          <button
-            type="button"
-            onClick={onReassess}
-            title="Пересчитать score (после правки алиасов / импорта BGG)"
-            className="px-2 py-1 text-xs bg-amber-900/50 text-amber-200 rounded hover:bg-amber-900"
-          >
-            ↻
-          </button>
-          <button
-            type="button"
-            onClick={onReject}
-            className="px-2 py-1 text-xs bg-gray-800 text-gray-300 rounded hover:bg-gray-700"
-          >
-            Отклонить
-          </button>
-        </td>
-      </tr>
-      {linkOpen && (
-        <tr className="bg-gray-950">
-          <td colSpan={5} className="px-3 py-3 border-t border-gray-800">
-            <LinkPicker offer={o} onLinked={() => { setLinkOpen(false); onLinked() }} />
-          </td>
-        </tr>
-      )}
-    </>
+    <div
+      onClick={onSelect}
+      className={`flex items-start gap-2 px-2 py-1.5 border-b border-gray-800/60 cursor-pointer transition-colors ${
+        selected ? 'bg-violet-900/30' : 'hover:bg-gray-900'
+      }`}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onClick={e => e.stopPropagation()}
+        onChange={onToggleCheck}
+        className="mt-0.5 shrink-0 accent-violet-500"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-gray-200 truncate" title={offer.title_raw}>
+          {offer.title_raw}
+        </div>
+        <div className="flex items-center gap-2 mt-0.5">
+          <span className="text-[10px] font-mono text-gray-500">{offer.store_slug}</span>
+          {offer.last_price != null && (
+            <span className="text-[10px] text-gray-400">
+              {(offer.last_price / 100).toFixed(0)} ₽
+            </span>
+          )}
+        </div>
+      </div>
+      <span className={`text-[10px] font-mono shrink-0 ${scoreColor}`}>
+        {offer.match_score != null ? offer.match_score.toFixed(2) : '—'}
+      </span>
+    </div>
   )
 }
 
-function LinkPicker({ offer, onLinked }: { offer: CatalogOffer; onLinked: () => void }) {
+// ─── Правая панель: детали оффера + кандидаты ────────────────────────────────
+
+function MatchingOfferDetail({
+  offer, autoThreshold, candidateThreshold, onLinked, onRejected, onReassessed,
+}: {
+  offer: CatalogOffer
+  autoThreshold: number
+  candidateThreshold: number
+  onLinked: () => void
+  onRejected: () => void
+  onReassessed: () => void
+}) {
   const [q, setQ] = useState(offer.title_raw)
-  // По умолчанию query = title_raw, тогда запрос автоматически приносит
-  // топ-N кандидатов через pg_trgm % similarity. Можно переписать руками,
-  // если автомат проматчил не туда.
+  const [debouncedQ, setDebouncedQ] = useState(offer.title_raw)
+
+  // Сброс поиска при смене оффера (key на компоненте сделает remount,
+  // но на всякий случай синхронизируем вручную)
+  useEffect(() => {
+    setQ(offer.title_raw)
+    setDebouncedQ(offer.title_raw)
+  }, [offer.id, offer.title_raw])
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 300)
+    return () => clearTimeout(t)
+  }, [q])
+
   const candidates = useQuery({
-    queryKey: ['catalog', 'match-candidates', q],
-    queryFn: () => fetchMatchCandidates(q, 10),
-    enabled: !!q.trim(),
+    queryKey: ['catalog', 'match-candidates', debouncedQ],
+    queryFn: () => fetchMatchCandidates(debouncedQ, 20),
+    enabled: debouncedQ.trim().length > 0,
+    staleTime: 30_000,
   })
 
   const link = useMutation({
@@ -683,61 +838,132 @@ function LinkPicker({ offer, onLinked }: { offer: CatalogOffer; onLinked: () => 
     onError: (e) => toast.error(`Не удалось связать: ${e}`),
   })
 
+  const reject = useMutation({
+    mutationFn: () => rejectOffer(offer.id),
+    onSuccess: () => { toast.success('Оффер отклонён'); onRejected() },
+    onError: (e) => toast.error(`Ошибка: ${e}`),
+  })
+
+  const reassess = useMutation({
+    mutationFn: () => reassessOffer(offer.id),
+    onSuccess: (o) => {
+      const status = o.match_status === 'auto' ? 'auto ✓' : 'unmatched'
+      toast.success(`#${o.id} → ${status} (score ${o.match_score?.toFixed(2) ?? '—'})`)
+      onReassessed()
+    },
+    onError: (e) => toast.error(`Reassess failed: ${e}`),
+  })
+
   const items: MatchCandidate[] = candidates.data?.items ?? []
-  const auto = candidates.data?.auto_threshold ?? 0.6
-  const minC = candidates.data?.candidate_threshold ?? 0.3
+  const isPending = link.isPending || reject.isPending || reassess.isPending
 
   return (
-    <div className="space-y-2">
-      <div className="text-xs text-gray-500">
-        Автоматически связывается при score ≥ {auto.toFixed(2)};
-        кандидаты ≥ {minC.toFixed(2)} попадают в очередь.
-        Текущий offer: <span className="font-mono text-gray-300">«{offer.title_raw}»</span>
+    <div className="flex flex-col h-full p-3 gap-3">
+      {/* Хедер оффера */}
+      <div className="space-y-1">
+        <div className="flex items-start justify-between gap-2">
+          <div className="text-sm text-gray-100 font-medium leading-tight">{offer.title_raw}</div>
+          <a href={offer.url} target="_blank" rel="noreferrer"
+             className="text-gray-500 hover:text-gray-200 shrink-0 mt-0.5">
+            <span className="text-[10px]">↗</span>
+          </a>
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+          <span className="font-mono">{offer.store_slug}</span>
+          {offer.last_price != null && (
+            <span>{(offer.last_price / 100).toFixed(0)} ₽</span>
+          )}
+          {offer.match_score != null && (
+            <span className={
+              offer.match_score >= autoThreshold ? 'text-emerald-400'
+              : offer.match_score >= candidateThreshold ? 'text-amber-400'
+              : 'text-gray-500'
+            }>
+              score {offer.match_score.toFixed(2)}
+            </span>
+          )}
+          {offer.was_linked && (
+            <span className="px-1 rounded bg-amber-900/40 text-amber-300">⚠ был привязан</span>
+          )}
+        </div>
       </div>
-      <input
-        type="text"
-        value={q}
-        onChange={e => setQ(e.target.value)}
-        placeholder="title_raw → автокандидаты, или ручной поиск..."
-        className="w-full px-2 py-1 text-sm bg-gray-900 border border-gray-700 rounded text-gray-100"
-      />
-      {items.length > 0 ? (
-        <div className="space-y-1">
-          {items.map(c => (
-            <button
-              key={c.game_id}
-              type="button"
-              disabled={link.isPending}
-              onClick={() => link.mutate(c.game_id)}
-              className="w-full text-left px-2 py-1.5 text-sm bg-gray-900 hover:bg-gray-800 rounded text-gray-200 disabled:opacity-50 flex items-center gap-2"
-            >
-              <ScoreBadge score={c.score} auto={auto} via={c.via} />
-              <span className="font-mono text-xs text-gray-500">#{c.game_id}</span>
-              <span className="truncate flex-1">{c.title}</span>
-              {c.year && <span className="text-xs text-gray-500 flex-shrink-0">({c.year})</span>}
-              {c.bgg_id && <span className="text-xs text-orange-300/80 flex-shrink-0 font-mono">BGG#{c.bgg_id}</span>}
-            </button>
-          ))}
-        </div>
-      ) : (
-        <div className="text-xs text-gray-500 px-2 py-1">
-          {candidates.isLoading ? 'ищу кандидатов…'
-            : `Кандидатов ≥ ${minC.toFixed(2)} нет. Импортируй из BGG/Tesera или создай вручную.`}
-        </div>
-      )}
+
+      {/* Поиск кандидатов */}
+      <div className="space-y-1.5">
+        <div className="text-[10px] uppercase tracking-wide text-gray-500">Поиск по каталогу</div>
+        <input
+          value={q}
+          onChange={e => setQ(e.target.value)}
+          className="w-full px-2 py-1.5 text-xs bg-gray-900 border border-gray-700 rounded text-gray-200 focus:border-violet-500 outline-none"
+          placeholder="Название для поиска..."
+        />
+      </div>
+
+      {/* Кандидаты */}
+      <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
+        {candidates.isLoading && (
+          <div className="text-xs text-gray-500 text-center py-2">поиск…</div>
+        )}
+        {items.map(c => (
+          <button
+            key={c.game_id}
+            type="button"
+            disabled={isPending}
+            onClick={() => link.mutate(c.game_id)}
+            className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-800 disabled:opacity-50 transition-colors"
+          >
+            <ScoreBadge score={c.score} auto={autoThreshold} via={c.via} />
+            <span className="text-xs text-gray-200 truncate flex-1">{c.title}</span>
+            {c.year != null && <span className="text-[10px] text-gray-500 shrink-0">{c.year}</span>}
+            {c.bgg_id && (
+              <span className="text-[10px] text-orange-300/70 shrink-0 font-mono">BGG#{c.bgg_id}</span>
+            )}
+          </button>
+        ))}
+        {!candidates.isLoading && items.length === 0 && debouncedQ.trim() && (
+          <div className="text-xs text-gray-500 italic px-2 py-2">
+            Кандидатов нет. Импортируй из BGG/Tesera или создай вручную.
+          </div>
+        )}
+      </div>
+
+      {/* Действия */}
+      <div className="flex gap-2 pt-2 border-t border-gray-800">
+        <button
+          type="button"
+          onClick={() => {
+            if (window.confirm(`Отклонить «${offer.title_raw}»?`)) reject.mutate()
+          }}
+          disabled={isPending}
+          className="px-3 py-1 text-xs bg-gray-800 text-gray-300 rounded hover:bg-gray-700 disabled:opacity-40"
+        >
+          Отклонить
+        </button>
+        <button
+          type="button"
+          onClick={() => reassess.mutate()}
+          disabled={isPending}
+          title="Пересчитать score (после правки алиасов / импорта BGG)"
+          className="px-3 py-1 text-xs bg-amber-900/50 text-amber-200 rounded hover:bg-amber-900 disabled:opacity-40"
+        >
+          {reassess.isPending ? '…' : 'Reassess ↻'}
+        </button>
+      </div>
     </div>
   )
 }
 
-function ScoreBadge({ score, auto, via }: { score: number; auto: number; via: 'title'|'alias' }) {
+function ScoreBadge({ score, auto, via }: { score: number; auto: number; via: 'title' | 'alias' }) {
   const cls = score >= auto
     ? 'bg-emerald-900/60 text-emerald-200'
     : score >= 0.5
       ? 'bg-amber-900/60 text-amber-200'
       : 'bg-gray-800 text-gray-400'
   return (
-    <span className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono ${cls}`}
-          title={`similarity по ${via === 'title' ? 'title канона' : 'алиасу'}`}>
+    <span
+      className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono shrink-0 ${cls}`}
+      title={`similarity по ${via === 'title' ? 'title канона' : 'алиасу'}`}
+    >
       {score.toFixed(2)}
       <span className="opacity-60 uppercase">{via}</span>
     </span>

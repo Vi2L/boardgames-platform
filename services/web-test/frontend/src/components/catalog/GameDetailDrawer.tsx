@@ -15,7 +15,7 @@
  *
  * Drawer 1100px (раньше 900) — для табов и offers-таблицы тесно.
  */
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -29,8 +29,11 @@ import {
   fetchGameChildren,
   fetchPromotionLogForGame,
   fetchPromotionDicefestRaw,
+  fetchMatchCandidates,
   patchGame,
   reassessAll,
+  linkOffer,
+  unlinkOffer,
   type CatalogGameDetail,
   type CatalogGameKind,
   type CatalogOffer,
@@ -489,7 +492,7 @@ function OffersTab({ gameId }: { gameId: number }) {
             </thead>
             <tbody>
               {items.map(o => (
-                <OfferRow key={o.id} offer={o} />
+                <OfferRow key={o.id} offer={o} gameId={gameId} />
               ))}
             </tbody>
           </table>
@@ -499,18 +502,33 @@ function OffersTab({ gameId }: { gameId: number }) {
   )
 }
 
-// ─── Строка оффера с раскрывающейся историей цен ─────────────────────
+// ─── Строка оффера с историей цен + кнопками коррекции матчинга ──────
 
-function OfferRow({ offer }: { offer: CatalogOffer }) {
+function OfferRow({ offer, gameId }: { offer: CatalogOffer; gameId: number }) {
+  const queryClient = useQueryClient()
   const [expanded, setExpanded] = useState(false)
+  const [showReassign, setShowReassign] = useState(false)
 
-  // Запрос идёт только при раскрытии строки (enabled: expanded).
-  const { data: history, isLoading } = useQuery({
+  const { data: history, isLoading: histLoading } = useQuery({
     queryKey: ['catalog', 'offer-history', offer.store_slug, offer.external_id],
     queryFn: () => fetchOfferHistory(offer.store_slug, offer.external_id),
     enabled: expanded,
     staleTime: 5 * 60_000,
   })
+
+  const unlink = useMutation({
+    mutationFn: () => unlinkOffer(offer.id),
+    onSuccess: () => {
+      toast.success('Оффер возвращён в очередь матчинга')
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'game-offers', gameId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-stats'] })
+    },
+    onError: (e) => toast.error(`Ошибка отвязки: ${e}`),
+  })
+
+  const isLinked = offer.match_status === 'manual' || offer.match_status === 'auto'
+  const colSpan = 7
 
   return (
     <>
@@ -554,26 +572,142 @@ function OfferRow({ offer }: { offer: CatalogOffer }) {
           {offer.last_seen_at.slice(0, 10)}
         </td>
         <td className="px-2 py-1">
-          <a href={offer.url} target="_blank" rel="noreferrer"
-             className="text-gray-400 hover:text-gray-200">
-            <ExternalLink size={11} />
-          </a>
+          <div className="flex items-center gap-1">
+            <a href={offer.url} target="_blank" rel="noreferrer"
+               className="text-gray-400 hover:text-gray-200">
+              <ExternalLink size={11} />
+            </a>
+            {isLinked && (
+              <>
+                <button
+                  onClick={() => setShowReassign(r => !r)}
+                  className={clsx(
+                    'text-[10px] px-1 py-0.5 rounded transition-colors',
+                    showReassign
+                      ? 'bg-violet-700/60 text-violet-100'
+                      : 'text-gray-400 hover:text-violet-300 hover:bg-violet-900/30',
+                  )}
+                  title="Переназначить на другую игру"
+                >
+                  ⇄
+                </button>
+                <button
+                  onClick={() => {
+                    if (!window.confirm(`Отвязать "${offer.title_raw}" и вернуть в очередь?`)) return
+                    unlink.mutate()
+                  }}
+                  disabled={unlink.isPending}
+                  className="text-[10px] px-1 py-0.5 rounded text-gray-400 hover:text-red-300 hover:bg-red-900/30 disabled:opacity-40"
+                  title="Отвязать от игры, вернуть в очередь матчинга"
+                >
+                  {unlink.isPending ? '…' : '✕'}
+                </button>
+              </>
+            )}
+          </div>
         </td>
       </tr>
+      {showReassign && (
+        <tr className="bg-gray-950/40">
+          <td colSpan={colSpan} className="px-3 py-2 border-t border-violet-900/30">
+            <InlineReassignPicker
+              offer={offer}
+              gameId={gameId}
+              onDone={() => setShowReassign(false)}
+            />
+          </td>
+        </tr>
+      )}
       {expanded && (
         <tr className="bg-gray-950/30">
-          <td colSpan={7} className="px-3 py-2">
-            {isLoading && <Loader2 size={12} className="animate-spin text-gray-500" />}
-            {!isLoading && history && history.length === 0 && (
+          <td colSpan={colSpan} className="px-3 py-2">
+            {histLoading && <Loader2 size={12} className="animate-spin text-gray-500" />}
+            {!histLoading && history && history.length === 0 && (
               <div className="text-xs text-gray-500 italic">Нет истории цен в parsers.</div>
             )}
-            {!isLoading && history && history.length > 0 && (
+            {!histLoading && history && history.length > 0 && (
               <PriceChart data={history} />
             )}
           </td>
         </tr>
       )}
     </>
+  )
+}
+
+// ─── Inline-пикер для переназначения оффера на другую игру ───────────
+
+function InlineReassignPicker({
+  offer,
+  gameId,
+  onDone,
+}: {
+  offer: CatalogOffer
+  gameId: number
+  onDone: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [q, setQ] = useState(offer.title_raw)
+  const [debouncedQ, setDebouncedQ] = useState(offer.title_raw)
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedQ(q), 300)
+    return () => clearTimeout(t)
+  }, [q])
+
+  const { data: candidates, isLoading } = useQuery({
+    queryKey: ['catalog', 'match-candidates', debouncedQ],
+    queryFn: () => fetchMatchCandidates(debouncedQ, 20),
+    enabled: debouncedQ.trim().length > 0,
+    staleTime: 30_000,
+  })
+
+  const link = useMutation({
+    mutationFn: (candidateGameId: number) => linkOffer(offer.id, candidateGameId),
+    onSuccess: () => {
+      toast.success('Оффер переназначен')
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'game-offers', gameId] })
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-queue'] })
+      queryClient.invalidateQueries({ queryKey: ['catalog', 'matching-stats'] })
+      onDone()
+    },
+    onError: (e) => toast.error(`Ошибка переназначения: ${e}`),
+  })
+
+  return (
+    <div className="space-y-1.5">
+      <div className="text-[10px] text-violet-400 uppercase tracking-wide">Переназначить на другую игру</div>
+      <input
+        value={q}
+        onChange={e => setQ(e.target.value)}
+        className="w-full px-2 py-1 text-xs bg-gray-900 border border-gray-700 rounded text-gray-200 focus:border-violet-500 outline-none"
+        placeholder="Поиск по каталогу..."
+        autoFocus
+      />
+      <div className="space-y-0.5 max-h-44 overflow-y-auto">
+        {isLoading && <Loader2 size={12} className="animate-spin text-gray-500 mx-auto block" />}
+        {!isLoading && candidates?.items.map(c => (
+          <button
+            key={c.game_id}
+            onClick={() => link.mutate(c.game_id)}
+            disabled={link.isPending}
+            className="w-full text-left flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-800 disabled:opacity-50 transition-colors"
+          >
+            <span className={clsx('text-[10px] px-1 rounded min-w-[2.8rem] text-center font-mono',
+              c.score >= 0.6 ? 'bg-emerald-900/60 text-emerald-200' :
+              c.score >= 0.3 ? 'bg-amber-900/60 text-amber-200' :
+              'bg-gray-800 text-gray-400',
+            )}>{c.score.toFixed(2)}</span>
+            <span className="text-xs text-gray-200 truncate">{c.title}</span>
+            {c.year != null && <span className="text-[10px] text-gray-500 shrink-0">{c.year}</span>}
+            <span className="text-[10px] text-gray-600 ml-auto shrink-0">{c.via}</span>
+          </button>
+        ))}
+        {!isLoading && candidates?.items.length === 0 && (
+          <div className="text-xs text-gray-500 italic px-2 py-1">Нет кандидатов</div>
+        )}
+      </div>
+    </div>
   )
 }
 

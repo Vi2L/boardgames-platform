@@ -126,6 +126,8 @@ export type CatalogOffer = {
   in_stock: boolean | null
   original_price: number | null   // копейки до скидки
   is_preorder: boolean | null
+  // True если оффер ранее был привязан и отвязан оператором (миграция 0008)
+  was_linked: boolean
 }
 
 export type CatalogQueue = {
@@ -178,10 +180,14 @@ export const listCatalogGames = (q: string | undefined, limit = 20, offset = 0) 
 }
 
 export const fetchMatchingQueue = (
-  store: string | undefined, limit = 50, offset = 0,
+  store: string | undefined,
+  limit = 50,
+  offset = 0,
+  wasLinked?: boolean,
 ) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (store) params.set('store', store)
+  if (wasLinked != null) params.set('was_linked', String(wasLinked))
   return fetch(`${BASE}/matching/queue?${params}`).then(r => json<CatalogQueue>(r))
 }
 
@@ -227,6 +233,10 @@ export const linkOffer = (offerId: number, gameId: number) =>
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ game_id: gameId }),
   }).then(r => json<CatalogOffer>(r))
+
+export const unlinkOffer = (offerId: number) =>
+  fetch(`${BASE}/matching/${offerId}/unlink`, { method: 'POST' })
+    .then(r => json<CatalogOffer>(r))
 
 export const rejectOffer = (offerId: number) =>
   fetch(`${BASE}/matching/${offerId}/reject`, { method: 'POST' })

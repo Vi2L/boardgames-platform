@@ -318,6 +318,8 @@ class OfferOut(_ORMBase):
     in_stock: bool | None = None
     original_price: int | None = None
     is_preorder: bool | None = None
+    # True если оффер ранее был привязан и затем отвязан оператором (миграция 0008).
+    was_linked: bool = False
 
 
 class MatchingQueueOut(BaseModel):

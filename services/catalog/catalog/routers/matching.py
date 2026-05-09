@@ -115,6 +115,7 @@ async def candidates(
 )
 async def queue(
     store: str | None = Query(None),
+    was_linked: bool | None = Query(None, description="фильтр по was_linked"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
@@ -122,15 +123,21 @@ async def queue(
     stmt = select(Offer).where(Offer.match_status == "unmatched")
     if store:
         stmt = stmt.where(Offer.store_slug == store)
+    if was_linked is not None:
+        stmt = stmt.where(Offer.was_linked == was_linked)
 
     total = (
         await session.execute(select(func.count()).select_from(stmt.subquery()))
     ).scalar_one()
 
-    # NULLS LAST — оффер'ы без score уходят в конец (оператор разбирает их
-    # по остаточному принципу, после «горячих» кандидатов).
+    # was_linked=True офферы всплывают вверху — оператор мог ошибиться при
+    # первом матче, такие требуют повторного внимания. Далее — по score DESC.
     stmt = (
-        stmt.order_by(desc(Offer.match_score).nulls_last(), Offer.id.desc())
+        stmt.order_by(
+            Offer.was_linked.desc(),
+            desc(Offer.match_score).nulls_last(),
+            Offer.id.desc(),
+        )
         .limit(limit)
         .offset(offset)
     )
@@ -282,6 +289,41 @@ async def reassess_all(
         "score_improved": improved,
         "unchanged": unchanged,
     }
+
+
+@router.post(
+    "/{offer_id}/unlink",
+    response_model=OfferOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def unlink(
+    offer_id: int, session: AsyncSession = Depends(get_session)
+) -> OfferOut:
+    """Отвязать оффер от игры — вернуть в очередь для повторного матчинга.
+
+    Устанавливает was_linked=True, чтобы оффер всплыл выше в очереди.
+    Алиас, добавленный при link, намеренно НЕ удаляем — он улучшает
+    будущий авто-матч других офферов с таким же title_raw.
+    """
+    offer = (
+        await session.execute(select(Offer).where(Offer.id == offer_id))
+    ).scalar_one_or_none()
+    if offer is None:
+        raise HTTPException(status_code=404, detail="offer not found")
+    if offer.match_status not in ("manual", "auto"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"offer is not linked (status={offer.match_status}); unlink only manual/auto",
+        )
+
+    offer.game_id = None
+    offer.match_status = "unmatched"
+    offer.was_linked = True
+    # match_score сохраняем — помогает при повторном триаже понять,
+    # насколько уверенным был исходный матч.
+    await session.commit()
+    await session.refresh(offer)
+    return OfferOut.model_validate(offer)
 
 
 @router.post(

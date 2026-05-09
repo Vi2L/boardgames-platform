@@ -230,6 +230,13 @@ class Offer(Base):
 
     raw_extra: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
+    # True если оффер хотя бы раз был привязан к игре вручную, затем отвязан.
+    # Используется очередью матчинга: такие офферы всплывают выше для повторного
+    # review (оператор мог ошибиться при первом матче).
+    was_linked: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+
     game: Mapped[Game | None] = relationship(back_populates="offers")
     prices: Mapped[list["OfferPrice"]] = relationship(
         back_populates="offer", cascade="all, delete-orphan"

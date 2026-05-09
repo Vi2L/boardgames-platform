@@ -94,12 +94,15 @@ async def match_candidates(
 @router.get("/matching/queue")
 async def matching_queue(
     store: str | None = Query(None),
+    was_linked: bool | None = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
     client: CatalogClient = Depends(get_catalog_client),
 ) -> dict:
     try:
-        return await client.matching_queue(store=store, limit=limit, offset=offset)
+        return await client.matching_queue(
+            store=store, was_linked=was_linked, limit=limit, offset=offset
+        )
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
@@ -115,6 +118,16 @@ async def link_offer(
         raise HTTPException(status_code=400, detail="game_id (int) required")
     try:
         return await client.link_offer(offer_id, game_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/{offer_id}/unlink")
+async def unlink_offer(
+    offer_id: int, client: CatalogClient = Depends(get_catalog_client)
+) -> dict:
+    try:
+        return await client.unlink_offer(offer_id)
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
