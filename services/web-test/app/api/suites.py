@@ -238,10 +238,12 @@ async def _run_suite_task(
             status: str = "ok"
             error: str | None = None
             snapshot_id: int | None = None
+            product_count: int = 0
 
             try:
                 result = await client.search(q, stores=stores, limit=limit, refresh=refresh)
                 ms = int((time.monotonic() - t0) * 1000)
+                product_count = len(result.products)
                 sources[result.source] = sources.get(result.source, 0) + 1
 
                 if result.errors:
@@ -271,12 +273,14 @@ async def _run_suite_task(
             await db.add_suite_run_item(
                 run_id=run_id, query=q, snapshot_id=snapshot_id,
                 ms=ms, status=status, error=error,
+                product_count=product_count,
             )
             await queue.put(("suite-item-done", {
                 "idx": idx, "total": total, "query": q,
                 "status": status, "ms": ms,
                 "snapshot_id": snapshot_id,
                 "error": error,
+                "product_count": product_count,
             }))
 
         ms_total = int((time.monotonic() - t_total) * 1000)

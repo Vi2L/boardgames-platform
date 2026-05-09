@@ -1,8 +1,8 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  Loader2, CheckCircle2, XCircle, AlertTriangle, Play, Trash2, Pin, X,
+  Loader2, CheckCircle2, XCircle, AlertTriangle, Play, Trash2, Pin, X, Check,
 } from 'lucide-react'
 import clsx from 'clsx'
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts'
@@ -22,6 +22,7 @@ interface ItemState {
   ms?: number
   snapshot_id?: number
   error?: string
+  product_count?: number
 }
 
 interface Props {
@@ -94,6 +95,7 @@ export function SuiteRunner({ suite, onDeleted }: Props) {
             ms: d.ms as number,
             snapshot_id: d.snapshot_id as number | undefined,
             error: d.error as string | undefined,
+            product_count: d.product_count as number | undefined,
           }
         : it))
     } else if (event === 'suite-summary') {
@@ -223,6 +225,15 @@ function ItemsTable({
   )
 }
 
+function getPassFail(
+  item: ItemState,
+  baseline: SuiteBaseline | undefined,
+): 'pass' | 'fail' | null {
+  if (!baseline || baseline.baseline.min_count == null) return null
+  if (item.product_count == null) return null
+  return item.product_count >= baseline.baseline.min_count ? 'pass' : 'fail'
+}
+
 function BaselineRow({
   item, baseline, onSetBaseline, onClearBaseline,
 }: {
@@ -231,23 +242,20 @@ function BaselineRow({
   onSetBaseline: (query: string, baseline: SuiteBaseline['baseline']) => void
   onClearBaseline: (id: number) => void
 }) {
-  // Локальная оценка pass/fail для UI: если у строки есть baseline и
-  // прогон закончился, сравним min_count vs ms_total ничего не даст —
-  // нам надо счётчик товаров. У ItemState счётчика нет, но у baseline
-  // есть min_count и UI хочет хотя бы показать «было N, ожидаем ≥M».
-  // Для MVP просто показываем «есть baseline» / «нет baseline»,
-  // фактический pass/fail — когда добавим product_count в ItemState.
-
+  const verdict = getPassFail(item, baseline)
   const hasBaseline = !!baseline
 
   return (
     <div
       className={clsx(
         'flex items-center gap-3 px-3 py-2 text-sm border-b border-gray-800/50 last:border-b-0',
-        item.status === 'running' && 'bg-blue-950/20',
-        item.status === 'ok'      && 'bg-green-950/10',
-        item.status === 'partial' && 'bg-orange-950/15',
-        item.status === 'error'   && 'bg-red-950/20',
+        // pass/fail перекрывает стандартные статус-цвета строки
+        verdict === 'pass' ? 'bg-emerald-950/30' :
+        verdict === 'fail' ? 'bg-red-950/30' :
+        item.status === 'running' ? 'bg-blue-950/20' :
+        item.status === 'ok'      ? 'bg-green-950/10' :
+        item.status === 'partial' ? 'bg-orange-950/15' :
+        item.status === 'error'   ? 'bg-red-950/20' : '',
       )}
     >
       <span className="w-8 text-xs text-gray-500 font-mono">{item.idx}/{item.total}</span>
@@ -263,11 +271,7 @@ function BaselineRow({
       {/* Baseline-controls */}
       {hasBaseline ? (
         <span className="flex items-center gap-1.5 text-xs">
-          <span className="flex items-center gap-1 px-1.5 py-0.5 bg-violet-900/40 text-violet-200 rounded" title="есть baseline">
-            <Pin size={10} />
-            {baseline!.baseline.min_count != null && `≥${baseline!.baseline.min_count}`}
-            {!baseline!.baseline.min_count && 'baseline'}
-          </span>
+          <BaselineBadge item={item} baseline={baseline!} verdict={verdict} />
           <button
             type="button"
             onClick={() => {
@@ -285,9 +289,10 @@ function BaselineRow({
           <button
             type="button"
             onClick={() => {
+              const suggested = item.product_count != null ? String(item.product_count) : '5'
               const minCountStr = window.prompt(
                 `Baseline для «${item.query}»\n\nМинимальное число товаров (целое):`,
-                '5',
+                suggested,
               )
               if (minCountStr == null) return
               const minCount = parseInt(minCountStr, 10)
@@ -298,13 +303,53 @@ function BaselineRow({
               onSetBaseline(item.query, { min_count: minCount })
             }}
             className="p-1 text-gray-500 hover:text-violet-300 hover:bg-violet-950/40 rounded"
-            title="зафиксировать как baseline"
+            title={item.product_count != null
+              ? `Зафиксировать как baseline (сейчас ${item.product_count} товаров)`
+              : 'Зафиксировать как baseline'}
           >
             <Pin size={12} />
           </button>
         )
       )}
     </div>
+  )
+}
+
+function BaselineBadge({
+  item, baseline, verdict,
+}: {
+  item: ItemState
+  baseline: SuiteBaseline
+  verdict: 'pass' | 'fail' | null
+}): ReactNode {
+  const minCount = baseline.baseline.min_count
+
+  const cls = verdict === 'pass'
+    ? 'bg-emerald-900/60 text-emerald-200'
+    : verdict === 'fail'
+      ? 'bg-red-900/60 text-red-200'
+      : 'bg-violet-900/40 text-violet-200'
+
+  const label = minCount != null
+    ? item.product_count != null
+      ? `${item.product_count} / ≥${minCount}`
+      : `≥${minCount}`
+    : 'baseline'
+
+  return (
+    <span
+      className={clsx('flex items-center gap-1 px-1.5 py-0.5 rounded font-mono', cls)}
+      title={verdict === 'pass'
+        ? `Pass: ${item.product_count} ≥ ${minCount}`
+        : verdict === 'fail'
+          ? `Fail: ${item.product_count} < ${minCount}`
+          : 'есть baseline'}
+    >
+      {verdict === 'pass' && <Check size={9} />}
+      {verdict === 'fail' && <X size={9} />}
+      {verdict === null   && <Pin size={9} />}
+      {label}
+    </span>
   )
 }
 

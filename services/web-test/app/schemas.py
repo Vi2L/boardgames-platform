@@ -201,6 +201,7 @@ class SuiteRunItem(BaseModel):
     ms: int | None
     status: str
     error: str | None
+    product_count: int | None = None
 
 
 class SuiteRunDetail(SuiteRunMeta):

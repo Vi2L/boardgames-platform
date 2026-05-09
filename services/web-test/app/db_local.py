@@ -147,6 +147,10 @@ _MIGRATIONS: list[str] = [
     # favorite (showOutOfStock, конфиг лояльности). Через одну колонку,
     # чтобы не плодить миграций при каждом расширении пресета.
     "ALTER TABLE favorites ADD COLUMN preset_json TEXT;",
+    # v4 (2026-05): product_count — фактическое число товаров в ответе на
+    # конкретный query. Нужен для сравнения с baseline.min_count и вывода
+    # pass/fail в SuiteRunner (WT-F4.4-extended).
+    "ALTER TABLE suite_run_items ADD COLUMN product_count INTEGER;",
 ]
 
 
@@ -635,13 +639,15 @@ class PortalDB:
     async def add_suite_run_item(
         self, *, run_id: int, query: str, snapshot_id: int | None,
         ms: int | None, status: str, error: str | None = None,
+        product_count: int | None = None,
     ) -> int:
         cur = await self.conn.execute(
             """
-            INSERT INTO suite_run_items (run_id, query, snapshot_id, ms, status, error)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO suite_run_items
+                (run_id, query, snapshot_id, ms, status, error, product_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (run_id, query, snapshot_id, ms, status, error),
+            (run_id, query, snapshot_id, ms, status, error, product_count),
         )
         await self.conn.commit()
         return int(cur.lastrowid or 0)
@@ -694,6 +700,7 @@ class PortalDB:
                     "id": i["id"], "query": i["query"],
                     "snapshot_id": i["snapshot_id"], "ms": i["ms"],
                     "status": i["status"], "error": i["error"],
+                    "product_count": i["product_count"],
                 }
                 for i in items
             ],
