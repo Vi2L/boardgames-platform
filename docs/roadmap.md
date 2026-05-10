@@ -56,8 +56,10 @@ PRS (parsers), INFRA (общее).
   `PriceChart` (история цен из parsers `price_observations`).
   Новый endpoint `GET /history/by-external-id?store_slug=&external_id=` в parsers;
   proxy `GET /api/offers/history` в web-test. Коммит `c86b198`.
-- [WT-F2.6] **Bulk-import wizard top-N** — UI вокруг
-  `import_bgg_ranks.py`: импорт топ-N по rank.
+- [WT-F2.6] **Bulk-import wizard top-N** — ✅ **ЗАВЕРШЕНО**.
+  `BggRanksImportSection` в `BggImportPanel`: drag-and-drop CSV-загрузка,
+  top-N фильтр, dry-run, прогресс-бар + polling ImportJob.
+  Catalog endpoint `POST /import/bgg/ranks` (multipart) + web-test proxy.
 - [WT-F2.7] **RU-first автоподсказки** — ✅ **ЗАВЕРШЕНО**.
   `GameSuggestRow` (`components/shared/`): RU-название как первичное,
   EN — бледный суффикс (`text-gray-500`); при выборе подставляется RU.

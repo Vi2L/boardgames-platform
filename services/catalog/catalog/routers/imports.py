@@ -9,6 +9,8 @@ GET /import/jobs/{id} — поллинг статуса.
 from __future__ import annotations
 
 import asyncio
+import csv as csv_mod
+import io
 import logging
 from datetime import datetime, timezone
 
@@ -18,7 +20,7 @@ def _utcnow() -> datetime:
 from typing import Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from catalog.auth import require_scope
 from sqlalchemy import select, update
@@ -42,7 +44,7 @@ from catalog.importers.dicefest import (
     _run_dicefest_import_job,
     _run_dicefest_reparse_job,
 )
-from catalog.models import Game, GameAlias, ImportJob
+from catalog.models import Game, GameAlias, GameBgg, ImportJob
 from catalog.parsers.bgg import BggClient
 from catalog.parsers.bgg.service import enrich_batch
 from catalog.schemas import (
@@ -564,6 +566,188 @@ async def import_dicefest_reparse(
         await session.refresh(job)
     else:
         asyncio.create_task(_run_dicefest_reparse_job(job.id, {}))
+
+    return ImportJobOut.model_validate(job)
+
+
+async def _run_bgg_ranks_job(
+    job_id: int,
+    csv_bytes: bytes,
+    top_n: int | None,
+    dry_run: bool,
+) -> None:
+    """Background-таск для CSV-seed из BGG ranks выгрузки.
+
+    Принимает сырые байты CSV (уже загруженные в память HTTP-хэндлером),
+    парсит через csv.DictReader + io.StringIO, фильтрует по rank ≤ top_n,
+    затем пакетно upsert'ит в games + game_bgg — та же логика, что в
+    catalog.scripts.import_bgg_ranks, но адаптированная под ImportJob.
+    """
+    # split_row и slugify — pure-функции из CLI-скрипта; импортируем напрямую,
+    # чтобы не дублировать CSV-парсинг в двух местах.
+    from catalog.scripts.import_bgg_ranks import split_row  # noqa: PLC0415
+
+    BATCH = 500  # меньше чем в CLI, чтобы прогресс обновлялся чаще
+
+    engine = get_engine()
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+
+    async with SessionFactory() as session:
+        job = (
+            await session.execute(select(ImportJob).where(ImportJob.id == job_id))
+        ).scalar_one()
+        job.status = "running"
+        job.started_at = _utcnow()
+        await session.commit()
+
+        scope_str = f"top-{top_n}" if top_n else "all-ranked"
+        buf = LogBuffer(session, job_id=job_id, flush_every_n=50, flush_every_s=2.0)
+        buf.set_progress(phase="starting", current=0, total=0)
+        buf.log(f"BGG ranks import: scope={scope_str} dry_run={dry_run}")
+        await buf.flush()
+
+        try:
+            text = csv_bytes.decode("utf-8")
+            reader = csv_mod.DictReader(io.StringIO(text))
+
+            # Pre-scan: collect valid rows filtered by top_n, to know total.
+            # Memory-acceptable: ~160K rows × ~200 bytes ≈ 32 MB worst-case.
+            valid_rows: list[tuple[dict, dict]] = []
+            for row in reader:
+                split = split_row(row)
+                if split is None:
+                    continue
+                games_row, bgg_row = split
+                rank = bgg_row.get("rank")
+                if top_n is not None and (rank is None or rank > top_n):
+                    continue
+                valid_rows.append((games_row, bgg_row))
+
+            total = len(valid_rows)
+            buf.set_progress(phase="upserting", current=0, total=total)
+            buf.log(f"Filtered: {total} rows (top_n={top_n})")
+            await buf.flush()
+
+            enriched = 0
+            if not dry_run:
+                for batch_start in range(0, total, BATCH):
+                    chunk = valid_rows[batch_start : batch_start + BATCH]
+                    games_chunk = [r[0] for r in chunk]
+                    bgg_chunk_by_id = {r[1]["bgg_id"]: r[1] for r in chunk}
+
+                    async with SessionFactory() as upsert_session:
+                        # 1. Upsert games, resolve bgg_id → game_id.
+                        games_stmt = (
+                            pg_insert(Game.__table__)
+                            .values(games_chunk)
+                            .on_conflict_do_update(
+                                index_elements=["bgg_id"],
+                                set_={
+                                    "title": pg_insert(Game.__table__).excluded.title,
+                                    "year": pg_insert(Game.__table__).excluded.year,
+                                    "source": pg_insert(Game.__table__).excluded.source,
+                                },
+                            )
+                            .returning(Game.__table__.c.id, Game.__table__.c.bgg_id)
+                        )
+                        rows_out = (await upsert_session.execute(games_stmt)).all()
+                        bgg_id_to_game_id = {r.bgg_id: r.id for r in rows_out}
+
+                        # 2. Upsert game_bgg with resolved game_id.
+                        bgg_records = [
+                            {"game_id": bgg_id_to_game_id[bgg_id], **payload}
+                            for bgg_id, payload in bgg_chunk_by_id.items()
+                            if bgg_id in bgg_id_to_game_id
+                        ]
+                        if bgg_records:
+                            bgg_stmt = (
+                                pg_insert(GameBgg.__table__)
+                                .values(bgg_records)
+                                .on_conflict_do_update(
+                                    index_elements=["game_id"],
+                                    set_={
+                                        "rank": pg_insert(GameBgg.__table__).excluded.rank,
+                                        "bayes_average": pg_insert(GameBgg.__table__).excluded.bayes_average,
+                                        "average": pg_insert(GameBgg.__table__).excluded.average,
+                                        "users_rated": pg_insert(GameBgg.__table__).excluded.users_rated,
+                                        "is_expansion": pg_insert(GameBgg.__table__).excluded.is_expansion,
+                                        "subtype_ranks": pg_insert(GameBgg.__table__).excluded.subtype_ranks,
+                                        "raw": pg_insert(GameBgg.__table__).excluded.raw,
+                                        "source": pg_insert(GameBgg.__table__).excluded.source,
+                                        "fetched_at": pg_insert(GameBgg.__table__).excluded.fetched_at,
+                                    },
+                                )
+                            )
+                            await upsert_session.execute(bgg_stmt)
+
+                        await upsert_session.commit()
+
+                    enriched += len(chunk)
+                    buf.set_progress(phase="upserting", current=enriched, total=total)
+                    if enriched % 1000 == 0 or enriched == total:
+                        buf.log(f"  {enriched}/{total} upserted")
+                    await buf.maybe_flush()
+            else:
+                enriched = total  # dry-run: report что было бы импортировано
+
+            buf.log(f"Done: processed={enriched} dry_run={dry_run}")
+            buf.set_progress(phase="done", current=enriched, total=total)
+            await buf.flush()
+
+            await session.execute(
+                update(ImportJob)
+                .where(ImportJob.id == job_id)
+                .values(
+                    status="done",
+                    finished_at=_utcnow(),
+                    result={"enriched": enriched, "skipped": 0, "failed": 0, "dry_run": dry_run},
+                )
+            )
+            await session.commit()
+
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("BGG ranks job %d failed", job_id)
+            buf.log(f"FAILED: {exc!r}")
+            await buf.flush()
+            await session.execute(
+                update(ImportJob)
+                .where(ImportJob.id == job_id)
+                .values(status="failed", finished_at=_utcnow(), error=str(exc))
+            )
+            await session.commit()
+
+
+@router.post(
+    "/bgg/ranks",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_bgg_ranks(
+    csv_file: UploadFile = File(..., description="BGG ranks CSV (скачать с boardgamegeek.com/data_dumps/bg_ranks)"),
+    top_n: int | None = Form(None, description="Импортировать только top-N игр по rank (None = все)"),
+    dry_run: bool = Form(False, description="Если True — только подсчитать, без записи в БД"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    """Seed каталога из BGG ranks CSV (boardgamegeek.com/data_dumps/bg_ranks).
+
+    Создаёт minimal game records (title, year, bgg_id, rank) без полных
+    XML-данных. После seed — запустить /import/bgg/batch для обогащения
+    через BGG XML API.
+
+    Принимает multipart/form-data: поле `csv_file` + опционально `top_n`
+    и `dry_run`. Возвращает ImportJob — polling через GET /import/jobs/{id}.
+    """
+    csv_bytes = await csv_file.read()
+    job = ImportJob(
+        type="bgg-ranks",
+        payload={"top_n": top_n, "dry_run": dry_run, "filename": csv_file.filename},
+        status="pending",
+    )
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    asyncio.create_task(_run_bgg_ranks_job(job.id, csv_bytes, top_n, dry_run))
 
     return ImportJobOut.model_validate(job)
 

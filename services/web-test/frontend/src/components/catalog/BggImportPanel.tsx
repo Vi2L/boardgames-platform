@@ -21,15 +21,16 @@
  *  - Search использует SuggestInput-стиль (debounced) — иначе на каждый
  *    keystroke шлём запрос к BGG.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Loader2, Search, Download, Play } from 'lucide-react'
+import { CheckCircle2, ChevronRight, Loader2, Search, Download, Play, Upload, XCircle } from 'lucide-react'
 
 import {
   searchBgg,
   importBgg,
   importBggBatch,
+  importBggRanks,
   fetchImportJob,
   type BggSearchHit,
   type ImportJob,
@@ -40,10 +41,263 @@ import {
 export function BggImportPanel() {
   return (
     <div className="space-y-6">
+      <BggRanksImportSection />
+      <div className="border-t border-gray-800" />
       <BggSearchSection />
       <div className="border-t border-gray-800" />
       <BggBatchSection />
     </div>
+  )
+}
+
+// ─── Ranks CSV Seed (шаг 1: загрузка CSV → seed minimal game records) ────────
+
+/**
+ * BggRanksImportSection — UI-wizard вокруг import_bgg_ranks.py.
+ *
+ * Шаги:
+ *  1. Пользователь скачивает BGG ranks CSV с boardgamegeek.com/data_dumps/bg_ranks
+ *  2. Загружает файл через drag-and-drop / file picker
+ *  3. Задаёт top-N фильтр и dry-run флаг
+ *  4. Запускает job → прогресс-бар + лог с polling каждые 1.5 сек
+ *  5. Получает результат: N игр проиндексировано, предлагаем обогатить через XML
+ */
+function BggRanksImportSection() {
+  const qc = useQueryClient()
+  const fileInputRef = useRef<HTMLInputElement>(null)
+
+  const [file, setFile] = useState<File | null>(null)
+  const [topN, setTopN] = useState<number | ''>(500)
+  const [dryRun, setDryRun] = useState(true)
+  const [dragging, setDragging] = useState(false)
+  const [activeJobId, setActiveJobId] = useState<number | null>(null)
+
+  const startImport = useMutation({
+    mutationFn: () => importBggRanks(file!, topN === '' ? null : topN, dryRun),
+    onSuccess: (job) => {
+      setActiveJobId(job.id)
+      toast.success(`Job #${job.id} запущен (${dryRun ? 'dry-run' : 'real'})`)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const job = useQuery({
+    queryKey: ['catalog', 'import-job', activeJobId],
+    queryFn: () => fetchImportJob(activeJobId!),
+    enabled: activeJobId !== null,
+    refetchInterval: (q) => {
+      const data = q.state.data as ImportJob | undefined
+      if (!data) return 1500
+      return data.status === 'done' || data.status === 'failed' ? false : 1500
+    },
+  })
+
+  // Инвалидируем игры после реального (не dry-run) завершения.
+  useEffect(() => {
+    if (job.data?.status === 'done' && !dryRun) {
+      qc.invalidateQueries({ queryKey: ['catalog', 'games'] })
+    }
+  }, [job.data?.status, dryRun, qc])
+
+  const isRunning = job.data?.status === 'running' || job.data?.status === 'pending'
+  const isDone = job.data?.status === 'done'
+  const isFailed = job.data?.status === 'failed'
+  const progress = job.data?.progress
+  const enrichedCount = (job.data?.result as Record<string, number> | null)?.enriched ?? 0
+
+  function handleFileDrop(files: FileList | null) {
+    if (!files || files.length === 0) return
+    const f = files[0]
+    if (!f.name.endsWith('.csv') && f.type !== 'text/csv') {
+      toast.error('Ожидается CSV-файл (.csv)')
+      return
+    }
+    setFile(f)
+    setActiveJobId(null)
+  }
+
+  const canRun = file !== null && !startImport.isPending && !isRunning
+
+  return (
+    <section>
+      <div className="flex items-center gap-2 mb-1">
+        <h2 className="text-sm font-semibold text-gray-200">Seed каталога из BGG ranks CSV</h2>
+        {/* Wizard step pills */}
+        <div className="flex items-center gap-1 ml-auto text-[10px] text-gray-500">
+          <span className={file ? 'text-violet-400' : ''}>① CSV</span>
+          <ChevronRight size={10} />
+          <span className={activeJobId ? 'text-violet-400' : ''}>② Import</span>
+          <ChevronRight size={10} />
+          <span className={isDone && !dryRun ? 'text-green-400' : ''}>③ Enrich ↓</span>
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 mb-3">
+        Создаёт minimal game records (title, year, rank) без XML-данных.
+        После seed — запустите «Batch-обогащение» ниже для полного заполнения.{' '}
+        <a
+          href="https://boardgamegeek.com/data_dumps/bg_ranks"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-violet-400 hover:underline"
+        >
+          Скачать CSV ↗
+        </a>
+      </p>
+
+      {/* Drop zone */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={() => fileInputRef.current?.click()}
+        onKeyDown={e => e.key === 'Enter' && fileInputRef.current?.click()}
+        onDragEnter={e => { e.preventDefault(); setDragging(true) }}
+        onDragLeave={e => { e.preventDefault(); setDragging(false) }}
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => { e.preventDefault(); setDragging(false); handleFileDrop(e.dataTransfer.files) }}
+        className={[
+          'border-2 border-dashed rounded-lg px-4 py-5 text-center cursor-pointer transition-colors',
+          dragging ? 'border-violet-500 bg-violet-950/20' : 'border-gray-700 hover:border-gray-600',
+          file ? 'border-violet-700 bg-violet-950/10' : '',
+        ].join(' ')}
+      >
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept=".csv,text/csv"
+          className="hidden"
+          onChange={e => handleFileDrop(e.target.files)}
+        />
+        {file ? (
+          <div className="flex items-center justify-center gap-2 text-sm text-violet-300">
+            <CheckCircle2 size={16} className="text-violet-400 flex-shrink-0" />
+            <span className="truncate max-w-xs">{file.name}</span>
+            <span className="text-gray-500 text-xs flex-shrink-0">
+              ({(file.size / 1024 / 1024).toFixed(1)} MB)
+            </span>
+            <button
+              type="button"
+              onClick={e => { e.stopPropagation(); setFile(null); setActiveJobId(null) }}
+              className="ml-1 text-gray-500 hover:text-gray-300"
+            >
+              <XCircle size={14} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex flex-col items-center gap-1 text-gray-500">
+            <Upload size={20} />
+            <span className="text-xs">Перетащите boardgames_ranks.csv или кликните</span>
+          </div>
+        )}
+      </div>
+
+      {/* Options */}
+      <div className="grid grid-cols-2 gap-3 mt-3">
+        <div>
+          <label className="block text-xs text-gray-400 mb-1">
+            Top-N по rank{' '}
+            <span className="text-gray-600">(пусто = все ~160K)</span>
+          </label>
+          <input
+            type="number"
+            min={1}
+            max={200000}
+            value={topN}
+            onChange={e => setTopN(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 1))}
+            placeholder="например, 500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-violet-500"
+          />
+        </div>
+        <div className="flex items-end">
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={dryRun}
+              onChange={e => setDryRun(e.target.checked)}
+            />
+            Dry-run (подсчёт без записи)
+          </label>
+        </div>
+      </div>
+
+      {/* Run button */}
+      <div className="flex items-center gap-3 mt-3">
+        <button
+          type="button"
+          onClick={() => startImport.mutate()}
+          disabled={!canRun}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
+        >
+          {startImport.isPending || isRunning
+            ? <Loader2 size={12} className="animate-spin" />
+            : <Play size={12} />}
+          {dryRun ? 'Dry-run' : 'Импортировать'}
+        </button>
+        {activeJobId && (
+          <span className="text-xs text-gray-500">
+            Job #{activeJobId} · {job.data?.status ?? '...'}
+          </span>
+        )}
+      </div>
+
+      {/* Progress */}
+      {progress && (
+        <div className="mt-4 space-y-1.5">
+          <div className="flex items-center justify-between text-xs text-gray-400">
+            <span>
+              <span className="text-violet-300">{progress.phase}</span>
+              {progress.total > 0 && (
+                <> · {progress.current} / {progress.total}</>
+              )}
+            </span>
+          </div>
+          {progress.total > 0 && (
+            <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
+              <div
+                className="bg-violet-500 h-full transition-all"
+                style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Result */}
+      {job.data && (isDone || isFailed) && (
+        <div className={[
+          'mt-3 p-3 rounded text-xs border',
+          isDone ? 'bg-gray-900 border-gray-800 text-gray-300' : 'bg-red-950/20 border-red-900/50 text-red-300',
+        ].join(' ')}>
+          <div className="font-medium mb-1">
+            {isDone ? (dryRun ? '✓ Dry-run завершён' : '✓ Импорт завершён') : '✗ Ошибка'}
+          </div>
+          {isDone && (
+            <div className="flex gap-6 mt-1">
+              <Stat label={dryRun ? 'Будет импортировано' : 'Импортировано'} value={enrichedCount} />
+            </div>
+          )}
+          {isFailed && job.data.error && (
+            <div className="mt-1 font-mono text-[11px] text-red-400 break-all">{job.data.error}</div>
+          )}
+          {isDone && !dryRun && enrichedCount > 0 && (
+            <div className="mt-2 text-gray-500 text-[11px]">
+              Игры проиндексированы. Перейдите к «Batch-обогащению» ниже чтобы заполнить описания через BGG XML API.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Log */}
+      {job.data?.log_lines && job.data.log_lines.length > 0 && (
+        <details className="mt-3 group">
+          <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-200">
+            Лог ({job.data.log_lines.length} строк)
+          </summary>
+          <pre className="mt-2 max-h-48 overflow-y-auto text-[11px] font-mono text-gray-400 bg-gray-950 p-2 rounded border border-gray-800 whitespace-pre-wrap">
+            {job.data.log_lines.slice(-50).join('\n')}
+          </pre>
+        </details>
+      )}
+    </section>
   )
 }
 

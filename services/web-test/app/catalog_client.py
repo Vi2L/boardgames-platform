@@ -181,6 +181,30 @@ class CatalogClient:
         resp = await self._client.post("/import/bgg/batch", json=payload)
         return _ok_or_raise(resp)
 
+    async def import_bgg_ranks(
+        self,
+        csv_content: bytes,
+        filename: str,
+        *,
+        top_n: int | None = None,
+        dry_run: bool = False,
+    ) -> dict[str, Any]:
+        """POST /import/bgg/ranks (multipart) → seed из BGG ranks CSV.
+
+        Форвардит multipart/form-data к catalog: поле csv_file + top_n + dry_run.
+        Возвращает ImportJob — polling через get_import_job().
+        """
+        data: dict[str, str] = {"dry_run": str(dry_run).lower()}
+        if top_n is not None:
+            data["top_n"] = str(top_n)
+        resp = await self._client.post(
+            "/import/bgg/ranks",
+            data=data,
+            files={"csv_file": (filename, csv_content, "text/csv")},
+            timeout=60.0,  # загрузка большого CSV может занять несколько секунд
+        )
+        return _ok_or_raise(resp)
+
     async def import_tesera(self, payload: dict) -> dict[str, Any]:
         """POST /import/tesera → запустить async-импорт. Возвращает ImportJob."""
         resp = await self._client.post("/import/tesera", json=payload)

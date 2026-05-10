@@ -448,6 +448,23 @@ export const importBggBatch = (payload: BggBatchPayload) =>
     body: JSON.stringify(payload),
   }).then(r => json<ImportJob>(r))
 
+// POST /catalog/import/bgg/ranks — seed из BGG ranks CSV (multipart/form-data).
+// topN=null → импортировать все ранкированные игры из файла.
+// Возвращает ImportJob; UI делает polling fetchImportJob(id).
+export const importBggRanks = (
+  file: File,
+  topN: number | null,
+  dryRun: boolean,
+): Promise<ImportJob> => {
+  const fd = new FormData()
+  fd.append('csv_file', file)
+  if (topN !== null) fd.append('top_n', String(topN))
+  fd.append('dry_run', String(dryRun))
+  return fetch(`${BASE}/import/bgg/ranks`, { method: 'POST', body: fd }).then(
+    r => json<ImportJob>(r),
+  )
+}
+
 // ── Promotion (двухстадийная схема: staging → canonical) ─────────────────
 
 export type ExternalLink = {

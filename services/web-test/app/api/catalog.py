@@ -5,7 +5,7 @@
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from app.catalog_client import CatalogClient, CatalogServiceError
 from app.deps import get_catalog_client
@@ -253,6 +253,29 @@ async def import_bgg_batch(
     """Запуск batch BGG XML enrich'а. Возвращает ImportJob — polling /jobs/{id}."""
     try:
         return await client.import_bgg_batch(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/import/bgg/ranks")
+async def import_bgg_ranks(
+    csv_file: UploadFile = File(...),
+    top_n: int | None = Form(None),
+    dry_run: bool = Form(False),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Seed каталога из BGG ranks CSV. Multipart/form-data → proxy → catalog.
+
+    Возвращает ImportJob — polling через GET /catalog/import/jobs/{id}.
+    """
+    try:
+        content = await csv_file.read()
+        return await client.import_bgg_ranks(
+            content,
+            csv_file.filename or "boardgames_ranks.csv",
+            top_n=top_n,
+            dry_run=dry_run,
+        )
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
