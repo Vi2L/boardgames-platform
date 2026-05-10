@@ -35,6 +35,28 @@ export const fetchHealth = () =>
 export const fetchHealthAll = () =>
   fetch(`${BASE}/health/all`).then(r => json<HealthAllResponse>(r))
 
+// ── Status page (WT-F5.3) ────────────────────────────────────────────────────
+
+export interface PingRecord {
+  id: number
+  checked_at: string
+  parsers_status: 'ok' | 'down'
+  catalog_status: 'ok' | 'down'
+  unmatched_offers: number | null
+  unmatched_good: number | null
+  total_games: number | null
+  parsers_error: string | null
+  catalog_error: string | null
+}
+
+export const recordPing = () =>
+  fetch(`${BASE}/status/ping`, { method: 'POST' }).then(r => json<HealthAllResponse>(r))
+
+export const fetchStatusHistory = (hours: number = 24) =>
+  fetch(`${BASE}/status/history?hours=${hours}`).then(
+    r => json<{ items: PingRecord[]; total: number; hours: number }>(r),
+  )
+
 export const fetchRecentDeltas = (ids: number[]) => {
   if (ids.length === 0) return Promise.resolve([] as PriceDeltaOut[])
   const q = ids.join(',')

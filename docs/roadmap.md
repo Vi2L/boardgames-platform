@@ -6,6 +6,7 @@
 - Подробности по web-test: [`services/web-test/PLAN.md`](../services/web-test/PLAN.md)
 - Архитектура: [`docs/architecture.md`](architecture.md)
 - Параллельная работа агентов: [`docs/parallel-agents.md`](parallel-agents.md)
+- Журнал завершённых задач: [`docs/devlog.md`](devlog.md)
 
 Идентификаторы: `[<SVC>-<id>]`, SVC ∈ WT (web-test), CAT (catalog),
 PRS (parsers), INFRA (общее).
@@ -14,69 +15,27 @@ PRS (parsers), INFRA (общее).
 
 ## Сейчас в работе
 
-- [PRS-2] **Парсер avito.ru** — ✅ **ЗАВЕРШЕНО** (первая итерация).
-  `AvitoParser`: browser-as-a-service + JSON/HTML-парсинг `/nastolnye_igry`.
-  `raw`: `condition`, `location`, `seller_type`, `in_stock: True`.
-  Регистрируется автоматически при `BROWSER_SERVICE_URL`. Enrich — вторая итерация.
-
-- [INFRA-5] **`services/browser/`** — ✅ **ЗАВЕРШЕНО**.
-  FastAPI + Playwright + playwright-stealth. `POST /fetch {url} → {html, cookies, headers}`.
-  Профиль `browser` в docker-compose (не входит в `full` — образ ~700 MB).
-  `browser_client.py` в parsers; активируется при `BROWSER_SERVICE_URL`.
-  Запуск: `docker compose --profile browser up -d --build`.
-
-- [WT-F4.1-extended] **parsers DB explorer** — ✅ **ЗАВЕРШЕНО** (8/8 виджетов).
-  Реализованы: Inventory, ProductsBrowser, Analytics, Timeline, LatencyHistogram,
-  StoreDistribution, ParserBreakdown, RawKeys — новая вкладка «БД парсеров: графики».
-  Vanilla `/dashboard` в parsers можно отключить.
+_(пусто)_
 
 ## Ближайшее (1–2 недели)
 
-- [WT-F1.6] **Selectors playground** — ✅ **ЗАВЕРШЕНО**.
-  `SelectorPlayground`-блок под body в `UrlPlayground`: ввод CSS-селектора →
-  `DOMParser` применяет к полученному HTML без сетевых запросов, показывает
-  список совпадений с текстом + `outerHTML`. Коммит `b7e6aac`.
 - [CAT-1] **Авто-matching эвристики** — расширить `find_best_match`
   и `find_match_candidates`: бонус +0.1 при match по alias, штраф
   при несовпадении publisher/year, обработка expansions
   («Каркассон: Король и разбойник» не должна матчиться на базовый
   «Каркассон»).
-- [WT-F4.4-extended] **Suite baselines auto pass/fail** — ✅ **ЗАВЕРШЕНО**.
-  `product_count` захватывается в run loop и хранится в `suite_run_items` (миграция v4).
-  `BaselineBadge`: pass → зелёная строка + `✓ N / ≥M`, fail → красная + `✗ N / ≥M`.
-  Кнопка фиксации baseline предзаполняет prompt фактическим счётчиком. Коммит `4e5b60f`.
 
 ## Бэклог (без даты)
 
 ### web-test
 
 **Catalog / matching UI**
-- [WT-F2.5] **Offer history page** — ✅ **ЗАВЕРШЕНО**.
-  Chevron-раскрытие каждого оффера в Offers-табе `GameDetailDrawer` с
-  `PriceChart` (история цен из parsers `price_observations`).
-  Новый endpoint `GET /history/by-external-id?store_slug=&external_id=` в parsers;
-  proxy `GET /api/offers/history` в web-test. Коммит `c86b198`.
-- [WT-F2.6] **Bulk-import wizard top-N** — ✅ **ЗАВЕРШЕНО**.
-  `BggRanksImportSection` в `BggImportPanel`: drag-and-drop CSV-загрузка,
-  top-N фильтр, dry-run, прогресс-бар + polling ImportJob.
-  Catalog endpoint `POST /import/bgg/ranks` (multipart) + web-test proxy.
-- [WT-F2.7] **RU-first автоподсказки** — ✅ **ЗАВЕРШЕНО**.
-  `GameSuggestRow` (`components/shared/`): RU-название как первичное,
-  EN — бледный суффикс (`text-gray-500`); при выборе подставляется RU.
-  `getDisplayName(game)` в `lib/catalog.ts` как shared-хелпер.
-
-**Диагностика**
-- [WT-F5.3] **Status page** — `/status` с историей пингов и
-  timeline'ом unmatched-counter'а (для ретроспектив).
-
-**Auth и безопасность**
 - [WT-F6.1] **Закрыть `/api/debug/*` и `/api/dlq/*`** — nginx
   `auth_basic` или JWT-middleware при публичном деплое.
 - [WT-F6.2] **Баннер «admin-функции отключены»** при отсутствии
   `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
 
 **Технический долг**
-- [WT-T1] **`AliasList.tsx` → удалить** — ✅ **ЗАВЕРШЕНО**. Коммит `b7e6aac`.
 - [WT-T2] **Snapshot diff `extra` — фильтр** — сейчас
   разбивается на `extra.<key>`, при 100 ключах в `raw` UI шумный.
   Whitelist важных raw-ключей или фильтр «изменения ≥ X%».
@@ -88,6 +47,7 @@ PRS (parsers), INFRA (общее).
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,
   пробующий replay'нуть DLQ-записи с экспоненциальным backoff;
   алерт при `attempt_count > 10`.
+
 ### Инфра
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал
   (Next.js / Vite + React).

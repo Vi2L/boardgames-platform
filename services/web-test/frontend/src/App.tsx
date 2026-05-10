@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
-import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug, Inbox, Boxes } from 'lucide-react'
+import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug, Inbox, Boxes, Activity } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
@@ -11,6 +11,7 @@ import { CatalogPage } from './pages/CatalogPage'
 import { DebugPage } from './pages/DebugPage'
 import { DlqPage } from './pages/DlqPage'
 import { SourcesPage } from './pages/SourcesPage'
+import { StatusPage } from './pages/StatusPage'
 import { DiffView } from './components/testing/DiffView'
 import { HealthBadge } from './components/shared/HealthBadge'
 import { CommandPalette } from './components/shared/CommandPalette'
@@ -24,6 +25,7 @@ const NAV = [
   { to: '/sources', label: 'Источники', icon: Boxes },
   { to: '/testing', label: 'Тесты', icon: FlaskConical },
   { to: '/dlq', label: 'DLQ', icon: Inbox },
+  { to: '/status', label: 'Статус', icon: Activity },
 ]
 
 const STORAGE_KEY = 'sidebar:collapsed'
@@ -147,6 +149,7 @@ export default function App() {
           <Route path="/products/:id" element={<ProductPage />} />
           <Route path="/testing" element={<TestingPage />} />
           <Route path="/testing/diff" element={<DiffView />} />
+          <Route path="/status" element={<StatusPage />} />
         </Routes>
       </main>
 

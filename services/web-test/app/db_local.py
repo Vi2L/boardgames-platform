@@ -151,6 +151,23 @@ _MIGRATIONS: list[str] = [
     # конкретный query. Нужен для сравнения с baseline.min_count и вывода
     # pass/fail в SuiteRunner (WT-F4.4-extended).
     "ALTER TABLE suite_run_items ADD COLUMN product_count INTEGER;",
+    # v5 (2026-05): ping_history — история health/all пингов для /status page.
+    # Хранит срез состояния обоих соседей в момент пинга: статус, unmatched,
+    # total_games. Ретенция — последние 7 дней (чистится при вставке).
+    """
+    CREATE TABLE IF NOT EXISTS ping_history (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        checked_at       TEXT NOT NULL,
+        parsers_status   TEXT NOT NULL,
+        catalog_status   TEXT NOT NULL,
+        unmatched_offers INTEGER,
+        unmatched_good   INTEGER,
+        total_games      INTEGER,
+        parsers_error    TEXT,
+        catalog_error    TEXT
+    );
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_ping_history_ts ON ping_history(checked_at DESC);",
 ]
 
 
@@ -762,6 +779,64 @@ class PortalDB:
         )
         await self.conn.commit()
         return cur.rowcount > 0
+
+    # ── Ping history (WT-F5.3 Status page) ───────────────────────────────────
+
+    async def save_ping(
+        self,
+        parsers_status: str,
+        catalog_status: str,
+        *,
+        unmatched_offers: int | None = None,
+        unmatched_good: int | None = None,
+        total_games: int | None = None,
+        parsers_error: str | None = None,
+        catalog_error: str | None = None,
+    ) -> int:
+        """Сохраняет один ping-результат в ping_history.
+
+        Попутно чистит записи старше 7 дней — простая ретенция без cron'а:
+        при каждой записи удаляем хвост, не нужно помнить о vacuum.
+        """
+        now = _utc_now_iso()
+        cur = await self.conn.execute(
+            """
+            INSERT INTO ping_history
+                (checked_at, parsers_status, catalog_status,
+                 unmatched_offers, unmatched_good, total_games,
+                 parsers_error, catalog_error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (now, parsers_status, catalog_status,
+             unmatched_offers, unmatched_good, total_games,
+             parsers_error, catalog_error),
+        )
+        new_id = cur.lastrowid
+        # Ретенция: удаляем записи старше 7 дней.
+        await self.conn.execute(
+            "DELETE FROM ping_history WHERE checked_at < datetime('now', '-7 days')"
+        )
+        await self.conn.commit()
+        return new_id  # type: ignore[return-value]
+
+    async def get_ping_history(
+        self, *, hours: int = 24, limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        """Возвращает ping_history за последние `hours` часов, новые первыми."""
+        cur = await self.conn.execute(
+            """
+            SELECT id, checked_at, parsers_status, catalog_status,
+                   unmatched_offers, unmatched_good, total_games,
+                   parsers_error, catalog_error
+            FROM ping_history
+            WHERE checked_at >= datetime('now', ? || ' hours')
+            ORDER BY checked_at DESC
+            LIMIT ?
+            """,
+            (f"-{hours}", limit),
+        )
+        rows = await cur.fetchall()
+        return [dict(r) for r in rows]
 
 
 def _row_to_product(row: aiosqlite.Row | None) -> ProductOut:

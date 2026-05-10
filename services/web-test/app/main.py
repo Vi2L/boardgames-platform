@@ -23,6 +23,7 @@ from app.api import snapshots as snapshots_router_module
 from app.api import sources as sources_router_module
 from app.api import stats as stats_router_module
 from app.api import stores as stores_router_module
+from app.api import status as status_router_module
 from app.api import suites as suites_router_module
 from app.deps import close_services, init_services
 
@@ -72,6 +73,7 @@ app.include_router(backup_router_module.router, prefix="/api")
 app.include_router(debug_router_module.router, prefix="/api")
 app.include_router(parsers_db_router_module.router, prefix="/api")
 app.include_router(dlq_router_module.router, prefix="/api")
+app.include_router(status_router_module.router, prefix="/api")
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.exists():
