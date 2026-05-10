@@ -62,6 +62,19 @@ services:
       DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-catalog}:${POSTGRES_PASSWORD:-catalog}@postgres:5432/${POSTGRES_DB:-catalog}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
       REQUIRE_AUTH: ${REQUIRE_AUTH:-0}
+      # BGG XML API token — обязателен с июля 2025 (Bearer auth). Без него — 401.
+      BGG_API_TOKEN: ${BGG_API_TOKEN:-}
+      # On-demand staleness при ingest (см. catalog/config.py).
+      BGG_INGEST_ENRICH_STALENESS_DAYS: ${BGG_INGEST_ENRICH_STALENESS_DAYS:-14}
+      # Дефолты для bgg_*_sync — после миграции 0010 переехали в scheduler_configs (БД).
+      # Эти env-vars остаются как fallback для тестов / DEV-окружения без миграции.
+      BGG_TOP_SYNC_ENABLED: ${BGG_TOP_SYNC_ENABLED:-true}
+      BGG_TOP_SYNC_RANK_LE: ${BGG_TOP_SYNC_RANK_LE:-1000}
+      BGG_TOP_SYNC_SKIP_RECENT_DAYS: ${BGG_TOP_SYNC_SKIP_RECENT_DAYS:-7}
+      BGG_TOP_SYNC_CRON: ${BGG_TOP_SYNC_CRON:-0 3 * * 1}
+      BGG_HOTNESS_SYNC_ENABLED: ${BGG_HOTNESS_SYNC_ENABLED:-true}
+      BGG_HOTNESS_SYNC_CRON: ${BGG_HOTNESS_SYNC_CRON:-0 6 * * *}
+      BGG_HOTNESS_AUTO_IMPORT: ${BGG_HOTNESS_AUTO_IMPORT:-true}
     depends_on:
       postgres:
         condition: service_healthy
