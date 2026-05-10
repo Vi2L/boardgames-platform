@@ -15,33 +15,62 @@ manual-связь.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import asyncio
+import logging
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from bg_shared.ingest import IngestRequest
 
 from catalog.auth import require_scope
-from catalog.db import get_session
+from catalog.db import get_engine, get_session
 from catalog.matching.matcher import (
     AUTO_MATCH_THRESHOLD,
     classify,
     find_best_match,
 )
-from catalog.models import GameAlias, Offer, OfferPrice
+from catalog.models import GameAlias, GameBgg, Offer, OfferPrice
 from catalog.schemas import (
     IngestResult,
     IngestResultItem,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
+
+
+async def _enrich_one_background(bgg_id: int) -> None:
+    """Fire-and-forget обогащение одной игры из BGG.
+
+    Создаёт свою сессию (не делит транзакцию с HTTP-handler'ом).
+    Любая ошибка логируется и проглатывается — не должна аффектить ingest-ответ.
+    При следующем ingest этой же игры (если fetched_at всё ещё старый) задача
+    запустится снова.
+    """
+    from catalog.parsers.bgg.client import BggClient
+    from catalog.parsers.bgg.service import enrich_one
+
+    try:
+        session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+        async with BggClient.from_settings() as client:
+            async with session_factory() as session:
+                bgg = await enrich_one(bgg_id, session, client=client)
+                if bgg is not None:
+                    await session.commit()
+                    logger.info("ingest staleness: обновлён bgg_id=%d (%s)", bgg_id, bgg.title)
+                else:
+                    logger.warning("ingest staleness: bgg_id=%d не найден в BGG", bgg_id)
+    except Exception:  # noqa: BLE001
+        logger.exception("ingest staleness: enrich_one(bgg_id=%d) failed", bgg_id)
 
 
 @router.post(
@@ -156,6 +185,22 @@ async def ingest_offers(
                     )
                     .on_conflict_do_nothing(constraint="uq_alias_per_game")
                 )
+
+                # Staleness check: если BGG-данные для этой игры старше N дней —
+                # запускаем обогащение фоном. Не блокируем ingest-ответ.
+                from catalog.config import get_settings
+                staleness_days = get_settings().bgg_ingest_enrich_staleness_days
+                if staleness_days > 0:
+                    cutoff = _utcnow() - timedelta(days=staleness_days)
+                    bgg_row = (await session.execute(
+                        select(GameBgg.bgg_id, GameBgg.fetched_at)
+                        .where(GameBgg.game_id == new_game_id)
+                    )).one_or_none()
+                    if bgg_row is not None and bgg_row.fetched_at < cutoff:
+                        asyncio.create_task(
+                            _enrich_one_background(bgg_row.bgg_id),
+                            name=f"ingest-stale-enrich-{bgg_row.bgg_id}",
+                        )
 
         # История цен — отдельная точка на каждый ingest. ON CONFLICT по
         # композитному PK (offer_id, fetched_at) — если за тот же миг уже

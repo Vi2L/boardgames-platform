@@ -15,13 +15,14 @@ SQLAlchemy 2.0 typed style (Mapped + mapped_column). Все таблицы на�
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
     Boolean,
     Computed,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -649,4 +650,41 @@ class MatchProfile(Base):
 
     __table_args__ = (
         UniqueConstraint("provider", "name", name="uq_match_profiles_provider_name"),
+    )
+
+
+class BggHotness(Base):
+    """История BGG Hotness-снимков (таблица bgg_hotness, миграция 0009).
+
+    BGG обновляет список ~50 «горячих» игр ежедневно. Каждый ежедневный
+    snapshot — отдельные строки (fetched_date, bgg_id). ON CONFLICT DO NOTHING
+    на uq_bgg_hotness_date_bgg гарантирует идемпотентность при повторных
+    запусках в тот же день.
+
+    game_id — денормализованная ссылка на canonical game (nullable, SET NULL
+    при удалении game). Позволяет быстро джойнить без поиска по bgg_id.
+    """
+
+    __tablename__ = "bgg_hotness"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Дата снимка (UTC-день). Один снимок в день — сравнение WHERE date = today() дёшево.
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    rank: Mapped[int] = mapped_column(Integer, nullable=False)
+    bgg_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    name: Mapped[str] = mapped_column(Text, nullable=False)
+    year: Mapped[int | None] = mapped_column(Integer)
+    thumbnail_url: Mapped[str | None] = mapped_column(Text)
+    # Ссылка на canonical game (SET NULL при merge/удалении игры).
+    game_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("games.id", ondelete="SET NULL"),
+        index=True,
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+    __table_args__ = (
+        UniqueConstraint("snapshot_date", "bgg_id", name="uq_bgg_hotness_date_bgg"),
     )

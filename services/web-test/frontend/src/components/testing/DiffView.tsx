@@ -1,13 +1,21 @@
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSearchParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, ArrowDown, ArrowUp, Plus, Minus, AlertTriangle } from 'lucide-react'
+import { ArrowLeft, ArrowDown, ArrowUp, Plus, Minus, AlertTriangle, Layers } from 'lucide-react'
 import clsx from 'clsx'
 import type { DiffCategory, DiffField, DiffProductItem } from '../../types/api'
 import { fetchSnapshotDiff } from '../../lib/api'
 import { getStoreBadgeColor } from '../../lib/stores'
 
 const PRICE_ALERT_THRESHOLD = 30  // % — > 30% считаем подозрительным
+
+// В compact-режиме extra.* поля группируются в схлопнутый блок.
+// Список «важных» ключей отображается вне схлопывания даже в compact-режиме:
+// они влияют на UX (цена, наличие, акция, идентификатор).
+const RAW_ALWAYS_VISIBLE = new Set([
+  'availability', 'in_stock', 'on_sale', 'original_price',
+  'sku', 'article', 'bonus_percent',
+])
 
 /**
  * Side-by-side diff двух snapshot-ов.
@@ -17,6 +25,8 @@ const PRICE_ALERT_THRESHOLD = 30  // % — > 30% считаем подозрит
  * желтоватый с раскрытием полей. Filter «только изменения» спрятан в
  * select сверху — для длинных списков (50+ товаров).
  */
+type RawFilter = 'compact' | 'all'
+
 export function DiffView() {
   const [params] = useSearchParams()
   const navigate = useNavigate()
@@ -24,6 +34,7 @@ export function DiffView() {
   const b = Number(params.get('b'))
   const [filter, setFilter] = useState<'all' | 'changes'>('changes')
   const [catFilter, setCatFilter] = useState<DiffCategory | 'any'>('any')
+  const [rawFilter, setRawFilter] = useState<RawFilter>('compact')
 
   const { data: diff, isLoading, error } = useQuery({
     queryKey: ['snapshot-diff', a, b],
@@ -88,6 +99,21 @@ export function DiffView() {
           <option value="field">Прочее</option>
         </select>
 
+        <button
+          type="button"
+          onClick={() => setRawFilter(f => f === 'compact' ? 'all' : 'compact')}
+          title={rawFilter === 'compact' ? 'Показать все extra-поля' : 'Свернуть extra-поля'}
+          className={clsx(
+            'flex items-center gap-1.5 px-2 py-1 rounded text-xs border transition-colors',
+            rawFilter === 'compact'
+              ? 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              : 'bg-blue-900/40 border-blue-700 text-blue-300',
+          )}
+        >
+          <Layers size={11} />
+          {rawFilter === 'compact' ? 'compact raw' : 'все raw'}
+        </button>
+
         <span className="text-xs text-gray-500 ml-auto font-mono">
           a:{diff.meta.a.id} · b:{diff.meta.b.id}
         </span>
@@ -117,7 +143,7 @@ export function DiffView() {
         ? <div className="text-sm text-gray-500 py-12 text-center">Нет изменений</div>
         : (
           <div className="space-y-2">
-            {filtered.map(item => <DiffRow key={item.key} item={item} />)}
+            {filtered.map(item => <DiffRow key={item.key} item={item} rawFilter={rawFilter} />)}
           </div>
         )}
     </div>
@@ -159,7 +185,7 @@ const CAT_COLOR: Record<DiffCategory, { text: string; bg: string; pill: string }
   field:  { text: 'text-gray-400',   bg: 'bg-gray-900/40',   pill: 'bg-gray-800 text-gray-300' },
 }
 
-function DiffRow({ item }: { item: DiffProductItem }) {
+function DiffRow({ item, rawFilter }: { item: DiffProductItem; rawFilter: RawFilter }) {
   const product = item.b ?? item.a
   if (!product) return null
 
@@ -183,6 +209,19 @@ function DiffRow({ item }: { item: DiffProductItem }) {
   const priceField = item.fields?.price_rub
   const isBigPriceJump =
     priceField?.delta_pct != null && Math.abs(priceField.delta_pct) >= PRICE_ALERT_THRESHOLD
+
+  // Разделяем поля на «обычные» и «extra.*» для compact-режима.
+  const allFields = Object.entries(item.fields ?? {})
+  const regularFields = allFields.filter(([f]) => !f.startsWith('extra.'))
+  const extraFields   = allFields.filter(([f]) =>  f.startsWith('extra.'))
+
+  // В compact-режиме «важные» extra-ключи показываем вместе с обычными.
+  const extraVisible = rawFilter === 'all'
+    ? extraFields
+    : extraFields.filter(([f]) => RAW_ALWAYS_VISIBLE.has(f.slice('extra.'.length)))
+  const extraHidden = rawFilter === 'all'
+    ? []
+    : extraFields.filter(([f]) => !RAW_ALWAYS_VISIBLE.has(f.slice('extra.'.length)))
 
   return (
     <details className={clsx('border rounded p-3', borderClass)}>
@@ -215,9 +254,27 @@ function DiffRow({ item }: { item: DiffProductItem }) {
 
       {item.status === 'changed' && item.fields && (
         <div className="mt-3 space-y-1.5 text-xs font-mono">
-          {Object.entries(item.fields).map(([field, val]) => (
+          {/* Обычные поля + важные extra — всегда видны */}
+          {[...regularFields, ...extraVisible].map(([field, val]) => (
             <FieldDiff key={field} field={field} val={val} />
           ))}
+
+          {/* Схлопнутый блок для шумных extra-полей в compact-режиме */}
+          {extraHidden.length > 0 && (
+            <details className="mt-1">
+              <summary className="cursor-pointer text-gray-500 hover:text-gray-300 select-none">
+                <span className={clsx('text-[9px] px-1 py-0 rounded uppercase tracking-wide mr-1.5', CAT_COLOR.raw.pill)}>
+                  raw
+                </span>
+                ещё {extraHidden.length} extra-{extraHidden.length === 1 ? 'поле' : extraHidden.length < 5 ? 'поля' : 'полей'}
+              </summary>
+              <div className="mt-1.5 space-y-1.5 pl-2 border-l border-gray-800">
+                {extraHidden.map(([field, val]) => (
+                  <FieldDiff key={field} field={field} val={val} />
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       )}
     </details>

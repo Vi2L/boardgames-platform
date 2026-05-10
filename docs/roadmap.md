@@ -36,9 +36,6 @@ _(пусто)_
   `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
 
 **Технический долг**
-- [WT-T2] **Snapshot diff `extra` — фильтр** — сейчас
-  разбивается на `extra.<key>`, при 100 ключах в `raw` UI шумный.
-  Whitelist важных raw-ключей или фильтр «изменения ≥ X%».
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка
   invalidate для cache-keys одного домена вместо ручного
   перечисления в каждой mutation.

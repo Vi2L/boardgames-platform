@@ -37,6 +37,9 @@ class BggClient:
     Поддерживает context manager: `async with BggClient() as bgg: ...`.
     Можно передать готовый `httpx.AsyncClient` (например, в тестах с
     `MockTransport`) — тогда client его не закрывает.
+
+    `api_token` — Bearer-токен для BGG XML API v2 (обязателен с 2025-го).
+    Без токена запросы вернут 401. Передаётся в заголовке Authorization.
     """
 
     def __init__(
@@ -45,6 +48,7 @@ class BggClient:
         *,
         base_url: str = BGG_BASE_URL,
         timeout: float = 30.0,
+        api_token: str | None = None,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._owns_client = client is None
@@ -52,10 +56,25 @@ class BggClient:
         # инициализаций при простом конструировании (важно для тестов).
         self._client: httpx.AsyncClient | None = client
         self._timeout = timeout
+        self._api_token = api_token
 
-    async def __aenter__(self) -> BggClient:
+    @classmethod
+    def from_settings(cls) -> "BggClient":
+        """Фабрика: создаёт клиент с токеном из Settings (singleton через lru_cache).
+
+        Используется вне FastAPI DI-контекста: в scheduler'е и importers.
+        Тесты переопределяют через `app.dependency_overrides` или передают
+        готовый `httpx.AsyncClient` с MockTransport напрямую в конструктор.
+        """
+        from catalog.config import get_settings
+        return cls(api_token=get_settings().bgg_api_token)
+
+    async def __aenter__(self) -> "BggClient":
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                headers=self._auth_headers(),
+            )
         return self
 
     async def __aexit__(self, *exc_info: object) -> None:
@@ -63,9 +82,17 @@ class BggClient:
             await self._client.aclose()
             self._client = None
 
+    def _auth_headers(self) -> dict[str, str]:
+        if self._api_token:
+            return {"Authorization": f"Bearer {self._api_token}"}
+        return {}
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self._timeout)
+            self._client = httpx.AsyncClient(
+                timeout=self._timeout,
+                headers=self._auth_headers(),
+            )
             self._owns_client = True
         return self._client
 
@@ -109,6 +136,19 @@ class BggClient:
             response.raise_for_status()
         raise httpx.HTTPError(f"BGG не отдал данные за {len(_RETRY_DELAYS)} попыток")
 
+    async def fetch_hot(self) -> str:
+        """GET `/hot?type=boardgame` → raw XML со списком 50 «горячих» игр.
+
+        BGG обновляет hotness ежедневно. Endpoint не возвращает 202, поэтому
+        backoff не нужен — любой не-200 ответ сразу поднимет исключение.
+        """
+        client = await self._ensure_client()
+        response = await client.get(
+            f"{self._base_url}/hot", params={"type": "boardgame"}
+        )
+        response.raise_for_status()
+        return response.text
+
     async def search(self, query: str, *, exact: bool = False) -> str:
         """GET `/search?query=<q>&type=boardgame[&exact=1]` → raw XML.
 
@@ -134,6 +174,13 @@ async def fetch_bgg_thing(
 
     Используется в `routers/imports.py` через shim `catalog.importers.bgg`.
     Новый код должен использовать `BggClient` напрямую.
+
+    `client` — опциональный внешний httpx.AsyncClient (используется в тестах
+    с MockTransport; в prod всегда None, и создаётся клиент с токеном из Settings).
     """
-    async with BggClient(client=client) as bgg:
+    if client is not None:
+        # Тесты: используем готовый mock-клиент без auth-настройки.
+        async with BggClient(client=client) as bgg:
+            return await bgg.fetch_thing(bgg_id)
+    async with BggClient.from_settings() as bgg:
         return await bgg.fetch_thing(bgg_id)

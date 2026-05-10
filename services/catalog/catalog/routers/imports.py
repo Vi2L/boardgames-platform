@@ -40,6 +40,7 @@ from catalog.importers.tesera import (
     fetch_tesera_thing,
     parse_tesera_json,
 )
+from catalog.importers.bgg_hotness import run_hotness_import_job
 from catalog.importers.dicefest import (
     _run_dicefest_import_job,
     _run_dicefest_reparse_job,
@@ -566,6 +567,37 @@ async def import_dicefest_reparse(
         await session.refresh(job)
     else:
         asyncio.create_task(_run_dicefest_reparse_job(job.id, {}))
+
+    return ImportJobOut.model_validate(job)
+
+
+@router.post(
+    "/bgg/hotness",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_bgg_hotness(
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    """Ручной запуск BGG Hotness sync.
+
+    Fetches /hot?type=boardgame → upsert bgg_hotness snapshot → auto-import
+    игр, отсутствующих в каталоге. Идемпотентен: повторный вызов в тот же
+    день не создаёт дублей в bgg_hotness.
+
+    Прогресс доступен через GET /import/jobs/{id}.
+    """
+    job = ImportJob(type="bgg-hotness", payload={}, status="pending")
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await run_hotness_import_job(job.id)
+        await session.refresh(job)
+    else:
+        asyncio.create_task(run_hotness_import_job(job.id))
 
     return ImportJobOut.model_validate(job)
 

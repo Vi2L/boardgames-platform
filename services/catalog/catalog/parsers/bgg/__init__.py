@@ -15,8 +15,8 @@
 from __future__ import annotations
 
 from catalog.parsers.bgg.client import BGG_BASE_URL, BggClient, fetch_bgg_thing
-from catalog.parsers.bgg.models import BggGame, BggSearchHit
-from catalog.parsers.bgg.parser import parse_search_xml, parse_thing_xml
+from catalog.parsers.bgg.models import BggGame, BggHotnessItem, BggSearchHit
+from catalog.parsers.bgg.parser import parse_hot_xml, parse_search_xml, parse_thing_xml
 from catalog.parsers.bgg.repository import slug_from_title, upsert_bgg_data
 from catalog.parsers.bgg.service import enrich_one, search_games
 
@@ -27,10 +27,12 @@ __all__ = [
     "BGG_BASE_URL",
     "BggClient",
     "BggGame",
+    "BggHotnessItem",
     "BggSearchHit",
     "enrich_one",
     "fetch_bgg_thing",
     "parse_bgg_xml",  # legacy alias
+    "parse_hot_xml",
     "parse_search_xml",
     "parse_thing_xml",
     "search_games",

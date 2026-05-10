@@ -3,9 +3,16 @@
 Этап skeleton: только /health для smoke-теста. Бизнес-роутеры (games, offers,
 matching, imports) будут подключаться по мере реализации этапов из плана.
 """
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
+
+# uvicorn конфигурирует только свои логгеры (uvicorn.*); root-логгер без handler'а.
+# Эта строка добавляет stderr-handler на root-логгер, чтобы catalog.* и
+# apscheduler.* сообщения не терялись. Вызов идемпотентен: basicConfig — no-op
+# если handler уже есть (например, при тестах с caplog).
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 from sqlalchemy import text
 
 from catalog.config import get_settings
@@ -17,14 +24,22 @@ from catalog.routers import matching as matching_router
 from catalog.routers import parsers as parsers_router
 from catalog.routers import promotion as promotion_router
 from catalog.routers import sources as sources_router
+from catalog.scheduler import create_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: создаём engine заранее, чтобы первый запрос не платил за инициализацию.
     get_engine()
+
+    # BGG sync scheduler. wait=False при shutdown — не ждём завершения
+    # долгих задач (enrich_batch ~25 мин) при SIGTERM; они упадут вместе с loop'ом.
+    scheduler = create_scheduler()
+    scheduler.start()
+
     yield
-    # Shutdown: аккуратно закрываем пул.
+
+    scheduler.shutdown(wait=False)
     await dispose_engine()
 
 

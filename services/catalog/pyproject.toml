@@ -18,6 +18,12 @@ dependencies = [
     # Общие контракты с parsers — IngestRequest/IngestOfferIn.
     # Workspace-source берёт из packages/shared-py (см. корневой pyproject.toml).
     "bg-shared",
+    # Планировщик периодических задач (BGG sync). 3.x — стабильный API;
+    # 4.x (beta) не берём — нестабильный интерфейс.
+    "apscheduler>=3.10,<4",
+    # Требуется FastAPI для UploadFile/Form (file upload endpoints).
+    # Не transitive-зависимость fastapi — нужно указывать явно.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

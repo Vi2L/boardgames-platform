@@ -8,6 +8,56 @@
 
 ---
 
+## 2026-05-10 · [CAT-2] BGG периодическая синхронизация + Hotness
+
+**Что сделано:**
+Полная подсистема автоматической синхронизации с BGG. APScheduler встроен в
+lifespan FastAPI: еженедельный `bgg_top_sync` (enrich_batch топ-1000 по рангу,
+понедельник 03:00 UTC) и ежедневный `bgg_hotness_sync` (snapshot /hot → таблица
+`bgg_hotness` + авто-импорт новых игр). При ingest offers: если `game_bgg.fetched_at`
+старше `BGG_INGEST_ENRICH_STALENESS_DAYS` дней — fire-and-forget `enrich_one` в фоне.
+Добавлена поддержка BGG Bearer-токена (обязателен с 2025-го). Миграция `0009_bgg_hotness`.
+
+**Как пользоваться:**
+- Scheduler стартует автоматически при запуске сервиса; job'ы видны в логах контейнера.
+- Ручной запуск hotness sync: `POST http://localhost:8002/import/bgg/hotness`
+  (прогресс через `GET /import/jobs/{id}`).
+- Настройка расписания — через env-переменные `BGG_TOP_SYNC_CRON` / `BGG_HOTNESS_SYNC_CRON`.
+- Отключить sync полностью: `BGG_TOP_SYNC_ENABLED=false` / `BGG_HOTNESS_SYNC_ENABLED=false`.
+- Токен BGG: добавить `BGG_API_TOKEN=<token>` в `.env`
+  (получить на boardgamegeek.com/account/preferences).
+
+**Затронутые файлы:**
+`catalog/scheduler.py` (новый),
+`catalog/importers/bgg_hotness.py` (новый),
+`alembic/versions/20260510_0009_bgg_hotness.py` (новый),
+`catalog/models.py` (BggHotness),
+`catalog/parsers/bgg/client.py` (fetch_hot, from_settings, Bearer auth),
+`catalog/parsers/bgg/parser.py` (parse_hot_xml),
+`catalog/parsers/bgg/models.py` (BggHotnessItem),
+`catalog/routers/imports.py` (POST /import/bgg/hotness),
+`catalog/routers/ingest.py` (staleness check),
+`catalog/config.py` (BGG_* settings),
+`catalog/api.py` (scheduler в lifespan + logging.basicConfig).
+
+---
+
+## 2026-05-10 · [WT-T2] DiffView compact raw filter
+
+**Что сделано:**
+В diff-просмотрщике снапшотов добавлен переключатель **compact / все raw**.
+В compact-режиме `extra.*` поля схлопнуты — видны только «важные» ключи
+(`availability`, `in_stock`, `on_sale`, `original_price`, `sku`, `article`, `bonus_percent`).
+В full-режиме отображаются все поля. Кнопка в тулбаре рядом с фильтром изменений.
+
+**Как пользоваться:**
+Открыть `/testing` → выбрать два снапшота → кнопка **«compact raw»** / **«все raw»** в верхней панели.
+
+**Затронутые файлы:**
+`frontend/src/components/testing/DiffView.tsx`.
+
+---
+
 ## 2026-05-10 · [WT-F5.3] Status page
 
 **Что сделано:**

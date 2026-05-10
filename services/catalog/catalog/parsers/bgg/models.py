@@ -50,6 +50,22 @@ class BggGame:
 
 
 @dataclass
+class BggHotnessItem:
+    """Одна позиция из ответа BGG `/hot?type=boardgame`.
+
+    BGG hotness — ежедневно обновляемый список 50 «горячих» игр. Содержит
+    минимум полей: ранг, id, название, год, thumbnail. Детальные данные
+    (описание, механики) — через `/thing?id=<bgg_id>`.
+    """
+
+    rank: int
+    bgg_id: int
+    name: str
+    year: int | None = None
+    thumbnail_url: str | None = None
+
+
+@dataclass
 class BggSearchHit:
     """Одна позиция в результатах `/xmlapi2/search?query=<q>&type=boardgame`.
 

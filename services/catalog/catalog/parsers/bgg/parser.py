@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from xml.etree import ElementTree as ET
 
-from catalog.parsers.bgg.models import BggGame, BggSearchHit
+from catalog.parsers.bgg.models import BggGame, BggHotnessItem, BggSearchHit
 
 
 def _int_attr(elem: ET.Element | None, attr: str = "value") -> int | None:
@@ -40,6 +40,54 @@ def _float_attr(elem: ET.Element | None, attr: str = "value") -> float | None:
         return float(val)
     except ValueError:
         return None
+
+
+def parse_hot_xml(xml_text: str) -> list[BggHotnessItem]:
+    """Парсит ответ BGG XML API `/hot?type=boardgame`.
+
+    Формат ответа:
+        <items termsofuse="...">
+          <item rank="1" id="224517">
+            <thumbnail value="//cf.geekdo-images.com/..."/>
+            <name value="Brass: Birmingham"/>
+            <yearpublished value="2018"/>
+          </item>
+          ...
+        </items>
+
+    Отличается от /thing: поля — атрибуты дочерних элементов (не самого <item>).
+    """
+    root = ET.fromstring(xml_text)
+    items: list[BggHotnessItem] = []
+    for item in root.findall("item"):
+        try:
+            bgg_id = int(item.attrib["id"])
+            rank = int(item.attrib["rank"])
+        except (KeyError, ValueError):
+            continue
+
+        name_el = item.find("name")
+        name = name_el.attrib.get("value", "") if name_el is not None else ""
+        if not name:
+            continue
+
+        thumb_el = item.find("thumbnail")
+        thumbnail_url: str | None = None
+        if thumb_el is not None:
+            raw = thumb_el.attrib.get("value", "")
+            # BGG возвращает protocol-relative URL: //cf.geekdo-images.com/...
+            thumbnail_url = f"https:{raw}" if raw.startswith("//") else raw or None
+
+        items.append(
+            BggHotnessItem(
+                rank=rank,
+                bgg_id=bgg_id,
+                name=name,
+                year=_int_attr(item.find("yearpublished")),
+                thumbnail_url=thumbnail_url,
+            )
+        )
+    return items
 
 
 def parse_thing_xml(xml_text: str) -> BggGame | None:

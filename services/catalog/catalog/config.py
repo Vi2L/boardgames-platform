@@ -28,6 +28,27 @@ class Settings(BaseSettings):
     # пропускают всех (см. catalog/auth.py).
     require_auth: bool = False
 
+    # ── BGG API ──────────────────────────────────────────────────────────────
+    # Bearer-токен для BGG XML API v2 (обязателен с 2025-го; без него 401).
+    bgg_api_token: str | None = Field(default=None)
+
+    # Еженедельный sync TOP-N игр через enrich_batch (понедельник 03:00 UTC).
+    bgg_top_sync_enabled: bool = Field(default=True)
+    bgg_top_sync_rank_le: int = Field(default=1000)
+    bgg_top_sync_skip_recent_days: int = Field(default=7)
+    # unix-cron: «минута час день_мес месяц день_нед»
+    bgg_top_sync_cron: str = Field(default="0 3 * * 1")
+
+    # Ежедневный sync BGG Hotness (06:00 UTC).
+    bgg_hotness_sync_enabled: bool = Field(default=True)
+    bgg_hotness_sync_cron: str = Field(default="0 6 * * *")
+    # Авто-импорт игр из Hotness, которых ещё нет в каталоге.
+    bgg_hotness_auto_import: bool = Field(default=True)
+
+    # On-demand staleness в /ingest/offers: если game_bgg.fetched_at старше N дней
+    # и оффер auto-matched — запустить enrich_one в фоне. 0 = выключено.
+    bgg_ingest_enrich_staleness_days: int = Field(default=14)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
