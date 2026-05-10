@@ -24,6 +24,9 @@ dependencies = [
     # Требуется FastAPI для UploadFile/Form (file upload endpoints).
     # Не transitive-зависимость fastapi — нужно указывать явно.
     "python-multipart>=0.0.9",
+    # Matching v2: pgvector type adapter для SQLAlchemy.
+    # Даёт Vector(dim) колонку и автоматическую конвертацию list[float] ↔ pgvector.
+    "pgvector>=0.3",
 ]
 
 [project.optional-dependencies]

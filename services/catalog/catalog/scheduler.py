@@ -29,6 +29,7 @@ from typing import Any
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
@@ -73,7 +74,27 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "Мягкий rate-limit (2с). Дефолт: 04:00 UTC."
         ),
     },
+    "ml_health_check": {
+        "display_name": "ML Health Check (every 30s)",
+        "description": (
+            "Polling Ollama /api/tags для проверки доступности bge-m3 и "
+            "qwen2.5:7b-instruct. Синглтон OllamaHealth кэширует статус; "
+            "tier'ы T2/T3 проверяют его без HTTP. Interval-trigger (не cron)."
+        ),
+    },
+    "match_worker": {
+        "display_name": "Match Queue Worker (every 10s)",
+        "description": (
+            "Обработка match_queue: T2 (bge-m3 cosine) + T3 (qwen LLM-арбитр). "
+            "Берёт batch=32 через FOR UPDATE SKIP LOCKED, embed/LLM, "
+            "финализирует offer. Interval-trigger (не cron)."
+        ),
+    },
 }
+
+# Interval-jobs (не cron) — не пишутся в scheduler_configs cron_expr,
+# а используют specialized resolver. Заводим сюда: ml_health_check, match_worker.
+_INTERVAL_JOBS = {"ml_health_check", "match_worker"}
 
 
 # ── Унифицированный trigger ───────────────────────────────────────────────────
@@ -198,6 +219,40 @@ def _resolve_handler(job_id: str, params: dict[str, Any]):
     raise ValueError(f"Unknown scheduler job_id: {job_id}")
 
 
+# ── Interval-job runners (не используют trigger_scheduled_job + ImportJob) ───
+# Эти job'ы — короткие, не нужны polling/log_lines/progress. APScheduler
+# вызывает их напрямую без обёртки в _make_cron_job.
+
+
+async def _ml_health_check_runner() -> None:
+    """Periodic poll Ollama health — обновляет OllamaHealth singleton."""
+    from catalog.matching.v2.worker import ml_health_check_job
+
+    try:
+        await ml_health_check_job()
+    except Exception:
+        logger.exception("ml_health_check_runner failed")
+
+
+async def _match_worker_runner() -> None:
+    """Один тик match_worker — берёт batch из match_queue, processes T2/T3."""
+    from catalog.matching.v2.worker import match_worker_job
+
+    try:
+        await match_worker_job()
+    except Exception:
+        logger.exception("match_worker_runner failed")
+
+
+def _interval_runner(job_id: str):
+    """Возвращает runner для interval-job'а по id."""
+    if job_id == "ml_health_check":
+        return _ml_health_check_runner
+    if job_id == "match_worker":
+        return _match_worker_runner
+    raise ValueError(f"Unknown interval job_id: {job_id}")
+
+
 async def _run_with_status_update(job_id: str, import_job_id: int, fn) -> None:
     """Обёртка вокруг background-runner: после завершения денормализует
     last_run_status в scheduler_configs (читает финальный статус ImportJob).
@@ -317,6 +372,30 @@ async def create_scheduler() -> AsyncIOScheduler:
     for cfg in configs:
         if not cfg.enabled:
             logger.info("scheduler: %s — disabled, пропускаем регистрацию", cfg.job_id)
+            continue
+
+        # Interval-jobs (matching v2): особый путь — не trigger_scheduled_job,
+        # а прямой runner с IntervalTrigger. cron_expr игнорируется (но
+        # хранится для совместимости PATCH /scheduler/jobs/{id}).
+        if cfg.job_id in _INTERVAL_JOBS:
+            interval_sec = int(cfg.params.get("interval_sec", 30))
+            try:
+                runner = _interval_runner(cfg.job_id)
+            except ValueError:
+                logger.error("scheduler: %s — unknown interval runner", cfg.job_id)
+                continue
+            scheduler.add_job(
+                runner,
+                IntervalTrigger(seconds=interval_sec, timezone="UTC"),
+                id=cfg.job_id,
+                replace_existing=True,
+                max_instances=1,
+                coalesce=True,
+            )
+            logger.info(
+                "scheduler: %s зарегистрирован (interval=%ds, params=%s)",
+                cfg.job_id, interval_sec, cfg.params,
+            )
             continue
 
         try:

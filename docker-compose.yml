@@ -14,7 +14,13 @@ name: boardgames-platform
 
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector/pgvector:pg16 = postgres:16 + pre-built pgvector extension.
+    # Заменили postgres:16-alpine на этот образ ради CREATE EXTENSION vector
+    # (matching v2). Volume совместим — PG_VERSION=16 в обоих. Размер +150MB
+    # (Debian-based, не Alpine), но это разовая плата.
+    # При смене образа на существующий volume: pg_dump не нужен,
+    # docker compose up -d --force-recreate postgres достаточно.
+    image: pgvector/pgvector:pg16
     container_name: bg-postgres
     # `command:` пробрасывается в entrypoint postgres-image: для arg'а 'postgres'
     # docker-entrypoint.sh вызывает 'postgres "$@"', и `-c key=value` ставит

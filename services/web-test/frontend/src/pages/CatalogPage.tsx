@@ -40,12 +40,13 @@ import { MatchingStatsHeader } from '../components/catalog/MatchingStatsHeader'
 import { BackupButton } from '../components/catalog/BackupButton'
 import { PromotionPanel } from '../components/catalog/PromotionPanel'
 import { BggImportPanel } from '../components/catalog/BggImportPanel'
+import { MatchLogTab } from '../components/catalog/MatchLogTab'
 import { useCatalogTableStore } from '../store/catalog'
 import { SuggestInput } from '../components/shared/SuggestInput'
 import { useSearchHistory } from '../lib/searchHistory'
 import { Download, Plus, Settings2 } from 'lucide-react'
 
-type Tab = 'catalog' | 'matching' | 'promotion' | 'bgg'
+type Tab = 'catalog' | 'matching' | 'match-log' | 'promotion' | 'bgg'
 
 export function CatalogPage() {
   const [tab, setTab] = useState<Tab>('catalog')
@@ -89,7 +90,7 @@ export function CatalogPage() {
       {showCreate && <GameEditor mode="create" onClose={() => setShowCreate(false)} />}
 
       <div className="flex gap-2 border-b border-gray-800">
-        {(['catalog', 'matching', 'promotion', 'bgg'] as Tab[]).map(t => (
+        {(['catalog', 'matching', 'match-log', 'promotion', 'bgg'] as Tab[]).map(t => (
           <button
             key={t}
             type="button"
@@ -102,6 +103,7 @@ export function CatalogPage() {
           >
             {t === 'catalog' ? 'Каталог'
               : t === 'matching' ? 'Очередь матчинга'
+              : t === 'match-log' ? 'Журнал матчинга'
               : t === 'promotion' ? 'Промоушен Dicefest'
               : 'BGG'}
           </button>
@@ -110,6 +112,7 @@ export function CatalogPage() {
 
       {tab === 'catalog'  ? <CatalogSection />
         : tab === 'matching' ? <MatchingSection />
+        : tab === 'match-log' ? <MatchLogTab />
         : tab === 'promotion' ? <PromotionPanel provider="dicefest" />
         : <BggImportPanel />}
     </div>

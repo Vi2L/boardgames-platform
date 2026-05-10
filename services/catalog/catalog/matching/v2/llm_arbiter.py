@@ -1,0 +1,195 @@
+"""Tier 3: qwen2.5:7b-instruct арбитр между близкими кандидатами от T2.
+
+LLM получает offer title + 2-3 кандидата, возвращает structured JSON:
+  {"game_id": <int|null>, "kind": "base|expansion|accessory", "confidence": 0..1, "reason": "..."}
+
+Защиты:
+  1. format='json' в Ollama API → принудительный JSON output.
+  2. game_id whitelist — LLM не может вернуть несуществующий ID.
+  3. Retry 1 раз при невалидном JSON (regex extraction из markdown).
+  4. confidence < threshold → возврат в T4 (manual).
+"""
+from __future__ import annotations
+
+import json
+import logging
+import re
+
+import httpx
+
+from catalog.config import get_settings
+from catalog.matching.v2.domain import MatchAction, MatchContext, MatchResult
+from catalog.matching.v2.embedder import OllamaError, OllamaUnavailable
+
+logger = logging.getLogger(__name__)
+
+
+_SYSTEM_PROMPT = (
+    "Ты — эксперт по настольным играм. Тебе дают название товара из российского "
+    "интернет-магазина и список канонических игр-кандидатов из базы. Определи, "
+    "какой кандидат соответствует товару, или укажи что совпадения нет.\n"
+    "Также классифицируй тип товара: 'base' (базовая игра), 'expansion' "
+    "(дополнение к базе), 'accessory' (аксессуары: органайзер, чехлы, токены).\n"
+    "Отвечай ТОЛЬКО валидным JSON, без markdown, без пояснений вне JSON."
+)
+
+
+def _format_candidates(candidates: list[dict]) -> str:
+    """Форматирует список кандидатов для промпта. Берём топ-3 по score."""
+    lines: list[str] = []
+    for i, c in enumerate(candidates[:3], 1):
+        ru = f" / {c['title_ru']}" if c.get("title_ru") else ""
+        year = f" ({c['year']})" if c.get("year") else ""
+        kind_str = c.get("kind") or "?"
+        score = c.get("score", 0.0)
+        lines.append(
+            f"{i}. [id={c['game_id']}] {c['title']}{ru}{year} [{kind_str}] — score={score:.2f}"
+        )
+    return "\n".join(lines)
+
+
+def _parse_response(raw: str, valid_ids: set[int]) -> dict | None:
+    """Парсит JSON, валидирует структуру.
+
+    1. Прямой json.loads.
+    2. Если invalid: regex поиск {.*} в raw (LLM иногда добавляет markdown).
+    3. Whitelist game_id — отсекает галлюцинации.
+
+    Возвращает dict с обязательными ключами или None.
+    """
+    for attempt in range(2):
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            if attempt == 0:
+                # Non-greedy `\{.*?\}` поглощает только первый JSON-объект.
+                # Жадный `.*` поглотит "..." между двумя объектами и даст
+                # invalid JSON. См. code review: edge case при деградации модели.
+                m = re.search(r"\{.*?\}", raw, re.DOTALL)
+                if m:
+                    raw = m.group()
+                    continue
+            return None
+
+        # Базовая валидация структуры
+        if not isinstance(data, dict):
+            return None
+        gid = data.get("game_id")
+        if gid is not None:
+            try:
+                gid = int(gid)
+            except (TypeError, ValueError):
+                gid = None
+            # Whitelist: LLM не может вернуть несуществующий id
+            if gid is not None and gid not in valid_ids:
+                logger.warning("LLM hallucinated game_id=%s, not in candidates", gid)
+                gid = None
+        data["game_id"] = gid
+
+        kind = data.get("kind")
+        if kind not in ("base", "expansion", "accessory"):
+            data["kind"] = None
+
+        try:
+            data["confidence"] = float(data.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            data["confidence"] = 0.0
+
+        return data
+
+    return None
+
+
+async def tier_3_llm(
+    ctx: MatchContext,
+    candidates: list[dict],
+    *,
+    confidence_threshold: float = 0.75,
+) -> MatchResult:
+    """T3: LLM-арбитр над top-3 кандидатами.
+
+    Возвращает:
+      - matched MatchResult (tier=3, action=AUTO_T3) если confidence >= threshold.
+      - unmatched (tier=3, reason='llm_low_confidence') если confidence ниже.
+      - unmatched (tier=3, reason='llm_parse_failed') при невалидном JSON.
+
+    OllamaError → пропагируем (worker реtries).
+    """
+    if not candidates:
+        return MatchResult(
+            game_id=None, tier=3, action=None, reason="llm_no_candidates",
+        )
+
+    settings = get_settings()
+    valid_ids = {int(c["game_id"]) for c in candidates}
+
+    user_prompt = (
+        f'Товар из магазина: "{ctx.title_raw}"\n'
+        f"Магазин: {ctx.store_slug or '?'}\n\n"
+        f"Кандидаты (по убыванию релевантности):\n{_format_candidates(candidates)}\n\n"
+        "Ответь JSON:\n"
+        '{"game_id": <int или null если нет совпадения>, '
+        '"kind": "<base|expansion|accessory>", '
+        '"confidence": <0.0..1.0>, '
+        '"reason": "<1-2 предложения>"}'
+    )
+
+    payload = {
+        "model": settings.ml_llm_model,
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt},
+        ],
+        "stream": False,
+        "format": "json",  # принудительный JSON output
+        "options": {"temperature": 0.0},
+    }
+
+    try:
+        async with httpx.AsyncClient(
+            base_url=settings.ollama_base_url, timeout=60.0,
+        ) as client:
+            resp = await client.post("/api/chat", json=payload)
+            if resp.status_code == 429:
+                raise OllamaError("rate limited (429)")
+            if resp.status_code >= 500:
+                raise OllamaUnavailable(f"http_{resp.status_code}")
+            if resp.status_code != 200:
+                raise OllamaError(f"http_{resp.status_code}: {resp.text[:200]}")
+            content = resp.json().get("message", {}).get("content", "")
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        raise OllamaUnavailable(f"connect: {e}") from e
+
+    parsed = _parse_response(content, valid_ids)
+    if parsed is None:
+        logger.warning("LLM returned invalid JSON: %s", content[:500])
+        return MatchResult(
+            game_id=None, tier=3, action=None,
+            reason="llm_parse_failed", candidates=candidates,
+        )
+
+    if parsed["game_id"] is None:
+        return MatchResult(
+            game_id=None, tier=3, action=None,
+            reason=f"llm_no_match: {parsed.get('reason', '')}"[:200],
+            candidates=candidates,
+            predicted_kind=parsed.get("kind"),
+        )
+
+    if parsed["confidence"] < confidence_threshold:
+        return MatchResult(
+            game_id=None, tier=3, action=None,
+            reason=f"llm_low_confidence ({parsed['confidence']:.2f})",
+            candidates=candidates,
+            predicted_kind=parsed.get("kind"),
+        )
+
+    return MatchResult(
+        game_id=parsed["game_id"],
+        score=parsed["confidence"],
+        tier=3,
+        action=MatchAction.AUTO_T3,
+        reason=f"llm: {parsed.get('reason', '')}"[:200],
+        candidates=candidates,
+        predicted_kind=parsed.get("kind"),
+    )

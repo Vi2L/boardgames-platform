@@ -34,6 +34,39 @@ async def lifespan(app: FastAPI):
     # Startup: создаём engine заранее, чтобы первый запрос не платил за инициализацию.
     get_engine()
 
+    # ── Matching v2: recovery + health check ─────────────────────────────────
+    # При старте: вернуть зависшие 'processing' записи match_queue в 'pending'.
+    # Сценарий: сервис упал во время обработки — без recovery записи висят
+    # вечно. Делаем здесь, до старта scheduler'а — иначе worker может взять
+    # уже застрявшие.
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from catalog.matching.v2.health import OllamaHealth
+    from catalog.matching.v2.queue_repo import recover_stuck
+
+    SessionFactory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    try:
+        async with SessionFactory() as session:
+            recovered = await recover_stuck(session)
+            await session.commit()
+            if recovered > 0:
+                import logging
+                logging.getLogger(__name__).info(
+                    "matching v2 startup: recovered %d stuck match_queue items",
+                    recovered,
+                )
+    except Exception:  # noqa: BLE001
+        # Если match_queue ещё не существует (миграция не накатана) — игнорируем.
+        import logging
+        logging.getLogger(__name__).exception(
+            "matching v2 startup: recover_stuck failed (миграция 0011 не применена?)"
+        )
+
+    # Первый health-check Ollama сразу при старте — чтобы scheduler-job не
+    # ждал 30 секунд до первого poll'а.
+    import asyncio as _asyncio
+    _asyncio.create_task(OllamaHealth.get_instance().check())
+
     # BGG sync scheduler. create_scheduler() async — читает scheduler_configs из БД.
     # Сохраняем в app.state.scheduler для роутера /scheduler (PATCH → hot-reload).
     # wait=False при shutdown — не ждём завершения долгих задач (enrich_batch ~25 мин)

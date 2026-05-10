@@ -1,0 +1,175 @@
+"""MatchEngine — оркестратор tier'ов. Точка входа для ingest и worker'а.
+
+API:
+  - match_sync(session, title_raw, ...) — синхронный T0→T1. Используется в
+    `/ingest/offers`. Если матч не нашёлся — возвращает MatchResult(needs_async=True),
+    caller сам решает: пушить в очередь или ставить 'unmatched'.
+  - match_async(session, ctx, ...) — выполняется воркером для одной записи
+    match_queue. Идёт T2→T3, использует pending tier'ы только если ML up.
+
+Engine не пишет в match_log — это делает caller (ingest, worker, router).
+Это даёт fine-grained контроль: caller знает batch_id, performed_by,
+prev_state — engine не должен дублировать эту логику.
+"""
+from __future__ import annotations
+
+import logging
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from catalog.config import get_settings
+from catalog.matching.v2.domain import (
+    MatchAction,
+    MatchContext,
+    MatchResult,
+    normalize_title,
+)
+from catalog.matching.v2.tiers import tier_0_cache, tier_1_trgm
+
+logger = logging.getLogger(__name__)
+
+
+class MatchEngine:
+    """Оркестратор. Не stateless — держит ссылку на OllamaHealth и threshold'ы.
+
+    Не singleton: создаётся per-request (через FastAPI Depends) или per-batch
+    в worker'е. Это потому что engine читает actуal Settings (для hot-reload
+    через UI без рестарта сервиса; пока не реализовано, но архитектура готова).
+    """
+
+    def __init__(self, session: AsyncSession):
+        self.session = session
+        self.settings = get_settings()
+
+    async def match_sync(
+        self,
+        title_raw: str,
+        *,
+        store_slug: str | None = None,
+    ) -> MatchResult:
+        """Sync pipeline: Tier 0 → Tier 1.
+
+        Возвращает:
+          - matched MatchResult если T0 cache hit (даже negative cache)
+          - matched MatchResult если T1 ≥ 0.92 auto threshold
+          - unmatched MatchResult с needs_async=True если ML up и T0+T1 не сошлись
+          - unmatched MatchResult с needs_async=False если ML disabled
+
+        Не пишет в БД — только читает. Caller (ingest router) делает UPDATE
+        offers + INSERT match_log + INSERT match_queue в своей транзакции.
+        """
+        title_norm = normalize_title(title_raw)
+
+        # Tier 0: cache hit
+        t0 = await tier_0_cache(self.session, title_norm)
+        if t0 is not None:
+            # Cache может быть negative (cached_reject) — тоже возвращаем.
+            return t0
+
+        # Tier 1: pg_trgm ≥ 0.92
+        t1 = await tier_1_trgm(
+            self.session, title_raw,
+            auto_threshold=self.settings.match_t1_auto_threshold,
+        )
+        if t1 is not None and t1.matched:
+            return t1
+
+        # Sync tier'ы не дали уверенного матча. Решаем — нужен ли async.
+        # ML может быть выключен через Settings.ml_enabled (kill switch).
+        if not self.settings.ml_enabled:
+            return MatchResult(
+                game_id=None,
+                tier=t1.tier if t1 else None,
+                action=None,
+                reason="ml_disabled",
+                score=t1.score if t1 else None,
+                candidates=t1.candidates if t1 else None,
+                needs_async=False,
+            )
+
+        # ML включён — оффер должен попасть в очередь воркера.
+        # Реальная проверка доступности Ollama (circuit breaker) делается в
+        # worker'е перед обработкой; здесь мы просто помечаем «нужен async».
+        return MatchResult(
+            game_id=None,
+            tier=t1.tier if t1 else None,
+            action=None,
+            reason="needs_ml",
+            score=t1.score if t1 else None,
+            candidates=t1.candidates if t1 else None,
+            needs_async=True,
+        )
+
+    async def match_async(
+        self,
+        ctx: MatchContext,
+    ) -> MatchResult:
+        """Async pipeline: Tier 2 → Tier 3. Вызывается воркером.
+
+        Реализация добавляется в Step 5 (T2) и Step 6 (T3). Stub возвращает
+        unmatched с reason='not_implemented' для обратной совместимости.
+
+        После Step 5+6: вернёт MatchResult с tier=2 или 3 при успехе, либо
+        unmatched с reason='ml_unavailable' / 'no_candidates' / 'llm_low_confidence'.
+        """
+        # NOTE: финальная имплементация в catalog/matching/v2/embeddings.py
+        # и llm_arbiter.py — Step 5 и Step 6.
+        from catalog.matching.v2.embeddings import tier_2_vector
+        from catalog.matching.v2.llm_arbiter import tier_3_llm
+        from catalog.matching.v2.health import OllamaHealth
+
+        health = OllamaHealth.get_instance()
+
+        # T2: bge-m3 cosine
+        if not health.is_available_for(self.settings.ml_embed_model):
+            return MatchResult(
+                game_id=None, tier=None, action=None,
+                reason="ml_unavailable", needs_async=True,
+            )
+
+        t2 = await tier_2_vector(
+            self.session, ctx,
+            top_k=self.settings.match_t2_top_k,
+            auto_threshold=self.settings.match_t2_auto_threshold,
+            min_score=self.settings.match_t3_min_score,
+        )
+        if t2 is None:
+            return MatchResult(
+                game_id=None, tier=2, action=None,
+                reason="vec_no_candidates",
+            )
+        if t2.matched:
+            return t2
+
+        # T3: LLM арбитр над несколькими кандидатами от T2.
+        if not t2.candidates:
+            return t2  # nothing to arbitrate
+        if not health.is_available_for(self.settings.ml_llm_model):
+            # T2 вернул кандидатов, но LLM down — отдаём в manual queue
+            # (T4) с лучшим кандидатом для contextа оператору.
+            return MatchResult(
+                game_id=None,
+                tier=2,
+                action=None,
+                reason="llm_unavailable",
+                score=t2.score,
+                candidates=t2.candidates,
+            )
+
+        t3 = await tier_3_llm(
+            ctx, t2.candidates,
+            confidence_threshold=self.settings.match_t3_confidence_threshold,
+        )
+        return t3
+
+
+# Тонкая удобная обёртка для вызова из ingest router'а.
+async def match_sync(
+    session: AsyncSession,
+    title_raw: str,
+    *,
+    store_slug: str | None = None,
+) -> MatchResult:
+    """Shortcut для ingest: создать engine + match_sync."""
+    engine = MatchEngine(session)
+    return await engine.match_sync(title_raw, store_slug=store_slug)

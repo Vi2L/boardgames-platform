@@ -128,6 +128,10 @@ export type CatalogOffer = {
   is_preorder: boolean | null
   // True если оффер ранее был привязан и отвязан оператором (миграция 0008)
   was_linked: boolean
+  // Matcher v2 диагностика (миграция 0011). Все nullable до первого матча.
+  match_tier: number | null       // 0=cache 1=trgm 2=embedding 3=llm
+  match_reason: string | null     // 'cache_hit', 'trgm_title_ru', 'vec_confident', ...
+  predicted_kind: string | null   // 'base'|'expansion'|'accessory' (от LLM)
 }
 
 export type CatalogQueue = {
@@ -799,3 +803,107 @@ export const createCatalogBackup = () =>
 
 export const listCatalogBackups = () =>
   fetch(`${BASE}/backups`).then(r => json<BackupListResponse>(r))
+
+
+// ── Matcher v2: ML status + match_log + warmup ───────────────────────────
+
+export type MlStatus = {
+  models: Record<string, boolean>          // 'bge-m3' → true
+  last_check_at: string | null
+  last_success_at: string | null
+  failures: Record<string, number>
+  queue: Record<string, number>            // 'pending', 'processing', 'done', ...
+}
+
+export const fetchMlStatus = () =>
+  fetch(`${BASE}/matching/ml-status`).then(r => json<MlStatus>(r))
+
+
+export type MatchLogEntry = {
+  id: number
+  offer_id: number
+  prev_game_id: number | null
+  new_game_id: number | null
+  prev_status: string | null
+  new_status: string
+  action: string                            // 'auto_t0'|'auto_t1'|'auto_t2'|'auto_t3'|'manual'|...
+  tier: number | null                       // 0..3
+  score: number | null
+  reason: string | null
+  batch_id: string | null
+  alias_created_id: number | null
+  performed_by: string | null
+  performed_at: string
+  reverted_at: string | null
+  reverted_by: string | null
+  // Контекст из JOIN (упрощает UI):
+  title_raw: string | null
+  store_slug: string | null
+  new_game_title: string | null
+  prev_game_title: string | null
+}
+
+export type MatchLogPage = {
+  items: MatchLogEntry[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export type MatchLogFilters = {
+  offer_id?: number
+  action?: string
+  tier?: number
+  performed_by?: string
+  only_active?: boolean
+  limit?: number
+  offset?: number
+}
+
+export const fetchMatchLog = (filters: MatchLogFilters = {}) => {
+  const sp = new URLSearchParams()
+  if (filters.offer_id != null) sp.set('offer_id', String(filters.offer_id))
+  if (filters.action) sp.set('action', filters.action)
+  if (filters.tier != null) sp.set('tier', String(filters.tier))
+  if (filters.performed_by) sp.set('performed_by', filters.performed_by)
+  if (filters.only_active) sp.set('only_active', 'true')
+  sp.set('limit', String(filters.limit ?? 50))
+  sp.set('offset', String(filters.offset ?? 0))
+  return fetch(`${BASE}/matching/log?${sp}`).then(r => json<MatchLogPage>(r))
+}
+
+export const revertMatchLog = (logId: number, deleteAlias = false) =>
+  fetch(`${BASE}/matching/log/${logId}/revert`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ delete_alias: deleteAlias }),
+  }).then(r => json<{ log_id: number; restored_status: string; revert_log_id: number }>(r))
+
+export const bulkRevertMatchLog = (logIds: number[], deleteAlias = false) =>
+  fetch(`${BASE}/matching/log/bulk-revert`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ log_ids: logIds, delete_alias: deleteAlias }),
+  }).then(r => json<{ requested: number; reverted: number; skipped: number }>(r))
+
+export const batchRevertMatchLog = (batchId: string, deleteAlias = false) =>
+  fetch(`${BASE}/matching/log/batch-revert`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ batch_id: batchId, delete_alias: deleteAlias }),
+  }).then(r => json<{ requested: number; reverted: number; batch_id: string }>(r))
+
+
+export type WarmupParams = {
+  batch_size?: number
+  limit?: number | null
+  only_games?: boolean
+  only_aliases?: boolean
+}
+
+export const startWarmupEmbeddings = (params: WarmupParams = {}) =>
+  fetch(`${BASE}/matching/warmup-embeddings`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(params),
+  }).then(r => json<{ job_id: number; status: string }>(r))

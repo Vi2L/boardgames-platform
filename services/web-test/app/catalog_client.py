@@ -417,6 +417,87 @@ class CatalogClient:
                 detail = resp.text[:500]
             raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
 
+    # ── Matcher v2 ─────────────────────────────────────────────────────────
+
+    async def ml_status(self) -> dict[str, Any]:
+        """GET /matching/ml-status — статус Ollama + размер очереди T2/T3."""
+        resp = await self._client.get("/matching/ml-status")
+        return _ok_or_raise(resp)
+
+    async def match_log(
+        self,
+        *,
+        offer_id: int | None = None,
+        action: str | None = None,
+        tier: int | None = None,
+        performed_by: str | None = None,
+        only_active: bool = False,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """GET /matching/log — журнал матчинга для UI отчёта."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if offer_id is not None:
+            params["offer_id"] = offer_id
+        if action:
+            params["action"] = action
+        if tier is not None:
+            params["tier"] = tier
+        if performed_by:
+            params["performed_by"] = performed_by
+        if only_active:
+            params["only_active"] = "true"
+        resp = await self._client.get("/matching/log", params=params)
+        return _ok_or_raise(resp)
+
+    async def revert_match_log(
+        self, log_id: int, *, delete_alias: bool = False,
+    ) -> dict[str, Any]:
+        """POST /matching/log/{id}/revert — откат одной записи."""
+        resp = await self._client.post(
+            f"/matching/log/{log_id}/revert", json={"delete_alias": delete_alias},
+        )
+        return _ok_or_raise(resp)
+
+    async def bulk_revert_match_log(
+        self, log_ids: list[int], *, delete_alias: bool = False,
+    ) -> dict[str, Any]:
+        """POST /matching/log/bulk-revert — откат списка id'шников одной транзакцией."""
+        resp = await self._client.post(
+            "/matching/log/bulk-revert",
+            json={"log_ids": log_ids, "delete_alias": delete_alias},
+        )
+        return _ok_or_raise(resp)
+
+    async def batch_revert_match_log(
+        self, batch_id: str, *, delete_alias: bool = False,
+    ) -> dict[str, Any]:
+        """POST /matching/log/batch-revert — откат всех записей одного batch_id."""
+        resp = await self._client.post(
+            "/matching/log/batch-revert",
+            json={"batch_id": batch_id, "delete_alias": delete_alias},
+        )
+        return _ok_or_raise(resp)
+
+    async def warmup_embeddings(
+        self, *, batch_size: int = 32, limit: int | None = None,
+        only_games: bool = False, only_aliases: bool = False,
+    ) -> dict[str, Any]:
+        """POST /matching/warmup-embeddings — запуск warmup в фоне.
+
+        Возвращает {job_id, status='running'}; UI poll'ит через
+        get_import_job(job_id) для прогресса.
+        """
+        payload: dict[str, Any] = {
+            "batch_size": batch_size,
+            "only_games": only_games,
+            "only_aliases": only_aliases,
+        }
+        if limit is not None:
+            payload["limit"] = limit
+        resp = await self._client.post("/matching/warmup-embeddings", json=payload)
+        return _ok_or_raise(resp)
+
     # ── Sources: detection runs ────────────────────────────────────────────
 
     async def start_source_run(

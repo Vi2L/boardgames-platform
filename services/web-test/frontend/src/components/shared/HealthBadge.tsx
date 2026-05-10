@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, XCircle, Loader2 } from 'lucide-react'
 import clsx from 'clsx'
 import { fetchHealthAll } from '../../lib/api'
+import { MlStatusBadge } from './MlStatusBadge'
 
 interface Props {
   /** В коллапсе (узкий sidebar) рисуем только точку без текста. */
@@ -131,6 +132,11 @@ function HealthPopover({
             )}
           </div>
         </ServiceBlock>
+
+        {/* Matcher v2: статус локальной Ollama (bge-m3 + qwen2.5) */}
+        <div className="pt-1 border-t border-gray-800">
+          <MlStatusBadge />
+        </div>
 
         <div className="text-[10px] text-gray-600 font-mono pt-1 border-t border-gray-800">
           checked: {new Date(data.checked_at).toLocaleString('ru-RU', { hour12: false })}

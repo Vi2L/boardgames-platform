@@ -15,15 +15,58 @@ PRS (parsers), INFRA (общее).
 
 ## Сейчас в работе
 
-_(пусто)_
+- [CAT-4] **Matching v2: ML-powered tiered pipeline**
+  (закрывает [CAT-1] частично — авто-эвристики теперь делает T3 LLM-арбитр)
+
+  **Сделано (код, 2026-05-10..11):**
+  - Миграция 0011: pgvector + `game_embeddings` (HNSW vector(1024)),
+    `match_decisions` (T0 cache c TTL per source), `match_log`
+    (audit + bulk-revert через batch_id UUID), `match_queue` (outbox).
+  - Tiered pipeline `services/catalog/catalog/matching/v2/`:
+    - T0 — cache hit по `match_decisions` (sync)
+    - T1 — pg_trgm ≥ 0.92 на title/title_ru/aliases (sync)
+    - T2 — bge-m3 cosine через pgvector top-K (async, worker)
+    - T3 — qwen2.5:7b-instruct LLM-арбитр с JSON-режимом (async)
+    - T4 — manual queue (UI)
+  - `OllamaHealth` polling 30 сек + Circuit Breaker per-model;
+    `ml_enabled` kill-switch без рестарта.
+  - APScheduler-jobs: `ml_health_check` (30s), `match_worker` (10s).
+  - Замена `find_best_match` → `match_sync` в `routers/ingest.py`,
+    запись в `match_log` на каждое изменение `offers.game_id`.
+  - Web-test UI: `MlStatusBadge` в HealthBadge, новая вкладка
+    «Журнал матчинга» с bulk-revert чекбоксами, `TierBadge`.
+  - CLI/admin: `warmup_embeddings.py` (фоном через ImportJob),
+    `backfill_title_ru.py`.
+  - `Game.title_ru` — first-class колонка денормализованного ru-имени.
+
+  **Что осталось — deploy и доводка:**
+  - [ ] `docker pull pgvector/pgvector:pg16` (Docker Hub был недоступен)
+  - [ ] `docker compose up -d --force-recreate postgres` (volume сохраняется)
+  - [ ] `cd services/catalog && uv run --package boardgames-catalog alembic upgrade head`
+  - [ ] `ollama pull bge-m3 && ollama pull qwen2.5:7b-instruct` (если не стоят)
+  - [ ] `uv run --package boardgames-catalog python -m catalog.scripts.backfill_title_ru`
+  - [ ] Warmup embeddings (~1.5–4 ч под `nohup` или через UI
+    `POST /matching/warmup-embeddings`)
+  - [ ] Smoke-test sync-pipeline: ingest «Каркассон» → проверить
+    T0 cache hit на повторе, T1 на лёгкой опечатке.
+  - [ ] Smoke-test async-pipeline (после warmup): unmatched оффер →
+    воркер забирает → T2 match или T3 арбитр → запись в match_log.
+  - [ ] Pytest-покрытие: `tests/test_matching_v2/`
+    (`test_normalize_title`, `test_tier_0_cache_hit_miss_ttl`,
+    `test_tier_1_above_below_threshold`, `test_circuit_breaker`,
+    `test_llm_parse_response_robust`).
+
+  **Технический долг (после боя):**
+  - Per-store `MatchProfile` override (схема в БД готова, реализация —
+    `MatchProfileLoader` в `engine.py`).
+  - Structured embedding text вместо простой конкатенации
+    (после анализа miss-rate реальных запросов).
+  - Отдельный `kind_classifier` для pre-T2 фильтрации
+    (сейчас kind определяется внутри T3 prompt'а).
 
 ## Ближайшее (1–2 недели)
 
-- [CAT-1] **Авто-matching эвристики** — расширить `find_best_match`
-  и `find_match_candidates`: бонус +0.1 при match по alias, штраф
-  при несовпадении publisher/year, обработка expansions
-  («Каркассон: Король и разбойник» не должна матчиться на базовый
-  «Каркассон»).
+_(пусто)_
 
 ## Бэклог (без даты)
 

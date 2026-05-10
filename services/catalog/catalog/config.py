@@ -49,6 +49,44 @@ class Settings(BaseSettings):
     # и оффер auto-matched — запустить enrich_one в фоне. 0 = выключено.
     bgg_ingest_enrich_staleness_days: int = Field(default=14)
 
+    # ── Matching v2 (миграция 0011) ──────────────────────────────────────────
+    # Локальный Ollama-сервис для embedding (bge-m3) и LLM-арбитра (qwen2.5).
+    # macOS host видим из Docker по host.docker.internal:11434.
+    ollama_base_url: str = Field(default="http://host.docker.internal:11434")
+    ml_embed_model: str = Field(default="bge-m3")
+    ml_llm_model: str = Field(default="qwen2.5:7b-instruct")
+
+    # 0 = ML отключён (как kill-switch без рестарта). При false ingest всегда
+    # пишет 'unmatched' с reason='ml_disabled' минуя очередь.
+    ml_enabled: bool = Field(default=True)
+
+    # Health-poll интервал (сек). OllamaHealth singleton кэширует статус,
+    # реальный HTTP-вызов раз в N сек. APScheduler job выполняет poll.
+    ml_health_poll_interval_sec: int = Field(default=30)
+
+    # Async-воркер для T2/T3.
+    match_worker_interval_sec: int = Field(default=10)
+    match_worker_batch_size: int = Field(default=32)
+    # MAX_ATTEMPTS для retry перед перевод в 'failed'. Backoff: 30→120→600 сек.
+    match_worker_max_attempts: int = Field(default=3)
+
+    # Пороги (могут быть переопределены через MatchProfile.params в БД).
+    # T1: pg_trgm. 0.92 = почти-точное совпадение (опечатка в одну букву).
+    match_t1_auto_threshold: float = Field(default=0.92)
+    # T2: bge-m3 cosine. 0.85 = высокая семантическая близость.
+    match_t2_auto_threshold: float = Field(default=0.85)
+    # Сколько кандидатов поднимать через vector search для T2/T3.
+    match_t2_top_k: int = Field(default=5)
+    # T3 кандидаты: ниже этого score даже не отдаём LLM-арбитру.
+    match_t3_min_score: float = Field(default=0.70)
+    # Минимальный confidence от LLM для auto-match. Иначе → manual queue.
+    match_t3_confidence_threshold: float = Field(default=0.75)
+
+    # TTL для match_decisions кэша per source. После TTL — Tier 0 пропускает запись.
+    match_decisions_ttl_t1_days: int = Field(default=30)
+    match_decisions_ttl_t2_days: int = Field(default=14)
+    match_decisions_ttl_t3_days: int = Field(default=7)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

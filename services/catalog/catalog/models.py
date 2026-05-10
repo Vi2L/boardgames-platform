@@ -27,13 +27,19 @@ from sqlalchemy import (
     Float,
     ForeignKey,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
     func,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+# pgvector type adapter для SQLAlchemy. Vector(N) даёт колонку pgvector(N) и
+# автоматически конвертирует list[float] ↔ array. Без него embedding пришлось бы
+# передавать как строку '[0.1,0.2,...]'::vector.
+from pgvector.sqlalchemy import Vector
 
 from catalog.db import Base
 
@@ -58,6 +64,11 @@ class Game(Base):
         Text,
         Computed("lower(immutable_unaccent(title))", persisted=True),
     )
+    # First-class ru-название (миграция 0011). Денормализуется из лучшего
+    # ru-alias скриптом backfill_title_ru.py (приоритет: verified > manual >
+    # dicefest > wikidata) и при промоушене dicefest. Используется matcher v2
+    # как часть text_used для embedding и для прямого pg_trgm-матча.
+    title_ru: Mapped[str | None] = mapped_column(Text)
 
     year: Mapped[int | None] = mapped_column(Integer)
     designers: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
@@ -237,6 +248,15 @@ class Offer(Base):
     was_linked: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false", nullable=False
     )
+
+    # Matcher v2 диагностика (миграция 0011).
+    # match_tier: 0=cache hit, 1=trgm, 2=embedding, 3=llm; NULL до первого матча.
+    # match_reason: текстовое объяснение для UI ('cache_hit', 'vec_confident', ...).
+    # predicted_kind: классификация LLM-арбитром {'base'|'expansion'|'accessory'};
+    # NULL = не классифицировался (T0/T1 матч или ML недоступен).
+    match_tier: Mapped[int | None] = mapped_column(SmallInteger)
+    match_reason: Mapped[str | None] = mapped_column(Text)
+    predicted_kind: Mapped[str | None] = mapped_column(String(16))
 
     game: Mapped[Game | None] = relationship(back_populates="offers")
     prices: Mapped[list["OfferPrice"]] = relationship(
@@ -756,4 +776,178 @@ class BggHotness(Base):
 
     __table_args__ = (
         UniqueConstraint("snapshot_date", "bgg_id", name="uq_bgg_hotness_date_bgg"),
+    )
+
+
+# ─── Matching v2 (миграция 0011) ──────────────────────────────────────────────
+
+
+class MatchDecision(Base):
+    """Tier-0 кэш: нормализованный title → game_id (миграция 0011).
+
+    Tier 0 в matcher v2 — это дешёвый lookup по title_norm перед запуском trgm/
+    embedding/LLM. Запись создаётся при любом успешном auto/manual матче и
+    инвалидируется при unlink/reject/revert.
+
+    TTL per source — для «свежести» AI-решений: manual=∞, auto_t1=30 дней,
+    auto_t2=14, auto_t3=7. Tier 0 проверяет (decided_at + ttl_days > now()) и
+    игнорирует протухшие записи (они «доспеют» в следующем reassess).
+
+    game_id NULL = «это не игра» (negative cache, заполняется reject-операцией).
+    """
+
+    __tablename__ = "match_decisions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    title_norm: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="CASCADE"),
+    )
+    source: Mapped[str] = mapped_column(String(16), nullable=False)
+    score: Mapped[float | None] = mapped_column(Float)
+    tier: Mapped[int | None] = mapped_column(SmallInteger)
+    ttl_days: Mapped[int | None] = mapped_column(Integer)
+    decided_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+
+
+class MatchLog(Base):
+    """Аудит изменений offers.game_id/match_status (миграция 0011).
+
+    Запись создаётся через service-слой (engine/router) при любом изменении
+    привязки оффера — auto, manual, reject, unlink, reassess, revert. Это даёт:
+      - performed_by (system|worker|llm|api-key owner)
+      - точный action (важно для UI badge)
+      - prev/new pair для безопасного отката
+
+    Bulk-revert через batch_id (UUID): один reassess-all создаёт N записей с
+    общим batch_id; потом одной транзакцией можно откатить весь batch.
+
+    alias_created_id — связанный alias, добавленный при auto/manual матче.
+    При revert(delete_alias=True) — удаляется этот алиас.
+    """
+
+    __tablename__ = "match_log"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    offer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("offers.id", ondelete="CASCADE"), nullable=False,
+    )
+    prev_game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="SET NULL"),
+    )
+    new_game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="SET NULL"),
+    )
+    prev_status: Mapped[str | None] = mapped_column(String(16))
+    new_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    action: Mapped[str] = mapped_column(String(16), nullable=False)
+    tier: Mapped[int | None] = mapped_column(SmallInteger)
+    score: Mapped[float | None] = mapped_column(Float)
+    reason: Mapped[str | None] = mapped_column(Text)
+    batch_id: Mapped[Any | None] = mapped_column(UUID(as_uuid=True))
+    alias_created_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("game_aliases.id", ondelete="SET NULL"),
+    )
+    performed_by: Mapped[str | None] = mapped_column(Text)
+    performed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+    reverted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    reverted_by: Mapped[str | None] = mapped_column(Text)
+
+
+class MatchQueue(Base):
+    """Outbox для async tier'ов T2/T3 (миграция 0011).
+
+    Когда `/ingest/offers` синхронно (T0+T1) не дал уверенного матча — пушим
+    оффер сюда со status='pending'. APScheduler-воркер (`match_worker_job`)
+    каждые N секунд берёт batch через `SELECT FOR UPDATE SKIP LOCKED`,
+    обрабатывает T2 (vector) → T3 (LLM) → финализирует offer.
+
+    Почему отдельная таблица а не флаг в offers:
+      - retry с exponential backoff через next_attempt_at (нужно отдельное поле)
+      - priority (manual reassess приоритетнее auto)
+      - observability через простой SELECT COUNT(*) WHERE status='pending'
+      - не загромождаем offers оперативным состоянием
+    UNIQUE(offer_id) — одна запись на оффер. ON CONFLICT DO NOTHING на повторе.
+    """
+
+    __tablename__ = "match_queue"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    offer_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("offers.id", ondelete="CASCADE"), nullable=False,
+    )
+    store_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    title_raw: Mapped[str] = mapped_column(Text, nullable=False)
+    title_norm: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(
+        String(16), nullable=False, default="pending", server_default="pending",
+    )
+    priority: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    attempts: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0",
+    )
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    result_game_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="SET NULL"),
+    )
+    result_score: Mapped[float | None] = mapped_column(Float)
+    result_tier: Mapped[int | None] = mapped_column(SmallInteger)
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+    processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    __table_args__ = (
+        UniqueConstraint("offer_id", name="uq_match_queue_offer"),
+    )
+
+
+class GameEmbedding(Base):
+    """Vector(1024) от bge-m3 (миграция 0011).
+
+    Каждая строка = один embedded text:
+      - alias_id IS NULL → вектор от game.title (либо составленного из title +
+        title_ru, см. embedder.build_text())
+      - alias_id IS NOT NULL → вектор от alias_text
+
+    UNIQUE (game_id, alias_id) — одна game может иметь N embeddings (по одному
+    на title + каждый alias). При vector_search возвращаем лучший hit per game
+    через GROUP BY game_id + MAX(score).
+
+    text_used — точная строка, поданная в модель. Хранится для отладки и
+    реиндексации после смены модели (model='bge-m3' → 'bge-m3-v2'): можно
+    SELECT text_used WHERE model='bge-m3' и пере-embed одним проходом.
+
+    HNSW-индекс по embedding vector_cosine_ops (m=16, ef_construction=128) —
+    создаётся в миграции через raw SQL (alembic не имеет hnsw поддержки).
+    """
+
+    __tablename__ = "game_embeddings"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    game_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("games.id", ondelete="CASCADE"), nullable=False,
+        index=True,
+    )
+    alias_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("game_aliases.id", ondelete="CASCADE"),
+    )
+    text_used: Mapped[str] = mapped_column(Text, nullable=False)
+    embedding: Mapped[list[float]] = mapped_column(Vector(1024), nullable=False)
+    model: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="bge-m3", server_default="bge-m3",
+    )
+    embedded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+
+    __table_args__ = (
+        UniqueConstraint("game_id", "alias_id", name="uq_game_embeddings_pair"),
     )

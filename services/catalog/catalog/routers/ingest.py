@@ -28,11 +28,10 @@ from bg_shared.ingest import IngestRequest
 
 from catalog.auth import require_scope
 from catalog.db import get_engine, get_session
-from catalog.matching.matcher import (
-    AUTO_MATCH_THRESHOLD,
-    classify,
-    find_best_match,
-)
+from catalog.matching.v2 import MatchAction, MatchContext, match_sync, normalize_title
+from catalog.matching.v2.auditor import log_change
+from catalog.matching.v2.decisions import save_decision
+from catalog.matching.v2.queue_repo import enqueue
 from catalog.models import GameAlias, GameBgg, Offer, OfferPrice
 from catalog.schemas import (
     IngestResult,
@@ -151,39 +150,76 @@ async def ingest_offers(
         row = (await session.execute(upsert)).one()
         offer_id, current_game_id, current_status = row
 
+        # Дефолты, чтобы все ветки имели определённые имена при финальном UPDATE.
+        new_game_id = current_game_id
+        new_status = current_status
+        new_score: float | None = None
+        new_tier: int | None = None
+        result_reason: str | None = None
+
         # Не трогаем оператора: manual / rejected — финальные решения.
         if current_status in ("manual", "rejected"):
-            new_game_id = current_game_id
-            new_status = current_status
-            new_score: float | None = None
+            pass  # дефолты выше — оставляем всё как было
         else:
-            cand = await find_best_match(session, product.title)
-            new_score = cand.score if cand else None
-            new_status = classify(new_score)
-            new_game_id = cand.game_id if (cand and new_score and new_score >= AUTO_MATCH_THRESHOLD) else None
+            # ── Matcher v2: Tier 0 (cache) → Tier 1 (pg_trgm 0.92) ───────────
+            # Если результат matched — запись в БД сразу.
+            # Если needs_async — пушим в match_queue, оффер в pending_ml.
+            # Если ml_disabled и !matched — обычный unmatched (как было).
+            result = await match_sync(session, product.title, store_slug=payload.store_slug)
+            new_score = result.score
+            new_tier = result.tier
+            result_reason = result.reason
 
-            await session.execute(
-                Offer.__table__.update()
-                .where(Offer.__table__.c.id == offer_id)
-                .values(
-                    game_id=new_game_id,
-                    match_status=new_status,
-                    match_score=new_score,
-                )
-            )
+            if result.matched:
+                # Auto-match (T0 cache hit или T1 pg_trgm ≥ 0.92).
+                new_game_id = result.game_id
+                new_status = "auto"
+                alias_id_created: int | None = None
 
-            # Auto-match → запоминаем title_raw как alias, чтобы следующий
-            # парсер с тем же написанием сматчился по alias_norm (быстрее
-            # и стабильнее, чем по trigram'у).
-            if new_status == "auto" and new_game_id is not None:
-                await session.execute(
-                    pg_insert(GameAlias.__table__)
-                    .values(
-                        game_id=new_game_id,
-                        alias=product.title,
-                        source="auto-match",
+                # Запоминаем title_raw как alias, чтобы следующий ingest сматчился
+                # по точному alias_norm (быстрее и стабильнее, чем по triграмме).
+                # Только для T1 — T0 уже на это title_norm имеет запись в decisions.
+                if result.tier == 1:
+                    alias_stmt = (
+                        pg_insert(GameAlias.__table__)
+                        .values(
+                            game_id=new_game_id,
+                            alias=product.title,
+                            source="auto-match",
+                        )
+                        .on_conflict_do_nothing(constraint="uq_alias_per_game")
+                        .returning(GameAlias.__table__.c.id)
                     )
-                    .on_conflict_do_nothing(constraint="uq_alias_per_game")
+                    alias_row = (await session.execute(alias_stmt)).first()
+                    if alias_row is not None:
+                        alias_id_created = int(alias_row[0])
+
+                # Сохраняем решение в Tier 0 cache: следующий ingest того же
+                # title_raw попадёт в T0 без T1.
+                source_cache = "auto_t1" if result.tier == 1 else "auto_t0"
+                await save_decision(
+                    session,
+                    title_norm=normalize_title(product.title),
+                    game_id=new_game_id,
+                    source=source_cache,
+                    tier=result.tier,
+                    score=new_score,
+                )
+
+                # Аудит-запись.
+                await log_change(
+                    session,
+                    offer_id=offer_id,
+                    action=result.action or MatchAction.AUTO_T1,
+                    prev_game_id=current_game_id,
+                    new_game_id=new_game_id,
+                    prev_status=current_status,
+                    new_status="auto",
+                    tier=result.tier,
+                    score=new_score,
+                    reason=result.reason,
+                    alias_created_id=alias_id_created,
+                    performed_by="system",
                 )
 
                 # Staleness check: если BGG-данные для этой игры старше N дней —
@@ -201,6 +237,38 @@ async def ingest_offers(
                             _enrich_one_background(bgg_row.bgg_id),
                             name=f"ingest-stale-enrich-{bgg_row.bgg_id}",
                         )
+
+            elif result.needs_async:
+                # ML включён, sync не дал — пушим в очередь T2/T3.
+                # Контракт `IngestResult` снаружи: match_status='unmatched' —
+                # parsers'у не важно, обработается ли оффер ML или manual.
+                new_game_id = None
+                new_status = "unmatched"
+                await enqueue(
+                    session,
+                    offer_id=offer_id,
+                    store_slug=payload.store_slug,
+                    title_raw=product.title,
+                    title_norm=normalize_title(product.title),
+                )
+            else:
+                # T0 negative cache (cached_reject) или ml_disabled.
+                # Сохраняем reason для UI (operator увидит почему unmatched).
+                new_game_id = result.game_id  # может быть None
+                new_status = "rejected" if result.action == MatchAction.REJECT else "unmatched"
+
+            # Один UPDATE для всех веток (DRY)
+            await session.execute(
+                Offer.__table__.update()
+                .where(Offer.__table__.c.id == offer_id)
+                .values(
+                    game_id=new_game_id,
+                    match_status=new_status,
+                    match_score=new_score,
+                    match_tier=new_tier,
+                    match_reason=result_reason,
+                )
+            )
 
         # История цен — отдельная точка на каждый ingest. ON CONFLICT по
         # композитному PK (offer_id, fetched_at) — если за тот же миг уже

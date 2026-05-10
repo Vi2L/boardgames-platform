@@ -475,3 +475,97 @@ async def delete_alias(
         await client.delete_alias(game_id, alias_id)
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ── Matcher v2 proxy ──────────────────────────────────────────────────────
+
+
+@router.get("/matching/ml-status")
+async def get_ml_status(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Состояние Ollama моделей + queue counts. Для UI MlStatusBadge."""
+    try:
+        return await client.ml_status()
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/log")
+async def get_match_log(
+    offer_id: int | None = Query(None),
+    action: str | None = Query(None),
+    tier: int | None = Query(None, ge=0, le=3),
+    performed_by: str | None = Query(None),
+    only_active: bool = Query(False),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.match_log(
+            offer_id=offer_id, action=action, tier=tier,
+            performed_by=performed_by, only_active=only_active,
+            limit=limit, offset=offset,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/log/{log_id}/revert")
+async def revert_match_log_one(
+    log_id: int,
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.revert_match_log(
+            log_id, delete_alias=body.get("delete_alias", False),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/log/bulk-revert")
+async def bulk_revert_match_log(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.bulk_revert_match_log(
+            log_ids=body.get("log_ids", []),
+            delete_alias=body.get("delete_alias", False),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/log/batch-revert")
+async def batch_revert_match_log(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.batch_revert_match_log(
+            batch_id=body["batch_id"],
+            delete_alias=body.get("delete_alias", False),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/warmup-embeddings")
+async def warmup_embeddings(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Запуск warmup в фоне. Возвращает {job_id, status}; UI polls /import/jobs/{id}."""
+    try:
+        return await client.warmup_embeddings(
+            batch_size=body.get("batch_size", 32),
+            limit=body.get("limit"),
+            only_games=body.get("only_games", False),
+            only_aliases=body.get("only_aliases", False),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
