@@ -41,6 +41,7 @@ from catalog.importers.tesera import (
     parse_tesera_json,
 )
 from catalog.importers.bgg_hotness import run_hotness_import_job
+from catalog.importers.bgg_geeklist import run_geeklist_import_job
 from catalog.importers.dicefest import (
     _run_dicefest_import_job,
     _run_dicefest_reparse_job,
@@ -52,7 +53,9 @@ from catalog.schemas import (
     BggBatchImportRequest,
     BggImportRequest,
     DicefestImportRequest,
+    GeeklistImportRequest,
     ImportJobOut,
+    MiniBatchImportRequest,
     TeseraImportRequest,
 )
 
@@ -602,6 +605,97 @@ async def import_bgg_hotness(
     return ImportJobOut.model_validate(job)
 
 
+@router.post(
+    "/bgg/geeklist",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_bgg_geeklist(
+    payload: GeeklistImportRequest,
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    trigger: str = Query("manual", description="manual | scheduled | api"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    """Ручной запуск GeekList snapshot.
+
+    Fetch /xmlapi2/geeklist/{id} → upsert в bgg_geeklists → auto-import bgg_id'ов
+    отсутствующих в каталоге. Идемпотентен в рамках дня (UNIQUE по
+    (geeklist_id, snapshot_date)).
+
+    `trigger` пишется в payload — для фильтрации в `GET /import/jobs?trigger=`.
+    """
+    job_payload = {
+        "geeklist_id": payload.geeklist_id,
+        "auto_import": payload.auto_import,
+        "trigger": trigger,
+    }
+    job = ImportJob(type="bgg-geeklist", payload=job_payload, status="pending")
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await run_geeklist_import_job(job.id, payload.geeklist_id)
+        await session.refresh(job)
+    else:
+        asyncio.create_task(run_geeklist_import_job(job.id, payload.geeklist_id))
+
+    return ImportJobOut.model_validate(job)
+
+
+@router.post(
+    "/bgg/mini-batch",
+    response_model=ImportJobOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def import_bgg_mini_batch(
+    payload: MiniBatchImportRequest,
+    wait: bool = Query(False, description="дождаться завершения (для тестов)"),
+    trigger: str = Query("manual", description="manual | scheduled | api"),
+    session: AsyncSession = Depends(get_session),
+) -> ImportJobOut:
+    """Ежедневный «catch-up» enrichment для хвоста rank-таблицы.
+
+    Тонкая обёртка над batch enrich: rank_le=None (все ranked), увеличенный
+    skip_recent_days (не пересекаемся с weekly top-sync), мягкий rate_limit_sec.
+    На полной выборке ~30K ranked-игр и `batch_size=500` цикл обновления = ~60 дней.
+
+    `type='bgg-mini-batch'` — отличается от 'bgg-batch' для фильтрации в истории.
+    Внутри использует тот же `_run_bgg_batch_job`.
+    """
+    # Транслируем MiniBatchImportRequest → BggBatchImportRequest.
+    # `all_ranked=True` обязательно когда rank_le=None (валидация в роутере /bgg/batch
+    # этого требовала); здесь делаем явно для совместимости с _run_bgg_batch_job.
+    batch_req = BggBatchImportRequest(
+        all_ranked=True,
+        batch_size=20,  # max 20 — лимит BGG /thing
+        skip_recent_days=payload.skip_recent_days,
+        limit=payload.batch_size,  # ← главный параметр: сколько игр за прогон
+        dry_run=payload.dry_run,
+        rate_limit_sec=payload.rate_limit_sec,
+    )
+
+    job_payload = {
+        "trigger": trigger,
+        "batch_size": payload.batch_size,
+        "skip_recent_days": payload.skip_recent_days,
+        "rate_limit_sec": payload.rate_limit_sec,
+        "dry_run": payload.dry_run,
+    }
+    job = ImportJob(type="bgg-mini-batch", payload=job_payload, status="pending")
+    session.add(job)
+    await session.commit()
+    await session.refresh(job)
+
+    if wait:
+        await _run_bgg_batch_job(job.id, batch_req)
+        await session.refresh(job)
+    else:
+        asyncio.create_task(_run_bgg_batch_job(job.id, batch_req))
+
+    return ImportJobOut.model_validate(job)
+
+
 async def _run_bgg_ranks_job(
     job_id: int,
     csv_bytes: bytes,
@@ -782,6 +876,42 @@ async def import_bgg_ranks(
     asyncio.create_task(_run_bgg_ranks_job(job.id, csv_bytes, top_n, dry_run))
 
     return ImportJobOut.model_validate(job)
+
+
+@router.get(
+    "/jobs",
+    response_model=list[ImportJobOut],
+    dependencies=[Depends(require_scope("read"))],
+)
+async def list_jobs(
+    type: str | None = Query(default=None, description="фильтр по type (e.g. bgg-batch)"),
+    status: str | None = Query(default=None, description="pending | running | done | failed"),
+    trigger: str | None = Query(
+        default=None,
+        description="manual | scheduled | api — читается из payload->>'trigger'",
+    ),
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> list[ImportJobOut]:
+    """Листинг ImportJob'ов с фильтрами для UI BGG Sync (история запусков).
+
+    `trigger` хранится в payload JSONB — фильтр через `payload->>'trigger' = ?`.
+    Старые job'ы без этого поля попадают в результат только при `trigger=None`.
+    Сортировка по created_at DESC (свежие сверху).
+    """
+    stmt = select(ImportJob)
+    if type is not None:
+        stmt = stmt.where(ImportJob.type == type)
+    if status is not None:
+        stmt = stmt.where(ImportJob.status == status)
+    if trigger is not None:
+        # JSONB ->> возвращает text; сравниваем по строке.
+        stmt = stmt.where(ImportJob.payload["trigger"].astext == trigger)
+    stmt = stmt.order_by(ImportJob.created_at.desc()).limit(limit).offset(offset)
+
+    rows = (await session.execute(stmt)).scalars().all()
+    return [ImportJobOut.model_validate(r) for r in rows]
 
 
 @router.get(

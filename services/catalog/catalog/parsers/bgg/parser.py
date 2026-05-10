@@ -14,7 +14,13 @@ from __future__ import annotations
 
 from xml.etree import ElementTree as ET
 
-from catalog.parsers.bgg.models import BggGame, BggHotnessItem, BggSearchHit
+from catalog.parsers.bgg.models import (
+    BggGame,
+    BggGeeklistItem,
+    BggGeeklistMeta,
+    BggHotnessItem,
+    BggSearchHit,
+)
 
 
 def _int_attr(elem: ET.Element | None, attr: str = "value") -> int | None:
@@ -40,6 +46,76 @@ def _float_attr(elem: ET.Element | None, attr: str = "value") -> float | None:
         return float(val)
     except ValueError:
         return None
+
+
+def parse_geeklist_xml(xml_text: str) -> tuple[BggGeeklistMeta, list[BggGeeklistItem]]:
+    """Парсит ответ BGG XML API `/xmlapi2/geeklist/{id}`.
+
+    Формат ответа:
+        <geeklist id="367126" termsofuse="...">
+          <postdate>...</postdate>
+          <numitems>50</numitems>
+          <username>BGG_Admin</username>
+          <title>BGG Top 50 Most Played - October 2025</title>
+          <description>...</description>
+          <item id="..." objecttype="thing" subtype="boardgame"
+                objectid="123" objectname="Catan" username="..." ...>
+            <body>Куратор-комментарий</body>
+          </item>
+          ...
+        </geeklist>
+
+    Возвращает (meta, items). rank в items — позиция в списке (1-based) по
+    порядку appearance: для curated-топов это и есть искомый ранг.
+
+    Не-`thing`/не-`boardgame` items пропускаются (BGG GeekList может содержать
+    rpg/videogame/person — нам нужны только настольные игры).
+    """
+    root = ET.fromstring(xml_text)
+    if root.tag != "geeklist":
+        raise ValueError(f"ожидался <geeklist>, получен <{root.tag}>")
+
+    geeklist_id = int(root.attrib.get("id", "0"))
+
+    def _text(tag: str) -> str | None:
+        el = root.find(tag)
+        return el.text.strip() if el is not None and el.text else None
+
+    item_count_str = _text("numitems")
+    try:
+        item_count = int(item_count_str) if item_count_str else 0
+    except ValueError:
+        item_count = 0
+
+    meta = BggGeeklistMeta(
+        geeklist_id=geeklist_id,
+        title=_text("title"),
+        description=_text("description"),
+        username=_text("username"),
+        item_count=item_count,
+    )
+
+    items: list[BggGeeklistItem] = []
+    rank = 0
+    for item in root.findall("item"):
+        # Фильтруем не-boardgame позиции. BGG GeekList может смешивать типы.
+        if item.attrib.get("objecttype") != "thing":
+            continue
+        if item.attrib.get("subtype") not in (None, "boardgame", "boardgameexpansion"):
+            continue
+        try:
+            bgg_id = int(item.attrib["objectid"])
+        except (KeyError, ValueError):
+            continue
+        name = item.attrib.get("objectname") or ""
+        if not name:
+            continue
+        body_el = item.find("body")
+        body = body_el.text.strip() if body_el is not None and body_el.text else None
+        rank += 1
+        items.append(BggGeeklistItem(rank=rank, bgg_id=bgg_id, name=name, body=body))
+
+    return meta, items
 
 
 def parse_hot_xml(xml_text: str) -> list[BggHotnessItem]:

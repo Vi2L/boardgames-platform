@@ -268,6 +268,71 @@ class BggBatchImportRequest(BaseModel):
     rate_limit_sec: float = Field(default=1.0, ge=0.0, le=10.0)
 
 
+class GeeklistImportRequest(BaseModel):
+    """POST /import/bgg/geeklist — snapshot кураторского BGG GeekList'а.
+
+    GeekList — кураторский список thing-id с заголовком и комментариями. Используется
+    для monthly «BGG Top 50 Most Played» (id типа 367126) и любых других топов.
+    """
+
+    geeklist_id: int = Field(..., ge=1, description="ID GeekList на BGG")
+    auto_import: bool = Field(
+        default=True,
+        description="при True — автоматически enrich_one для bgg_id отсутствующих в каталоге",
+    )
+
+
+class MiniBatchImportRequest(BaseModel):
+    """POST /import/bgg/mini-batch — ежедневный «catch-up» обогащения хвоста.
+
+    Тонкая обёртка над batch enrich с дефолтами под daily-режим: маленький `limit`,
+    увеличенный `skip_recent_days` (мы не трогаем то, что недавно обновлял weekly
+    top-sync), мягкий `rate_limit_sec` чтобы не хватать BGG.
+
+    На полной выборке ~30K ranked-игр и `limit=500` цикл обновления = ~60 дней.
+    """
+
+    batch_size: int = Field(default=500, ge=10, le=5000)
+    skip_recent_days: int = Field(default=30, ge=0)
+    rate_limit_sec: float = Field(default=2.0, ge=0.0, le=10.0)
+    dry_run: bool = False
+
+
+class SchedulerJobOut(_ORMBase):
+    """Состояние одного scheduled-job'а: конфиг + last_run + next_run."""
+
+    job_id: str
+    cron_expr: str
+    enabled: bool
+    params: dict[str, Any]
+    # Денормализованная инфа о последнем запуске (поддерживается trigger'ом и scheduler'ом).
+    last_run_job_id: int | None = None
+    last_run_status: str | None = None
+    last_run_at: datetime | None = None
+    # Динамика из APScheduler runtime — заполняется в роутере.
+    next_run_at: datetime | None = None
+    # Описание провайдера для UI (display_name, doc) — заполняется в роутере из реестра.
+    display_name: str | None = None
+    description: str | None = None
+
+
+class SchedulerRescheduleRequest(BaseModel):
+    """PATCH /scheduler/jobs/{id} — изменить cron/enabled/params без рестарта."""
+
+    cron_expr: str | None = Field(
+        default=None,
+        description="unix-cron 5 полей. Если None — не трогаем расписание.",
+    )
+    enabled: bool | None = Field(
+        default=None,
+        description="True — включить, False — pause_job. Если None — не трогаем.",
+    )
+    params: dict[str, Any] | None = Field(
+        default=None,
+        description="merge в существующий params (не replace). Используется на старте job'а.",
+    )
+
+
 class TeseraImportRequest(BaseModel):
     """Tesera принимает alias (slug) или числовой id. Можно батчем."""
     alias: str | None = None

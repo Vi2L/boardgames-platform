@@ -8,6 +8,60 @@
 
 ---
 
+## 2026-05-10 · [CAT-3] BGG Sync UI + GeekList + daily mini-batch + cron editor
+
+**Что сделано:**
+Полнофункциональный web-интерфейс синхронизации с BGG. Новая страница `/bgg-sync`
+в web-test с пятью вкладками: **Расписание** (health-блок 3 scheduler-job'ов,
+inline cron editor, кнопка ручного запуска), **История** (унифицированная история
+ImportJob'ов с фильтрами type/status/trigger — ручные и автоматические запуски в
+одной таблице), **Hotness** (текущий снимок + история + diff «новые/выпали/
+изменили позицию»), **GeekList** (импорт кураторских BGG-списков, например monthly
+«Top 50 Most Played»), **Без BGG ID** (catalog-игры без bgg_id с deep-link на BGG search).
+
+Новый scheduler-job `bgg_mini_batch` — ежедневный catch-up хвоста rank-таблицы
+(500 игр, мягкий rate-limit 2с). На ~30K играх это даёт цикл обновления ~60 дней.
+Cron-выражения и параметры job'ов теперь в БД (`scheduler_configs`) — UI редактирует
+без рестарта сервиса через `scheduler.reschedule_job()`. Scheduler-job'ы создают
+ImportJob с `payload.trigger='scheduled'` — ручные и автоматические запуски в
+единой истории. Race-protection: повторный trigger того же type возвращает 409.
+
+**Как пользоваться:**
+- Открыть `http://localhost:5173/bgg-sync` (или `:8000/bgg-sync` в prod-режиме).
+- **Расписание** → клик «Настроить» под job'ом → правка cron + params (JSON) → Сохранить.
+- **Расписание** → клик «Запустить» — мгновенный manual trigger (создаёт ImportJob).
+- **GeekList** → ввести ID (например, `367126` для October 2025 Top Most Played) →
+  клик «Запустить» → snapshot сохраняется в `bgg_geeklists`, новые игры авто-импортятся.
+- **Hotness** → выпадающие списки: левый = снимок дня, правый = «сравнить с» →
+  показывает Set-difference добавленных/выпавших игр + поднявшихся/упавших в ранге.
+- **История** → фильтры: type / status / trigger (manual или scheduled). Клик строки —
+  раскрывает прогресс-бар, лог, result JSON.
+
+**Затронутые файлы:**
+- catalog: `alembic/versions/20260510_0010_*.py` (миграция scheduler_configs +
+  bgg_geeklists), `models.py` (SchedulerConfig, BggGeeklist),
+  `scheduler.py` (rewrite — JOB_METADATA registry, trigger_scheduled_job,
+  JobAlreadyRunning, reload_job_from_db, _register_job),
+  `routers/scheduler.py` (новый), `routers/bgg_lists.py` (новый — read API),
+  `routers/imports.py` (GET /import/jobs, POST /bgg/geeklist, POST /bgg/mini-batch),
+  `routers/games.py` (?no_bgg=true), `importers/bgg_geeklist.py` (новый),
+  `importers/_log_buffer.py` (BufLogger, run_import_job_skeleton),
+  `parsers/bgg/{client,parser,models}.py` (fetch_geeklist + parse_geeklist_xml +
+  BggGeeklistMeta/Item, _get_with_backoff helper).
+- web-test: `app/api/bgg_sync.py` (новый proxy), `app/catalog_client.py` (9 методов).
+- frontend: `pages/BggSyncPage.tsx`, `lib/bgg-sync.ts`, 5 компонентов в
+  `components/bgg-sync/` (SchedulerHealth, JobHistoryTable, HotnessPanel,
+  GeeklistPanel, NoBggList).
+
+**Замечание про BGG API возможности:**
+«Most Played Games» и «Bestsellers» в BGG XML API НЕ существуют. Реализован путь
+через GeekList importer — универсальный механизм, BGG публикует ежемесячный
+кураторский список «Top 50 Most Played» (id обновляется ежемесячно админами BGG).
+Для нативных «bestsellers» BGG нет источника — будем строить из локальных offers
+позже как отдельную фичу.
+
+---
+
 ## 2026-05-10 · [CAT-2] BGG периодическая синхронизация + Hotness
 
 **Что сделано:**

@@ -48,11 +48,19 @@ async def list_games(
     designer: str | None = Query(None),
     year: int | None = Query(None),
     status_: str | None = Query(None, alias="status"),
+    no_bgg: bool = Query(
+        False,
+        description="только игры без bgg_id (для UI «найти соответствие в BGG»)",
+    ),
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
     session: AsyncSession = Depends(get_session),
 ) -> GameListOut:
     stmt = select(Game)
+    if no_bgg:
+        # Включает merged-игры тоже, но обычно нам нужны published — фильтр оставляем
+        # на стороне UI через `status='published'`. Так роутер остаётся универсальным.
+        stmt = stmt.where(Game.bgg_id.is_(None))
 
     # Экранирование LIKE-wildcards: % и _ в пользовательском запросе
     # должны трактоваться как литералы, а не паттерн. ESCAPE '\' в SQL.

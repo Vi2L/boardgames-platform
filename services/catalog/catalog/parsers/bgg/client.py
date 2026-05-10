@@ -121,20 +121,45 @@ class BggClient:
         return await self._fetch_thing_url(ids=tuple(ids))
 
     async def _fetch_thing_url(self, *, ids: tuple[int, ...]) -> str:
-        """Общий код для одиночного и batch-запроса с 202-backoff."""
-        client = await self._ensure_client()
+        """Обёртка `_get_with_backoff` для `/thing` (одиночный и batch)."""
         url = f"{self._base_url}/thing"
-        params = {"id": ",".join(str(i) for i in ids), "stats": 1}
+        params: dict[str, str | int] = {"id": ",".join(str(i) for i in ids), "stats": 1}
+        return await self._get_with_backoff(url, params=params)
+
+    async def _get_with_backoff(
+        self,
+        url: str,
+        *,
+        params: dict[str, str | int] | None = None,
+    ) -> str:
+        """GET с экспоненциальным backoff для 202 (BGG «прогревает кеш»).
+
+        Используется для endpoint'ов которые могут вернуть 202 при первом
+        запросе — `/thing`, `/geeklist`, `/collection`, `/plays`.
+
+        Логика: N=`len(_RETRY_DELAYS)` попыток подряд с sleep между ними,
+        потом ОДНА финальная попытка после последнего sleep'а. Без финальной
+        попытки последний sleep был бы потрачен впустую (мы бы засыпали и
+        тут же поднимали ошибку без проверки). Итого до N+1 попытки.
+        """
+        client = await self._ensure_client()
         for delay in _RETRY_DELAYS:
             response = await client.get(url, params=params)
             if response.status_code == 200:
                 return response.text
             if response.status_code == 202:
-                # BGG прогревает кеш — ждём и пробуем снова.
                 await asyncio.sleep(delay)
                 continue
             response.raise_for_status()
-        raise httpx.HTTPError(f"BGG не отдал данные за {len(_RETRY_DELAYS)} попыток")
+
+        # Финальная попытка после последнего sleep'а из цикла.
+        response = await client.get(url, params=params)
+        if response.status_code == 200:
+            return response.text
+        response.raise_for_status()
+        raise httpx.HTTPError(
+            f"BGG не отдал данные за {len(_RETRY_DELAYS) + 1} попыток"
+        )
 
     async def fetch_hot(self) -> str:
         """GET `/hot?type=boardgame` → raw XML со списком 50 «горячих» игр.
@@ -148,6 +173,18 @@ class BggClient:
         )
         response.raise_for_status()
         return response.text
+
+    async def fetch_geeklist(self, geeklist_id: int) -> str:
+        """GET `/xmlapi2/geeklist/{id}` → raw XML кураторского списка.
+
+        BGG GeekList — кураторский список thing-id с заголовком, описанием и
+        опциональным комментарием на каждую позицию. Используется для
+        monthly «BGG Top 50 Most Played» (id типа 367126) и любых других топов.
+
+        `/geeklist/{id}` иногда возвращает 202 при «прогреве» — поэтому идём
+        через `_get_with_backoff` как `/thing`.
+        """
+        return await self._get_with_backoff(f"{self._base_url}/geeklist/{geeklist_id}")
 
     async def search(self, query: str, *, exact: bool = False) -> str:
         """GET `/search?query=<q>&type=boardgame[&exact=1]` → raw XML.

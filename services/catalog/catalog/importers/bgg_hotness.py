@@ -18,7 +18,11 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catalog.db import get_engine
-from catalog.importers._log_buffer import LogBuffer
+from catalog.importers._log_buffer import (
+    BufLogger,
+    LogBuffer,
+    run_import_job_skeleton,
+)
 from catalog.models import BggHotness, Game, ImportJob
 from catalog.parsers.bgg.client import BggClient
 from catalog.parsers.bgg.parser import parse_hot_xml
@@ -155,75 +159,30 @@ async def run_hotness_sync(
 
 
 async def run_hotness_import_job(job_id: int) -> None:
-    """Фоновая задача ImportJob-паттерна для /import/bgg/hotness.
-
-    Обновляет job.status, пишет прогресс через LogBuffer — аналогично
-    _run_bgg_batch_job в routers/imports.py.
-    """
+    """ImportJob-обёртка для /import/bgg/hotness через общий skeleton."""
     from catalog.config import get_settings
 
-    engine = get_engine()
-    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+    SessionFactory = async_sessionmaker(get_engine(), expire_on_commit=False)
     settings = get_settings()
 
-    async with SessionFactory() as session:
-        job = (
-            await session.execute(select(ImportJob).where(ImportJob.id == job_id))
-        ).scalar_one()
-        job.status = "running"
-        job.started_at = _utcnow()
-        await session.commit()
+    async def body(buf: LogBuffer, buf_log: BufLogger, sf):
+        return await run_hotness_sync(
+            auto_import=settings.bgg_hotness_auto_import,
+            session_factory=sf,
+            log=buf_log,  # type: ignore[arg-type]
+        )
 
-        buf = LogBuffer(session, job_id=job_id, flush_every_n=5, flush_every_s=2.0)
-        buf.set_progress(phase="starting", current=0, total=0)
-        buf.log("BGG Hotness sync запущен")
-        await buf.flush()
+    def summary(r: dict) -> str:
+        return (
+            f"Done: fetched={r['fetched']} existing={r['existing']} "
+            f"auto_imported={r['auto_imported']} errors={r['errors']}"
+        )
 
-        # Прокидываем сообщения логгера в LogBuffer (для UI-polling'а).
-        class _BufLogger:
-            def info(self, msg: str, *args: object) -> None:
-                buf.log(msg % args if args else msg)
-                logger.info(msg, *args)
-
-            def warning(self, msg: str, *args: object) -> None:
-                buf.log("[WARN] " + (msg % args if args else msg))
-                logger.warning(msg, *args)
-
-            def exception(self, msg: str, *args: object) -> None:
-                buf.log("[ERR] " + (msg % args if args else msg))
-                logger.exception(msg, *args)
-
-        buf_log = _BufLogger()
-
-        try:
-            result = await run_hotness_sync(
-                auto_import=settings.bgg_hotness_auto_import,
-                session_factory=SessionFactory,
-                log=buf_log,  # type: ignore[arg-type]
-            )
-
-            summary = (
-                f"Done: fetched={result['fetched']} existing={result['existing']} "
-                f"auto_imported={result['auto_imported']} errors={result['errors']}"
-            )
-            buf.log(summary)
-            buf.set_progress(phase="done")
-            await buf.flush()
-
-            await session.execute(
-                update(ImportJob)
-                .where(ImportJob.id == job_id)
-                .values(status="done", finished_at=_utcnow(), result=result)
-            )
-            await session.commit()
-
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("BGG hotness job %d failed", job_id)
-            buf.log(f"FAILED: {exc!r}")
-            await buf.flush()
-            await session.execute(
-                update(ImportJob)
-                .where(ImportJob.id == job_id)
-                .values(status="failed", finished_at=_utcnow(), error=str(exc))
-            )
-            await session.commit()
+    await run_import_job_skeleton(
+        job_id,
+        init_log="BGG Hotness sync запущен",
+        body=body,
+        session_factory=SessionFactory,
+        summary_fn=summary,
+        logger_inst=logger,
+    )

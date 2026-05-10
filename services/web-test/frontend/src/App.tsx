@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Routes, Route, NavLink, useNavigate } from 'react-router-dom'
-import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug, Inbox, Boxes, Activity } from 'lucide-react'
+import { Search, Cpu, Database, FlaskConical, Library, PanelLeftClose, PanelLeft, Bug, Inbox, Boxes, Activity, RefreshCw } from 'lucide-react'
 import clsx from 'clsx'
 import { SearchPage } from './pages/SearchPage'
 import { ParsersPage } from './pages/ParsersPage'
@@ -12,6 +12,7 @@ import { DebugPage } from './pages/DebugPage'
 import { DlqPage } from './pages/DlqPage'
 import { SourcesPage } from './pages/SourcesPage'
 import { StatusPage } from './pages/StatusPage'
+import { BggSyncPage } from './pages/BggSyncPage'
 import { DiffView } from './components/testing/DiffView'
 import { HealthBadge } from './components/shared/HealthBadge'
 import { CommandPalette } from './components/shared/CommandPalette'
@@ -22,6 +23,7 @@ const NAV = [
   { to: '/debug', label: 'Debug', icon: Bug },
   { to: '/database', label: 'БД', icon: Database },
   { to: '/catalog', label: 'Каталог', icon: Library },
+  { to: '/bgg-sync', label: 'BGG Sync', icon: RefreshCw },
   { to: '/sources', label: 'Источники', icon: Boxes },
   { to: '/testing', label: 'Тесты', icon: FlaskConical },
   { to: '/dlq', label: 'DLQ', icon: Inbox },
@@ -144,6 +146,7 @@ export default function App() {
           <Route path="/dlq" element={<DlqPage />} />
           <Route path="/database" element={<DatabasePage />} />
           <Route path="/catalog" element={<CatalogPage />} />
+          <Route path="/bgg-sync" element={<BggSyncPage />} />
           <Route path="/sources" element={<SourcesPage />} />
           <Route path="/sources/:provider" element={<SourcesPage />} />
           <Route path="/products/:id" element={<ProductPage />} />

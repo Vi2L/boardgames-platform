@@ -48,11 +48,18 @@ class CatalogClient:
         q: str | None = None,
         limit: int = 20,
         offset: int = 0,
+        *,
+        no_bgg: bool = False,
     ) -> dict[str, Any]:
-        """GET /games — листинг с pg_trgm fuzzy-search по q."""
+        """GET /games — листинг с pg_trgm fuzzy-search по q.
+
+        no_bgg=True → только игры без bgg_id (для UI «найти соответствие в BGG»).
+        """
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if q:
             params["q"] = q
+        if no_bgg:
+            params["no_bgg"] = "true"
         resp = await self._client.get("/games", params=params)
         return _ok_or_raise(resp)
 
@@ -202,6 +209,94 @@ class CatalogClient:
             data=data,
             files={"csv_file": (filename, csv_content, "text/csv")},
             timeout=60.0,  # загрузка большого CSV может занять несколько секунд
+        )
+        return _ok_or_raise(resp)
+
+    async def import_bgg_geeklist(self, payload: dict) -> dict[str, Any]:
+        """POST /import/bgg/geeklist → snapshot кураторского BGG GeekList'а.
+
+        payload: {geeklist_id, auto_import?}. Возвращает ImportJob.
+        """
+        resp = await self._client.post("/import/bgg/geeklist", json=payload)
+        return _ok_or_raise(resp)
+
+    async def import_bgg_mini_batch(self, payload: dict) -> dict[str, Any]:
+        """POST /import/bgg/mini-batch → ежедневный «catch-up» enrich хвоста."""
+        resp = await self._client.post("/import/bgg/mini-batch", json=payload)
+        return _ok_or_raise(resp)
+
+    async def list_import_jobs(
+        self,
+        *,
+        type: str | None = None,
+        status: str | None = None,
+        trigger: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[dict[str, Any]]:
+        """GET /import/jobs → история запусков с фильтрами для UI BGG Sync."""
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if type is not None:
+            params["type"] = type
+        if status is not None:
+            params["status"] = status
+        if trigger is not None:
+            params["trigger"] = trigger
+        resp = await self._client.get("/import/jobs", params=params)
+        return _ok_or_raise(resp)
+
+    # ── Scheduler (BGG Sync UI) ────────────────────────────────────────────
+
+    async def list_scheduler_jobs(self) -> list[dict[str, Any]]:
+        """GET /scheduler/jobs → конфиги + runtime info (next_run, last_run)."""
+        resp = await self._client.get("/scheduler/jobs")
+        return _ok_or_raise(resp)
+
+    async def reschedule_job(
+        self, job_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """PATCH /scheduler/jobs/{id} → cron/enabled/params + hot-reload."""
+        resp = await self._client.patch(f"/scheduler/jobs/{job_id}", json=payload)
+        return _ok_or_raise(resp)
+
+    async def trigger_scheduler_job(self, job_id: str) -> dict[str, Any]:
+        """POST /scheduler/jobs/{id}/trigger → manual trigger (создаёт ImportJob)."""
+        resp = await self._client.post(f"/scheduler/jobs/{job_id}/trigger")
+        return _ok_or_raise(resp)
+
+    # ── BGG read API (snapshots для UI Hotness/GeekList) ────────────────────
+
+    async def bgg_hotness_dates(self, *, limit: int = 30) -> list[str]:
+        """GET /bgg/hotness/dates → доступные snapshot_date (ISO YYYY-MM-DD)."""
+        resp = await self._client.get(
+            "/bgg/hotness/dates", params={"limit": limit}
+        )
+        return _ok_or_raise(resp)
+
+    async def bgg_hotness_snapshot(
+        self, snapshot_date: str | None = None
+    ) -> dict[str, Any]:
+        """GET /bgg/hotness?date= → 50 позиций hotness на дату (или последнюю)."""
+        params: dict[str, Any] = {}
+        if snapshot_date is not None:
+            params["date"] = snapshot_date
+        resp = await self._client.get("/bgg/hotness", params=params)
+        return _ok_or_raise(resp)
+
+    async def bgg_geeklists(self) -> list[dict[str, Any]]:
+        """GET /bgg/geeklists → список импортированных GeekList'ов."""
+        resp = await self._client.get("/bgg/geeklists")
+        return _ok_or_raise(resp)
+
+    async def bgg_geeklist_snapshot(
+        self, geeklist_id: int, *, snapshot_date: str | None = None
+    ) -> dict[str, Any]:
+        """GET /bgg/geeklists/{id}?date= → snapshot одного GeekList'а."""
+        params: dict[str, Any] = {}
+        if snapshot_date is not None:
+            params["date"] = snapshot_date
+        resp = await self._client.get(
+            f"/bgg/geeklists/{geeklist_id}", params=params
         )
         return _ok_or_raise(resp)
 

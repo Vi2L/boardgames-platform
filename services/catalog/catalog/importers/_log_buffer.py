@@ -1,4 +1,4 @@
-"""Batched updates для ImportJob.progress / log_lines.
+"""Batched updates для ImportJob.progress / log_lines + BufLogger.
 
 Зачем: long-running импорты (особенно dicefest на ~900 игр) генерят 3+ строки
 лога per item. Если делать UPDATE на каждую — это row-level lock и WAL-bloat
@@ -15,15 +15,21 @@ Ring-buffer log_lines: храним только последние RING_SIZE (~
 """
 from __future__ import annotations
 
+import logging
 import time
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Awaitable, Callable
 
-from sqlalchemy import update
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catalog.models import ImportJob
 
 RING_SIZE = 200
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 
 class LogBuffer:
@@ -114,3 +120,136 @@ class LogBuffer:
         await self._session.commit()
         self._unflushed_lines = 0
         self._last_flush_ts = time.monotonic()
+
+
+class BufLogger:
+    """Адаптер `logging.Logger`-API → `LogBuffer` + Python logger.
+
+    Принимает logger-style вызовы (`info(msg, *args)`, `warning(...)`,
+    `exception(...)`) и параллельно пишет в LogBuffer (для UI-polling'а)
+    и в обычный Python logger (для stdout/файлового лога).
+
+    Пользоваться: `buf_log = BufLogger(buf, logger)`, передавать в любую
+    функцию ожидающую logging.Logger-like объект.
+
+    Зачем общий класс: бойлерплейт «прокинуть логи в LogBuffer» дублировался
+    в bgg_hotness.py / dicefest.py / etc.
+    """
+
+    def __init__(self, buf: LogBuffer, logger: logging.Logger) -> None:
+        self._buf = buf
+        self._logger = logger
+
+    def info(self, msg: str, *args: object) -> None:
+        self._buf.log(msg % args if args else msg)
+        self._logger.info(msg, *args)
+
+    def warning(self, msg: str, *args: object) -> None:
+        self._buf.log("[WARN] " + (msg % args if args else msg))
+        self._logger.warning(msg, *args)
+
+    def exception(self, msg: str, *args: object) -> None:
+        self._buf.log("[ERR] " + (msg % args if args else msg))
+        self._logger.exception(msg, *args)
+
+
+# Сигнатура body-функции для run_import_job_skeleton.
+# Принимает (buf, buf_log, session_factory) и возвращает result-dict для записи в ImportJob.result.
+# session_factory нужен ядрам run_*_sync которые открывают свои сессии для разных
+# stage'ов (например, auto_import делается в отдельной сессии per-item).
+ImportJobBody = Callable[
+    [LogBuffer, BufLogger, "async_sessionmaker[AsyncSession]"],
+    Awaitable[dict[str, Any]],
+]
+
+
+async def run_import_job_skeleton(
+    job_id: int,
+    *,
+    init_log: str,
+    body: ImportJobBody,
+    session_factory: "async_sessionmaker[AsyncSession]",
+    summary_fn: Callable[[dict[str, Any]], str] | None = None,
+    flush_every_n: int = 5,
+    flush_every_s: float = 2.0,
+    logger_inst: logging.Logger | None = None,
+) -> None:
+    """Унифицированный скелет ImportJob: pending → running → body() → done/failed.
+
+    Удаляет 55-строчный дублирующий блок try/except + LogBuffer wiring между
+    importers (`bgg_hotness.py`, `bgg_geeklist.py`).
+
+    Жизненный цикл:
+    1. Открываем session, помечаем job как `running` + `started_at`.
+    2. Создаём LogBuffer и BufLogger в этой же сессии.
+    3. Логируем `init_log` и flush'им (UI получает первое обновление).
+    4. Вызываем `body(buf, buf_log, session_factory)`. Body сам решает где
+       делать flush'ы; внешняя session открыта на всё время вызова.
+    5. По возврату — пишем итоговый summary, ставим status='done' + result.
+    6. На исключение — buf.log(FAILED), status='failed', error=str(exc).
+
+    Контракт body:
+      - НЕ должен сам делать UPDATE ImportJob (status/started_at/finished_at) —
+        это делает обёртка.
+      - МОЖЕТ использовать переданный session_factory для отдельных сессий внутри
+        (например, per-item commit'ы для auto-import).
+      - Должен вернуть dict с результатом (что попадёт в `ImportJob.result`).
+
+    Args:
+        job_id: PK ImportJob (уже создан endpoint'ом).
+        init_log: первая строка лога (например, "BGG Hotness sync запущен").
+        body: async callable, ядро задачи. См. контракт выше.
+        session_factory: фабрика сессий (передаётся в body для under-task сессий).
+        summary_fn: result-dict → одна строка для финального лога.
+                    Default: f"Done: {result!r}".
+        flush_every_n / flush_every_s: пороги LogBuffer (см. LogBuffer.maybe_flush).
+        logger_inst: Python-логгер для дублирования сообщений в stdout.
+                     Default: логгер модуля.
+    """
+    log = logger_inst or logging.getLogger(__name__)
+
+    async with session_factory() as session:
+        job = (
+            await session.execute(select(ImportJob).where(ImportJob.id == job_id))
+        ).scalar_one()
+        job.status = "running"
+        job.started_at = _utcnow()
+        await session.commit()
+
+        buf = LogBuffer(
+            session,
+            job_id=job_id,
+            flush_every_n=flush_every_n,
+            flush_every_s=flush_every_s,
+        )
+        buf.set_progress(phase="starting", current=0, total=0)
+        buf.log(init_log)
+        await buf.flush()
+
+        buf_log = BufLogger(buf, log)
+
+        try:
+            result = await body(buf, buf_log, session_factory)
+
+            summary = summary_fn(result) if summary_fn else f"Done: {result!r}"
+            buf.log(summary)
+            buf.set_progress(phase="done")
+            await buf.flush()
+
+            await session.execute(
+                update(ImportJob)
+                .where(ImportJob.id == job_id)
+                .values(status="done", finished_at=_utcnow(), result=result)
+            )
+            await session.commit()
+
+        except Exception as exc:  # noqa: BLE001
+            log.exception("ImportJob %d (%s) failed", job_id, init_log)
+            buf.log(f"FAILED: {exc!r}")
+            await buf.flush()
+            await session.execute(
+                update(ImportJob)
+                .where(ImportJob.id == job_id)
+                .values(status="failed", finished_at=_utcnow(), error=str(exc))
+            )
+            await session.commit()

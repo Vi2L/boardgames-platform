@@ -653,6 +653,75 @@ class MatchProfile(Base):
     )
 
 
+class SchedulerConfig(Base):
+    """Runtime-конфиг APScheduler-job'ов (таблица scheduler_configs, миграция 0010).
+
+    Раньше cron-выражения жили в Settings (env). Теперь UI правит их через
+    PATCH /scheduler/jobs/{id}/reschedule без рестарта сервиса. Settings оставлены
+    как seed-дефолты при первом старте (миграция INSERT'ит дефолтные строки).
+
+    `params` JSONB — provider-специфика (rank_le, batch_size, ...). Это убирает
+    необходимость заводить отдельные колонки/Settings-поля под каждый параметр
+    каждого job'а.
+
+    `last_run_*` — денормализация: при ручном trigger или scheduler-запуске
+    обновляем эти три поля, чтобы UI мог отрисовать health-блок одним SELECT'ом
+    без JOIN с import_jobs + MAX по типу.
+    """
+
+    __tablename__ = "scheduler_configs"
+
+    job_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    cron_expr: Mapped[str] = mapped_column(String(64), nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False, default=dict)
+
+    last_run_job_id: Mapped[int | None] = mapped_column(BigInteger)
+    last_run_status: Mapped[str | None] = mapped_column(String(16))
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+
+class BggGeeklist(Base):
+    """Snapshot'ы BGG GeekList-ов (таблица bgg_geeklists, миграция 0010).
+
+    BGG GeekList — кураторский список thing-id с названием, описанием и опциональным
+    комментарием на каждую позицию. Используется для monthly «BGG Top 50 Most Played»
+    (id типа 367126) и любых других кураторских топов.
+
+    Отличие от bgg_hotness:
+      - Hotness — ровно 50 позиций, ежедневно, фиксированная схема BGG → отдельные
+        строки в bgg_hotness для per-bgg_id индексации.
+      - GeekList — произвольной длины (50–1000+), on-demand → items как JSONB-array.
+        Per-item индексация не нужна: auto-import (resolve game_id, enrich_one) делается
+        в момент загрузки, потом этот snapshot — read-only история.
+
+    UNIQUE (geeklist_id, snapshot_date) — повторный прогон в тот же день идемпотентен.
+    """
+
+    __tablename__ = "bgg_geeklists"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    geeklist_id: Mapped[int] = mapped_column(Integer, nullable=False, index=True)
+    snapshot_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    username: Mapped[str | None] = mapped_column(Text)  # owner на BGG
+    item_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # items: [{rank, bgg_id, name, year, thumbnail_url, body, game_id?}, ...]
+    items: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, nullable=False, default=list)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now
+    )
+
+    __table_args__ = (
+        UniqueConstraint("geeklist_id", "snapshot_date", name="uq_bgg_geeklist_date"),
+    )
+
+
 class BggHotness(Base):
     """История BGG Hotness-снимков (таблица bgg_hotness, миграция 0009).
 

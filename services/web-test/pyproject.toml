@@ -16,6 +16,9 @@ dependencies = [
     "pydantic>=2",
     "python-dotenv>=1.0",
     "aiosqlite>=0.20",
+    # Требуется FastAPI для UploadFile/Form (catalog import-CSV proxy через multipart).
+    # Не transitive-зависимость fastapi — нужно указывать явно.
+    "python-multipart>=0.0.9",
 ]
 
 [project.optional-dependencies]

@@ -50,6 +50,39 @@ class BggGame:
 
 
 @dataclass
+class BggGeeklistItem:
+    """Одна позиция из BGG GeekList (`/xmlapi2/geeklist/{id}`).
+
+    BGG возвращает `<item>` с атрибутами objectid (=bgg_id), objectname (=name)
+    и опциональным дочерним `<body>` (комментарий куратора). Thumbnail и year
+    в endpoint'е НЕ приходят — нужно отдельно `/thing?id=X` (это делает
+    auto-import после snapshot'а).
+
+    rank — позиция в списке (1-based), считается по порядку appearance в XML.
+    Для «Top 50 Most Played» этот порядок и есть искомый ранг.
+    """
+
+    rank: int
+    bgg_id: int
+    name: str
+    body: str | None = None
+
+
+@dataclass
+class BggGeeklistMeta:
+    """Header GeekList'а: title, description, owner, item_count.
+
+    Парсится из root `<geeklist>` элемента вместе с items на одном XML pass.
+    """
+
+    geeklist_id: int
+    title: str | None
+    description: str | None
+    username: str | None
+    item_count: int
+
+
+@dataclass
 class BggHotnessItem:
     """Одна позиция из ответа BGG `/hot?type=boardgame`.
 

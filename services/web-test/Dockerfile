@@ -56,10 +56,12 @@ COPY services/parsers/ /tmp/parsers/
 RUN pip install --no-cache-dir /tmp/parsers/ && rm -rf /tmp/parsers/
 
 # Устанавливаем дополнительные зависимости parsers_web_test
-# (fastapi, uvicorn, aiosqlite уже пришли через parsers)
+# (fastapi, uvicorn, aiosqlite уже пришли через parsers).
+# python-multipart нужен FastAPI для UploadFile/Form (catalog import-CSV proxy).
 RUN pip install --no-cache-dir \
     "pydantic>=2" \
-    "python-dotenv>=1.0"
+    "python-dotenv>=1.0" \
+    "python-multipart>=0.0.9"
 
 # Копируем исходный код приложения
 COPY services/web-test/app/ ./app/

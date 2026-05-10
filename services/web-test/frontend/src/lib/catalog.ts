@@ -173,9 +173,15 @@ export type GameChildrenResponse = {
 export const fetchGameChildren = (gameId: number) =>
   fetch(`${BASE}/games/${gameId}/children`).then(r => json<GameChildrenResponse>(r))
 
-export const listCatalogGames = (q: string | undefined, limit = 20, offset = 0) => {
+export const listCatalogGames = (
+  q: string | undefined,
+  limit = 20,
+  offset = 0,
+  options: { no_bgg?: boolean } = {},
+) => {
   const params = new URLSearchParams({ limit: String(limit), offset: String(offset) })
   if (q) params.set('q', q)
+  if (options.no_bgg) params.set('no_bgg', 'true')
   return fetch(`${BASE}/games?${params}`).then(r => json<CatalogGameList>(r))
 }
 
@@ -349,12 +355,26 @@ export type ImportProgress = {
   current_title: string | null
 }
 
+// Все известные типы job'ов. Список расширяется по мере добавления importer'ов;
+// т.к. фронт использует поле как фильтр, держим явный union — TS подскажет
+// при добавлении нового типа в catalog.
+export type ImportJobType =
+  | 'bgg'
+  | 'bgg-batch'
+  | 'bgg-hotness'
+  | 'bgg-geeklist'
+  | 'bgg-mini-batch'
+  | 'bgg-ranks'
+  | 'tesera'
+  | 'dicefest'
+  | 'dicefest-reparse'
+
 export type ImportJob = {
   id: number
-  // 'bgg-batch' добавлен этапом 3 (массовое XML-обогащение через /import/bgg/batch).
-  type: 'bgg' | 'tesera' | 'dicefest' | 'bgg-batch'
+  type: ImportJobType
   status: ImportJobStatus
-  payload: Record<string, unknown>
+  // payload.trigger ∈ {'manual','scheduled','api'} — для фильтрации по источнику.
+  payload: Record<string, unknown> & { trigger?: string }
   started_at: string | null
   finished_at: string | null
   error: string | null

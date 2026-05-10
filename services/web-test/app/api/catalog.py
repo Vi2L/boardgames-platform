@@ -28,10 +28,11 @@ async def list_games(
     q: str | None = Query(None),
     limit: int = Query(20, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    no_bgg: bool = Query(False, description="только игры без bgg_id"),
     client: CatalogClient = Depends(get_catalog_client),
 ) -> dict:
     try:
-        return await client.list_games(q=q, limit=limit, offset=offset)
+        return await client.list_games(q=q, limit=limit, offset=offset, no_bgg=no_bgg)
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
