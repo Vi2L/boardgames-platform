@@ -41,9 +41,10 @@ PRS (parsers), INFRA (общее).
   при несовпадении publisher/year, обработка expansions
   («Каркассон: Король и разбойник» не должна матчиться на базовый
   «Каркассон»).
-- [WT-F4.4-extended] **Suite baselines auto pass/fail** —
-  автосравнение `min_count` (и потом `expected_stores`,
-  `min_field_coverage`) на прогоне с подсветкой строк pass/fail.
+- [WT-F4.4-extended] **Suite baselines auto pass/fail** — ✅ **ЗАВЕРШЕНО**.
+  `product_count` захватывается в run loop и хранится в `suite_run_items` (миграция v4).
+  `BaselineBadge`: pass → зелёная строка + `✓ N / ≥M`, fail → красная + `✗ N / ≥M`.
+  Кнопка фиксации baseline предзаполняет prompt фактическим счётчиком. Коммит `4e5b60f`.
 
 ## Бэклог (без даты)
 
