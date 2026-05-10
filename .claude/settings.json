@@ -5,16 +5,31 @@
       "Bash(uv run pytest*)",
       "Bash(uv run ruff*)",
       "Bash(uv lock*)",
+      "Bash(uv add*)",
       "Bash(docker compose ps*)",
       "Bash(docker compose logs*)",
       "Bash(docker compose config*)",
+      "Bash(docker compose build*)",
+      "Bash(docker compose up*)",
+      "Bash(docker compose down*)",
+      "Bash(docker compose exec*)",
+      "Bash(docker images*)",
+      "Bash(docker pull*)",
       "Bash(curl*localhost*)",
       "Bash(git status*)",
       "Bash(git log*)",
       "Bash(git diff*)",
       "Bash(git blame*)",
       "Bash(git show*)",
-      "Bash(npm run*)"
+      "Bash(git add*)",
+      "Bash(git branch*)",
+      "Bash(git stash*)",
+      "Bash(find . *)",
+      "Bash(find /Users/vitaliy/Projects/boardgames-platform*)",
+      "Bash(ls*)",
+      "Bash(npm run*)",
+      "Bash(npm install*)",
+      "Bash(alembic*)"
     ]
   },
   "hooks": {
@@ -26,6 +41,28 @@
             "type": "command",
             "command": "bin/check-alembic-heads.sh",
             "timeout": 30
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bin/block-env-edit.sh",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bin/ruff-on-edit.sh",
+            "timeout": 15
           }
         ]
       }
