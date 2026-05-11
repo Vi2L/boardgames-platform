@@ -125,14 +125,35 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   повторного запроса к BGG. Размер: ~10-50KB JSONB на игру, на ~30K
   игр — ~300MB-1.5GB. GIN-индекс не нужен, читаем только по `game_id`.
 
-- [CAT-8] **BGG `/family/{id}` — серии игр** — endpoint возвращает
-  thing-id связанных игр (Catan, Carcassonne, Splendor series).
-  Новая таблица `bgg_families (id, bgg_family_id, name, description,
-  fetched_at)` + связь `bgg_family_members (family_id, game_id, bgg_id)`.
-  В `/thing` каждая игра имеет `<link type="boardgamefamily" value="...">` —
-  парсить и резолвить в family_id. UI: показ «другие игры серии» в
-  карточке (close к функционалу parent_game_id, но горизонтально вместо
-  иерархии). Также может помочь матчингу — игры одной серии часто путаются.
+- [CAT-8] **BGG `/family/{id}` — серии игр + подтягивание всех членов** —
+  endpoint возвращает thing-id связанных игр (Catan, Carcassonne, Splendor
+  series, Wingspan и т.п.). Реализуется в две стадии:
+
+  *Структура хранения*: новая таблица `bgg_families (id, bgg_family_id, name,
+  description, fetched_at)` + связь `bgg_family_members (family_id, game_id,
+  bgg_id)`. В `/thing` каждая игра имеет `<link type="boardgamefamily" value="...">` —
+  парсить и резолвить в family_id. UI: показ «другие игры серии» в карточке
+  (близко к функционалу parent_game_id, но горизонтально вместо иерархии).
+  Также может помочь матчингу — игры одной серии часто путаются.
+
+  *Подтягивание членов серии — два механизма работают параллельно*:
+  - **Cascade-import при первом обогащении.** После успешного `enrich_one(bgg_id)`
+    в `parsers/bgg/service.py`: если у игры были `boardgamefamily` linked,
+    запустить fire-and-forget background task через `asyncio.create_task` —
+    `fetch_family(family_id)`, для каждого thing-id отсутствующего в каталоге
+    вызвать `enrich_one(bgg_id)` с rate-limit (1 req/sec). Защита от рекурсии:
+    cascade сам не запускает следующий cascade (флаг в kwargs).
+  - **Scheduler-job `bgg_family_refresh`.** Раз в неделю обходит ВСЕ известные
+    families в БД, тянет свежий `/family/{id}`, сравнивает members со
+    `bgg_family_members`, для новых thing-id запускает `enrich_one`. Закрывает
+    кейс «вышел Wingspan: Asia через месяц после нашего импорта Wingspan» —
+    cascade при первом импорте не знал об этом.
+
+  *Конфиг*: добавить в `scheduler_configs` запись `bgg_family_refresh` (cron
+  по умолчанию `0 5 * * 0` — воскресенье 05:00 UTC). Параметры через JOB_METADATA
+  registry, ImportJob-паттерн `run_family_refresh_job`. Cascade — не отдельный
+  scheduler-job, а часть `enrich_one`, отключаемая через Settings-флаг
+  `BGG_FAMILY_CASCADE_ENABLED` (default true).
 
 - [CAT-9] **BGG `/thing?versions=1` — русские издания** — флаг
   `versions=1` в `/thing` добавляет `<versions><item type="boardgameversion">`
@@ -143,6 +164,36 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   не всегда explicit, часто через publisher (Hobby World, Звезда, GaGa).
   Хранить в новой таблице `bgg_versions (game_id, bgg_id, version_id,
   language, year, publisher, productcode, dimensions, ...)`.
+
+- [CAT-10] **Yearly releases sync — новинки текущего года** — BGG XML API не
+  даёт фильтр по году публикации и сортировку по `numvoters`/`numplays`, оба
+  необходимы для отбора «новых заметных игр». Решение — HTML-скрейп страницы
+  `https://boardgamegeek.com/browse/boardgame?sort=numvoters&yearpublished=YYYY`
+  (10 страниц × 100 игр = топ-1000 новинок года).
+
+  *Парсер*: BeautifulSoup-парсер строк `<tr id="row_">` в tbody таблицы —
+  thing-id из `<a href="/boardgame/X/...">`, title, year, rating. Для thing-id
+  отсутствующих в каталоге — `enrich_one`. Никаких новых таблиц: записи
+  попадают в обычный `games` + `game_bgg` через стандартный enrich.
+
+  *Scheduler*: новый job `bgg_yearly_releases` (раз в месяц, например `0 2 1 * *`
+  — первое число месяца, 02:00 UTC). Параметры `params.year` (default — текущий
+  UTC-год через runtime-вычисление), `params.max_pages` (default 5 = топ-500).
+
+  *Риски HTML-скрейпа*:
+  - Вёрстка BGG может измениться → парсер сломается. Mitigation: фикстура
+    `tests/fixtures/bgg_browse_2025.html` для unit-теста парсера; при росте
+    rate failure'ов в логах — алерт.
+  - Anti-bot защиты на browse-страницах. Mitigation: запросы с User-Agent
+    реального браузера, mild rate-limit (3-5 сек/стр), retry через
+    `_get_with_backoff`-аналог для HTTP 429/503.
+  - Bearer token нужен для XML API, но для HTML-страниц `/browse/*` —
+    проверить в smoke-тесте (по обсуждениям BGG-форума работает без токена,
+    но это не задокументировано).
+
+  *UI* в `/bgg-sync` → вкладка «Расписание» автоматически покажет новый job
+  благодаря registry-паттерну. Лог обогащения — в существующей вкладке
+  «История» с фильтром `type=bgg-yearly`.
 
 ### web-test
 
