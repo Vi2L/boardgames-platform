@@ -64,14 +64,21 @@ async def warmup(
     # Собираем источник эмбеддингов: title + aliases. Один запрос, UNION.
     # text_used строим в Python (build_text для game'ов с группировкой
     # title/title_ru/aliases). Здесь упрощённо: один title или один alias.
+    #
+    # ORDER BY priority: rank ASC NULLS LAST — топ-BGG игры идут первыми.
+    # Это важно при `--limit N`: покрываем популярные игры (Carcassonne, Catan
+    # и т.п.), а не случайные 162K хвостовых. Без LEFT JOIN с game_bgg игры
+    # без rank всё равно попадут в конец списка.
     queries = []
     if not only_aliases:
         queries.append(
             """
             SELECT g.id AS game_id, NULL::bigint AS alias_id,
-                   COALESCE(g.title_ru, '') || ' ' || g.title AS text_used
+                   COALESCE(g.title_ru, '') || ' ' || g.title AS text_used,
+                   COALESCE(b.rank, 999999) AS priority_rank
             FROM games g
-            WHERE g.status IS NULL OR g.status != 'merged'
+            LEFT JOIN game_bgg b ON b.game_id = g.id
+            WHERE (g.status IS NULL OR g.status != 'merged')
               AND NOT EXISTS (
                 SELECT 1 FROM game_embeddings ge
                 WHERE ge.game_id = g.id AND ge.alias_id IS NULL
@@ -81,9 +88,11 @@ async def warmup(
     if not only_games:
         queries.append(
             """
-            SELECT a.game_id, a.id AS alias_id, a.alias AS text_used
+            SELECT a.game_id, a.id AS alias_id, a.alias AS text_used,
+                   COALESCE(b.rank, 999999) AS priority_rank
             FROM game_aliases a
             JOIN games g ON g.id = a.game_id
+            LEFT JOIN game_bgg b ON b.game_id = g.id
             WHERE (g.status IS NULL OR g.status != 'merged')
               AND NOT EXISTS (
                 SELECT 1 FROM game_embeddings ge
@@ -93,8 +102,9 @@ async def warmup(
         )
 
     union_sql = " UNION ALL ".join(queries)
+    union_sql = f"SELECT * FROM ({union_sql}) sub ORDER BY priority_rank ASC"
     if limit is not None:
-        union_sql = f"SELECT * FROM ({union_sql}) sub LIMIT {int(limit)}"
+        union_sql = f"{union_sql} LIMIT {int(limit)}"
 
     async with SessionFactory() as session:
         rows = (await session.execute(text(union_sql))).mappings().all()
