@@ -39,22 +39,31 @@ PRS (parsers), INFRA (общее).
     `backfill_title_ru.py`.
   - `Game.title_ru` — first-class колонка денормализованного ru-имени.
 
-  **Что осталось — deploy и доводка:**
-  - [ ] `docker pull pgvector/pgvector:pg16` (Docker Hub был недоступен)
-  - [ ] `docker compose up -d --force-recreate postgres` (volume сохраняется)
-  - [ ] `cd services/catalog && uv run --package boardgames-catalog alembic upgrade head`
-  - [ ] `ollama pull bge-m3 && ollama pull qwen2.5:7b-instruct` (если не стоят)
-  - [ ] `uv run --package boardgames-catalog python -m catalog.scripts.backfill_title_ru`
-  - [ ] Warmup embeddings (~1.5–4 ч под `nohup` или через UI
-    `POST /matching/warmup-embeddings`)
-  - [ ] Smoke-test sync-pipeline: ingest «Каркассон» → проверить
-    T0 cache hit на повторе, T1 на лёгкой опечатке.
-  - [ ] Smoke-test async-pipeline (после warmup): unmatched оффер →
-    воркер забирает → T2 match или T3 арбитр → запись в match_log.
-  - [ ] Pytest-покрытие: `tests/test_matching_v2/`
-    (`test_normalize_title`, `test_tier_0_cache_hit_miss_ttl`,
-    `test_tier_1_above_below_threshold`, `test_circuit_breaker`,
-    `test_llm_parse_response_robust`).
+  **Deploy — сделано 2026-05-11:**
+  - [x] `docker pull pgvector/pgvector:pg16` (Docker Hub был недоступен)
+  - [x] `docker compose up -d --force-recreate postgres` (volume сохранился)
+  - [x] `alembic upgrade head` на prod + catalog_test
+    (fix: `now()` в partial-index predicate — убран, PG требует IMMUTABLE)
+  - [x] `backfill_title_ru` — заполнено 985 игр из ru-aliases
+  - [x] Rebuild + restart `bg-catalog` и `bg-web-test`
+  - [x] Smoke-test sync-pipeline: ingest «Каркассон» → T1 auto-match (score=1.0,
+    `trgm_alias_ru`); повтор → T0 cache hit (`cache_hit_auto_t1`); «Каркасон»
+    с опечаткой → unmatched + push в `match_queue`; revert log #1 → offer
+    обнулён, match_decisions очищен, создана `revert`-запись в audit log.
+  - [x] Pytest-покрытие: 38 unit (`test_matching_v2_unit.py`) +
+    19 integration (`test_matching_v2_integration.py`) — все зелёные.
+
+  **Осталось пользователю:**
+  - [ ] `ollama pull bge-m3 && ollama pull qwen2.5:7b-instruct`
+    (Ollama сейчас отдаёт пустой `/api/tags` → T2/T3 skip'аются, async-очередь
+    висит в `pending`. После pull — health-check тикает каждые 30s, поднимает
+    модели в `available=true`, воркер начинает обрабатывать backlog.)
+  - [ ] Warmup embeddings (~1.5–4 ч): `POST /matching/warmup-embeddings`
+    или CLI `python -m catalog.scripts.warmup_embeddings`. Pre-условие —
+    pull моделей. Можно сначала `--limit 1000` для топ-ранкированных,
+    позже полный прогон под `nohup`.
+  - [ ] Smoke-test async-pipeline (после warmup): «Каркасон» с опечаткой
+    из текущей очереди должен сматчиться T2 на >=0.85 cosine similarity.
 
   **Технический долг (после боя):**
   - Per-store `MatchProfile` override (схема в БД готова, реализация —
@@ -69,6 +78,58 @@ PRS (parsers), INFRA (общее).
 _(пусто)_
 
 ## Бэклог (без даты)
+
+### Catalog (BGG enrichment)
+
+Расширение покрытия BGG XML API. Сейчас `/thing` парсится частично:
+сохраняем title, year, description, designers/publishers/categories/
+mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
+`<statistics>`, `<poll>`, `<versions>`, `<link type="boardgamefamily">`
+и `<link type="boardgameartist">` — см. пункты ниже.
+
+- [CAT-5] **BGG XML stats fields в `game_bgg`** — парсер уже извлекает
+  `rating_avg` и `bayes_average` (`parser.py:219-220`), но `upsert_bgg_data`
+  их не пишет (`repository.py:130-145`). В колонке `game_bgg` поля
+  `bayes_average` / `average` уже есть (приходят из CSV-импорта BGG ranks).
+  Добавить: `users_rated` (`<statistics><ratings><usersrated value="N"/>`),
+  `average_weight` (complexity 1-5, поле `<averageweight value="X"/>`),
+  `num_weights`. Источник истины — XML, а не CSV (CSV отстаёт на неделю).
+
+- [CAT-6] **BGG `<poll>` рекомендации** — три poll'а в `/thing`:
+  `suggested_numplayers` (best/recommended/not-recommended per player count),
+  `suggested_playerage` (рекомендуемый возраст по голосам коммьюнити —
+  может отличаться от `minage` от издателя), `language_dependence`
+  (1-5: no necessary in-game text → unplayable in foreign language).
+  Хранить как `recommended_players JSONB`, `recommended_age int`,
+  `language_dependence int` в `game_bgg`. UX-ценность: показывать
+  «лучше всего с 4 игроками» в карточке игры на фронте.
+
+- [CAT-7] **`raw` JSONB blob в `game_bgg`** — сейчас в `upsert_bgg_data`
+  стоит `raw={}` с TODO («на этапе 3 заполним полным XML payload для
+  аудита»). Заполнить полным распарсенным dict из `parse_thing_xml`
+  + raw XML-string в подключе `raw.xml`. Польза: при изменении парсера
+  (новые поля типа [CAT-5]/[CAT-6]) можно re-парсить из БД без
+  повторного запроса к BGG. Размер: ~10-50KB JSONB на игру, на ~30K
+  игр — ~300MB-1.5GB. GIN-индекс не нужен, читаем только по `game_id`.
+
+- [CAT-8] **BGG `/family/{id}` — серии игр** — endpoint возвращает
+  thing-id связанных игр (Catan, Carcassonne, Splendor series).
+  Новая таблица `bgg_families (id, bgg_family_id, name, description,
+  fetched_at)` + связь `bgg_family_members (family_id, game_id, bgg_id)`.
+  В `/thing` каждая игра имеет `<link type="boardgamefamily" value="...">` —
+  парсить и резолвить в family_id. UI: показ «другие игры серии» в
+  карточке (close к функционалу parent_game_id, но горизонтально вместо
+  иерархии). Также может помочь матчингу — игры одной серии часто путаются.
+
+- [CAT-9] **BGG `/thing?versions=1` — русские издания** — флаг
+  `versions=1` в `/thing` добавляет `<versions><item type="boardgameversion">`
+  с полями `<name>`, `<yearpublished>`, `<productcode>`, `<width>/<length>/
+  <depth>/<weight>`, `<link type="boardgamepublisher" value="Hobby World">`.
+  Может закрыть случаи где Dicefest не покрывает (старые русские издания).
+  Pre-условие: разобраться как BGG помечает language='ru' в версии —
+  не всегда explicit, часто через publisher (Hobby World, Звезда, GaGa).
+  Хранить в новой таблице `bgg_versions (game_id, bgg_id, version_id,
+  language, year, publisher, productcode, dimensions, ...)`.
 
 ### web-test
 

@@ -199,14 +199,15 @@ def upgrade() -> None:
         # Один offer в очереди — один раз. ON CONFLICT skip при повторной постановке.
         sa.UniqueConstraint("offer_id", name="uq_match_queue_offer"),
     )
-    # Partial-индекс для воркера: только pending/processing записи нужны.
+    # Partial-индекс для воркера: только pending записи.
+    # NB: now() — STABLE, нельзя в predicate (PG требует IMMUTABLE).
+    # Worker дополнительно фильтрует `next_attempt_at <= now()` в SELECT,
+    # для индекса хватает простого `status = 'pending'`.
     op.create_index(
         "ix_match_queue_pending",
         "match_queue",
         [sa.text("priority DESC"), sa.text("created_at ASC")],
-        postgresql_where=sa.text(
-            "status = 'pending' AND (next_attempt_at IS NULL OR next_attempt_at <= now())"
-        ),
+        postgresql_where=sa.text("status = 'pending'"),
     )
 
     # ── game_embeddings: pgvector с HNSW ───────────────────────────────────────
