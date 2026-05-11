@@ -34,8 +34,10 @@ def get_bgg_client() -> BggClient:
     Why: тесты переопределяют через `app.dependency_overrides[get_bgg_client]`,
     подсовывая клиент с `httpx.MockTransport`. Без DI пришлось бы патчить
     `httpx.AsyncClient` глобально — а это ломает сам тест-клиент ASGITransport.
+
+    from_settings — Bearer token обязателен для BGG XML API v2 (с июля 2025).
     """
-    return BggClient()
+    return BggClient.from_settings()
 
 
 @router.post(

@@ -49,7 +49,9 @@ async def search_games(
     """
     own_client = client is None
     if client is None:
-        client = BggClient()
+        # from_settings — иначе BGG XML API v2 вернёт 401 (Bearer token обязателен
+        # с июля 2025). Тесты передают внешний `client` с MockTransport напрямую.
+        client = BggClient.from_settings()
     try:
         if own_client:
             await client.__aenter__()
@@ -125,7 +127,9 @@ async def enrich_one(
     """
     own_client = client is None
     if client is None:
-        client = BggClient()
+        # from_settings — иначе BGG XML API v2 вернёт 401 (Bearer token обязателен
+        # с июля 2025). Тесты передают внешний `client` с MockTransport напрямую.
+        client = BggClient.from_settings()
     try:
         if own_client:
             await client.__aenter__()
@@ -223,7 +227,9 @@ async def enrich_batch(
 
     own_client = client is None
     if client is None:
-        client = BggClient()
+        # from_settings — иначе BGG XML API v2 вернёт 401 (Bearer token обязателен
+        # с июля 2025). Тесты передают внешний `client` с MockTransport напрямую.
+        client = BggClient.from_settings()
 
     stats = EnrichStats()
 

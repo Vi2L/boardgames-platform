@@ -305,8 +305,11 @@ def get_batch_bgg_client() -> BggClient:
 
     Отдельная функция, а не общая с `routers/parsers.py:get_bgg_client`,
     потому что тесты часто хотят разный mock'инг для search vs batch
-    (в search возвращается /search-XML, в batch — /thing-XML)."""
-    return BggClient()
+    (в search возвращается /search-XML, в batch — /thing-XML).
+
+    from_settings — Bearer token обязателен для BGG XML API v2 (с июля 2025).
+    Тесты переопределяют через `app.dependency_overrides[get_bgg_batch_client]`."""
+    return BggClient.from_settings()
 
 
 async def _run_bgg_batch_job(
@@ -349,7 +352,8 @@ async def _run_bgg_batch_job(
 
         own_client = client is None
         if client is None:
-            client = BggClient()
+            # from_settings — Bearer token обязателен (BGG XML API v2 с июля 2025).
+            client = BggClient.from_settings()
 
         async def progress_cb(i: int, total: int, bgg) -> None:
             # Лог per-item только для не-skipped, чтобы не засорять ring-buffer.

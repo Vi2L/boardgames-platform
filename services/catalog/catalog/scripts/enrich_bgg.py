@@ -115,7 +115,7 @@ async def _run(args: argparse.Namespace) -> int:
             )
             last_logged["i"] = i
 
-    async with BggClient() as client:
+    async with BggClient.from_settings() as client:  # Bearer token обязателен с июля 2025
         stats = await enrich_batch(
             rank_le=rank_le,
             batch_size=args.batch_size,
