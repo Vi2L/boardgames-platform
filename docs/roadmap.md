@@ -53,17 +53,30 @@ PRS (parsers), INFRA (общее).
   - [x] Pytest-покрытие: 38 unit (`test_matching_v2_unit.py`) +
     19 integration (`test_matching_v2_integration.py`) — все зелёные.
 
+  **Сделано 2026-05-11 (вторая итерация):**
+  - [x] `sudo networksetup -setv6off Wi-Fi` (требовалось из-за IPv6 →
+    Cloudflare broken-pipe; Ollama-CLI hardcoded Happy-Eyeballs не работал)
+  - [x] `ollama pull bge-m3` (1.2 GB) — установлено, health-check поднимает
+    в `available=true` (failures=0)
+  - [x] Warmup эмбеддингов: 2 прогонa (limit=1000, limit=5000) → 6000 строк
+    в `game_embeddings` (HNSW индекс активен)
+  - [x] Smoke-test T2 косвенно через ingest: 63 unmatched от parsers'ов
+    обработаны воркером, попали в `skipped` (single candidate < 0.85,
+    или ambiguous без LLM-арбитра). Это **правильное** поведение
+    Circuit Breaker'а — без LLM неоднозначные офферы идут в manual queue.
+
   **Осталось пользователю:**
-  - [ ] `ollama pull bge-m3 && ollama pull qwen2.5:7b-instruct`
-    (Ollama сейчас отдаёт пустой `/api/tags` → T2/T3 skip'аются, async-очередь
-    висит в `pending`. После pull — health-check тикает каждые 30s, поднимает
-    модели в `available=true`, воркер начинает обрабатывать backlog.)
-  - [ ] Warmup embeddings (~1.5–4 ч): `POST /matching/warmup-embeddings`
-    или CLI `python -m catalog.scripts.warmup_embeddings`. Pre-условие —
-    pull моделей. Можно сначала `--limit 1000` для топ-ранкированных,
-    позже полный прогон под `nohup`.
-  - [ ] Smoke-test async-pipeline (после warmup): «Каркасон» с опечаткой
-    из текущей очереди должен сматчиться T2 на >=0.85 cosine similarity.
+  - [ ] `ollama pull qwen2.5:7b-instruct` — повисло на Cloudflare R2 download
+    (~30 мин partial-blobs без прогресса). Pull убит, partials очищены.
+    Повторить вручную в новом терминале: `ollama pull qwen2.5:7b-instruct`.
+    Без неё T3 LLM-арбитр недоступен → неоднозначные T2-кейсы (2+ кандидата
+    score>=0.70) уходят в manual queue вместо auto-resolution.
+  - [ ] Полный warmup эмбеддингов на все 162K игр (под `nohup`, ~1.5–4 ч).
+    Сейчас покрытие 6000 записей — для top-ранкированных игр, не базы целиком.
+  - [ ] Smoke-test T2 single-confident: ingest «Каркасон» с опечаткой,
+    проверить что воркер ловит её через T2 cosine >=0.85 (после полного warmup).
+  - [ ] Smoke-test T3 (после `ollama pull qwen2.5`): ingest нескольких
+    похожих кандидатов, проверить что LLM арбитр выбирает один из них.
 
   **Технический долг (после боя):**
   - Per-store `MatchProfile` override (схема в БД готова, реализация —
