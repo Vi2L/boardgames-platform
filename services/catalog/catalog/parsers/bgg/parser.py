@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from xml.etree import ElementTree as ET
 
 from catalog.parsers.bgg.models import (
@@ -166,6 +167,166 @@ def parse_hot_xml(xml_text: str) -> list[BggHotnessItem]:
     return items
 
 
+# ── BGG <poll> helpers (CAT-6) ────────────────────────────────────────────────
+#
+# В /thing встречается три poll'а: suggested_numplayers (per-count breakdown),
+# suggested_playerage (winning возраст из голосов), language_dependence (1..5).
+# Структура `<result>` плоская в age/lang и вложенная в numplayers — поэтому
+# numplayers идёт собственным парсером, остальные через общий `_poll_winner`.
+
+
+def _age_transform(value: str) -> int | None:
+    """`"21 and up"` → 21; `"8"` → 8; мусор → None.
+
+    BGG отдаёт верхний bucket текстом "21 and up" — обрабатываем как минимальный
+    возраст bucket'а. Прочие нечисловые значения BGG не отдаёт, но безопасно
+    игнорируем.
+    """
+    if not value:
+        return None
+    first_word = value.strip().split()[0]
+    try:
+        return int(first_word)
+    except ValueError:
+        return None
+
+
+def _lang_level_transform(elem: ET.Element) -> int | None:
+    """Извлекает 1..5 из `<result level="N" value="..."/>`.
+
+    BGG language_dependence хранит уровень в атрибуте `level`; `value` — это
+    описательная фраза («Some necessary text...»). Если `level` отсутствует —
+    пробуем распарсить `value` как число (на случай изменения формата).
+    """
+    level = elem.attrib.get("level")
+    if level is not None:
+        try:
+            return int(level)
+        except ValueError:
+            return None
+    val = elem.attrib.get("value", "")
+    try:
+        return int(val)
+    except ValueError:
+        return None
+
+
+def _poll_winner(
+    results: list[ET.Element],
+    value_extractor: Callable[[ET.Element], int | None],
+) -> int | None:
+    """Возвращает значение с максимальным `numvotes`. Tie → min из tied values.
+
+    Пустой список / нулевые голоса → None. Tie-break через `min()` — более
+    «консервативная» рекомендация: при равенстве выбираем меньший возраст и
+    меньший уровень language-dependence.
+    """
+    best_votes = 0
+    winners: list[int] = []
+    for elem in results:
+        try:
+            votes = int(elem.attrib.get("numvotes", "0"))
+        except ValueError:
+            votes = 0
+        if votes <= 0:
+            continue
+        value = value_extractor(elem)
+        if value is None:
+            continue
+        if votes > best_votes:
+            best_votes = votes
+            winners = [value]
+        elif votes == best_votes:
+            winners.append(value)
+    if not winners:
+        return None
+    return min(winners)
+
+
+def _parse_numplayers_poll(item: ET.Element) -> dict[str, dict[str, int]] | None:
+    """Распарсивает `<poll name="suggested_numplayers">` в raw-подсчёты per count.
+
+    Возвращает `{"2": {"best": 100, "recommended": 200, "not_recommended": 50}, "6+": {...}}`.
+    Ключи — строки (включая bucket "6+"). Значения — числа голосов.
+    `None` если poll пустой (totalvotes=0) или отсутствует.
+    """
+    poll = item.find("poll[@name='suggested_numplayers']")
+    if poll is None:
+        return None
+    try:
+        total = int(poll.attrib.get("totalvotes", "0"))
+    except ValueError:
+        total = 0
+    if total <= 0:
+        return None
+
+    out: dict[str, dict[str, int]] = {}
+    # Маппим BGG-метки value="Best" → ключи в нашем JSONB. snake_case в Python,
+    # человеко-читаемые подписи BGG отбрасываем.
+    label_map = {
+        "Best": "best",
+        "Recommended": "recommended",
+        "Not Recommended": "not_recommended",
+    }
+    for results in poll.findall("results"):
+        np = results.attrib.get("numplayers")
+        if not np:
+            continue
+        counts = {"best": 0, "recommended": 0, "not_recommended": 0}
+        for r in results.findall("result"):
+            key = label_map.get(r.attrib.get("value", ""))
+            if key is None:
+                continue
+            try:
+                counts[key] = int(r.attrib.get("numvotes", "0"))
+            except ValueError:
+                pass
+        out[np] = counts
+    return out or None
+
+
+def _parse_age_poll(item: ET.Element) -> int | None:
+    """Возвращает рекомендованный возраст: winning value из `suggested_playerage`.
+
+    `"21 and up"` → 21; tie → min; totalvotes=0 → None.
+    """
+    poll = item.find("poll[@name='suggested_playerage']")
+    if poll is None:
+        return None
+    try:
+        total = int(poll.attrib.get("totalvotes", "0"))
+    except ValueError:
+        total = 0
+    if total <= 0:
+        return None
+    results = poll.findall("results/result")
+    return _poll_winner(
+        results,
+        lambda elem: _age_transform(elem.attrib.get("value", "")),
+    )
+
+
+def _parse_lang_dependence_poll(item: ET.Element) -> int | None:
+    """Возвращает winning level (1..5) из `<poll name="language_dependence">`.
+
+    Tie → min (консервативный выбор «меньше зависимости»). totalvotes=0 → None.
+    """
+    poll = item.find("poll[@name='language_dependence']")
+    if poll is None:
+        return None
+    try:
+        total = int(poll.attrib.get("totalvotes", "0"))
+    except ValueError:
+        total = 0
+    if total <= 0:
+        return None
+    results = poll.findall("results/result")
+    return _poll_winner(results, _lang_level_transform)
+
+
+# ── /thing parser ─────────────────────────────────────────────────────────────
+
+
 def parse_thing_xml(xml_text: str) -> BggGame | None:
     """Парсит ответ BGG XML API на запрос `/thing?id=<bgg_id>&stats=1`.
 
@@ -214,10 +375,15 @@ def parse_thing_xml(xml_text: str) -> BggGame | None:
     image_el = item.find("image")
     thumb_el = item.find("thumbnail")
 
-    # Статистика — внутри `<statistics><ratings>...`.
+    # Статистика — внутри `<statistics><ratings>...`. Расширенные метрики
+    # (users_rated, average_weight, num_weights) приходят при &stats=1 — флаг
+    # включён в `BggClient.fetch_thing` по умолчанию.
     stats = item.find("statistics/ratings")
     rating_avg = _float_attr(stats.find("average") if stats is not None else None)
     rating_bayes = _float_attr(stats.find("bayesaverage") if stats is not None else None)
+    users_rated = _int_attr(stats.find("usersrated") if stats is not None else None)
+    average_weight = _float_attr(stats.find("averageweight") if stats is not None else None)
+    num_weights = _int_attr(stats.find("numweights") if stats is not None else None)
 
     return BggGame(
         bgg_id=bgg_id,
@@ -238,6 +404,12 @@ def parse_thing_xml(xml_text: str) -> BggGame | None:
         mechanics=mechanics,
         rating_avg=rating_avg,
         rating_bayes=rating_bayes,
+        users_rated=users_rated,
+        average_weight=average_weight,
+        num_weights=num_weights,
+        recommended_players=_parse_numplayers_poll(item),
+        recommended_age=_parse_age_poll(item),
+        language_dependence=_parse_lang_dependence_poll(item),
     )
 
 

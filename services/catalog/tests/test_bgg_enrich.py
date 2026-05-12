@@ -31,26 +31,31 @@ FIXTURE_THING = Path(__file__).parent / "fixtures" / "bgg_carcassonne.xml"
 # ---------- pure: _parse_things_xml ----------
 
 def test_parse_things_xml_returns_all_items():
+    """_parse_things_xml возвращает list[tuple[BggGame, sub_xml]] — sub_xml
+    нужен для raw.xml в upsert_bgg_data (CAT-7)."""
     xml = FIXTURE_BATCH.read_text(encoding="utf-8")
-    games = _parse_things_xml(xml)
-    assert len(games) == 2
-    bgg_ids = sorted(g.bgg_id for g in games)
+    entries = _parse_things_xml(xml)
+    assert len(entries) == 2
+    bgg_ids = sorted(g.bgg_id for g, _ in entries)
     assert bgg_ids == [13, 822]
-    titles = {g.title for g in games}
+    titles = {g.title for g, _ in entries}
     assert titles == {"Carcassonne", "Catan"}
+    # sub_xml — корректный XML c одним item (потребляется upsert'ом).
+    for _bgg, sub_xml in entries:
+        assert "<item" in sub_xml
 
 
 def test_parse_things_xml_empty():
-    games = _parse_things_xml('<?xml version="1.0"?><items/>')
-    assert games == []
+    entries = _parse_things_xml('<?xml version="1.0"?><items/>')
+    assert entries == []
 
 
 def test_parse_things_xml_preserves_aliases():
     xml = FIXTURE_BATCH.read_text(encoding="utf-8")
-    games = _parse_things_xml(xml)
-    carc = next(g for g in games if g.bgg_id == 822)
+    entries = _parse_things_xml(xml)
+    carc = next(g for g, _ in entries if g.bgg_id == 822)
     assert "Каркассон" in carc.aliases
-    catan = next(g for g in games if g.bgg_id == 13)
+    catan = next(g for g, _ in entries if g.bgg_id == 13)
     assert "The Settlers of Catan" in catan.aliases
 
 

@@ -100,31 +100,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 `<statistics>`, `<poll>`, `<versions>`, `<link type="boardgamefamily">`
 и `<link type="boardgameartist">` — см. пункты ниже.
 
-- [CAT-5] **BGG XML stats fields в `game_bgg`** — парсер уже извлекает
-  `rating_avg` и `bayes_average` (`parser.py:219-220`), но `upsert_bgg_data`
-  их не пишет (`repository.py:130-145`). В колонке `game_bgg` поля
-  `bayes_average` / `average` уже есть (приходят из CSV-импорта BGG ranks).
-  Добавить: `users_rated` (`<statistics><ratings><usersrated value="N"/>`),
-  `average_weight` (complexity 1-5, поле `<averageweight value="X"/>`),
-  `num_weights`. Источник истины — XML, а не CSV (CSV отстаёт на неделю).
-
-- [CAT-6] **BGG `<poll>` рекомендации** — три poll'а в `/thing`:
-  `suggested_numplayers` (best/recommended/not-recommended per player count),
-  `suggested_playerage` (рекомендуемый возраст по голосам коммьюнити —
-  может отличаться от `minage` от издателя), `language_dependence`
-  (1-5: no necessary in-game text → unplayable in foreign language).
-  Хранить как `recommended_players JSONB`, `recommended_age int`,
-  `language_dependence int` в `game_bgg`. UX-ценность: показывать
-  «лучше всего с 4 игроками» в карточке игры на фронте.
-
-- [CAT-7] **`raw` JSONB blob в `game_bgg`** — сейчас в `upsert_bgg_data`
-  стоит `raw={}` с TODO («на этапе 3 заполним полным XML payload для
-  аудита»). Заполнить полным распарсенным dict из `parse_thing_xml`
-  + raw XML-string в подключе `raw.xml`. Польза: при изменении парсера
-  (новые поля типа [CAT-5]/[CAT-6]) можно re-парсить из БД без
-  повторного запроса к BGG. Размер: ~10-50KB JSONB на игру, на ~30K
-  игр — ~300MB-1.5GB. GIN-индекс не нужен, читаем только по `game_id`.
-
 - [CAT-8] **BGG `/family/{id}` — серии игр + подтягивание всех членов** —
   endpoint возвращает thing-id связанных игр (Catan, Carcassonne, Splendor
   series, Wingspan и т.п.). Реализуется в две стадии:

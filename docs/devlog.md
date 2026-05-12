@@ -8,6 +8,102 @@
 
 ---
 
+## 2026-05-12 · [CAT-6] BGG `<poll>` рекомендации — суг. число игроков, возраст, language dependence
+
+**Что сделано:**
+Парсер `parse_thing_xml` достаёт три poll'а из `/thing` ответа BGG. Логика
+вынесена в helper'ы `_poll_winner`/`_age_transform`/`_lang_level_transform` +
+три специализированных парсера, чтобы каждый кейс тестировался изолированно.
+В `game_bgg` добавлены колонки `recommended_players JSONB` (raw подсчёты per
+player count включая bucket «6+»), `recommended_age INTEGER` (winning value;
+tie → min; «21 and up» → 21), `language_dependence INTEGER` (winning level 1–5).
+`totalvotes=0` → NULL (poll без голосов неинформативен). `GameBggOut` отдаёт
+все три поля наружу.
+
+**Как пользоваться:**
+- Прогнать XML-обогащение: `POST /import/bgg/batch -d '{"rank_le": 100, "skip_recent_days": 0}'`.
+- Проверить: `curl localhost:8002/games/<id> | jq '.bgg | {recommended_players, recommended_age, language_dependence}'`.
+- Структура `recommended_players`: `{"2": {"best": 100, "recommended": 200, "not_recommended": 50}, "6+": {...}}` — фронт сам решает, как презентовать («лучше всего с N игроками», бар-чарт и т.п.).
+- Юниттесты helper'ов: `cd services/catalog && uv run pytest tests/test_bgg_parser.py -v -k poll`.
+
+**Затронутые файлы:**
+- `services/catalog/catalog/parsers/bgg/parser.py` — 4 helper-функции + расширение `parse_thing_xml`.
+- `services/catalog/catalog/parsers/bgg/models.py` — `BggGame` поля `recommended_players`/`recommended_age`/`language_dependence`.
+- `services/catalog/catalog/models.py` — ORM-колонки в `GameBgg`.
+- `services/catalog/catalog/schemas.py` — `GameBggOut` 3 поля.
+- `services/catalog/tests/test_bgg_parser.py` — 11 новых юнит-тестов (включая tie-resolution, "21 and up", totalvotes=0).
+- `services/catalog/tests/fixtures/bgg_carcassonne.xml` — расширена тремя poll'ами.
+
+---
+
+## 2026-05-12 · [CAT-5] BGG XML stats fields в game_bgg — XML как источник истины
+
+**Что сделано:**
+`upsert_bgg_data` теперь записывает `users_rated`, `average_weight` (complexity
+1.00–5.00), `num_weights` из `<statistics><ratings>` BGG XML. Поля
+`bayes_average`/`average`/`users_rated` начинают перезаписываться XML'ом —
+ранее они приходили только из ежемесячной CSV-выгрузки `boardgames_ranks.csv`,
+которая отстаёт от XML на неделю. CSV-импорт (`import_bgg_ranks.py`) перестал
+обновлять эти поля при ON CONFLICT: source/raw/fetched_at/bayes_average/
+average/users_rated исключены из `set_` блока для `game_bgg`, а `source` —
+ещё и из `set_` для `games` (заодно пофиксили pre-existing — CSV откатывал
+`games.source='bgg'` обратно в `'bgg-ranks'`). CSV теперь обновляет только
+rank/is_expansion/subtype_ranks.
+
+Новая колонка `bgg_stats_updated_at TIMESTAMPTZ` помечает момент последнего
+XML-обогащения отдельно от `fetched_at` (который трогается любым upsert'ом).
+
+**Как пользоваться:**
+- После накатывания миграции 0012 запустить XML-обогащение свежей выборки:
+  `POST /import/bgg/batch -d '{"rank_le": 1000, "skip_recent_days": 0}'`.
+- Проверить колонку complexity на фронте: `curl localhost:8002/games/<id> | jq '.bgg.average_weight'`.
+- Список игр с свежей статистикой:
+  `psql -c "SELECT bgg_id, bayes_average, average_weight FROM game_bgg WHERE bgg_stats_updated_at > now() - interval '1 day' ORDER BY rank LIMIT 20"`.
+- При следующем ежемесячном CSV-импорте (`python -m catalog.scripts.import_bgg_ranks ranks.csv`) `source='xml-api'` и raw XML-blob сохранятся.
+
+**Затронутые файлы:**
+- `services/catalog/catalog/parsers/bgg/repository.py` — `upsert_bgg_data` пишет 3 новых поля + перезаписывает bayes/avg/users_rated.
+- `services/catalog/catalog/parsers/bgg/parser.py` — извлечение `users_rated`/`average_weight`/`num_weights`.
+- `services/catalog/catalog/parsers/bgg/models.py` — `BggGame` поля.
+- `services/catalog/catalog/models.py` — ORM-колонки + `bgg_stats_updated_at`.
+- `services/catalog/catalog/schemas.py` — `GameBggOut` поля.
+- `services/catalog/alembic/versions/20260512_1056_bgg_stats_extension.py` — миграция 0012.
+- `services/catalog/catalog/scripts/import_bgg_ranks.py` — узкий ON CONFLICT set_ (только rank/is_expansion/subtype_ranks для game_bgg; убран source из games).
+
+---
+
+## 2026-05-12 · [CAT-7] raw JSONB blob в game_bgg — re-parse без повторного запроса BGG
+
+**Что сделано:**
+`upsert_bgg_data` теперь заполняет `game_bgg.raw` структурой
+`{"parsed": <asdict(BggGame)>, "xml": <raw item XML>}`. До этого там стоял
+`raw={}` с TODO, и в `set_` блок поле вообще не входило — то есть даже при
+повторных XML-обогащениях raw оставался пустым. Теперь `raw` корректно
+перезаписывается на каждом XML-upsert. Сигнатура расширена:
+`upsert_bgg_data(session, bgg, xml_text="")`. `_parse_things_xml` (batch path)
+возвращает `list[tuple[BggGame, str]]`, чтобы прокинуть sub_xml каждой игры
+в upsert. `enrich_one` пробрасывает уже имеющийся xml_text напрямую.
+
+Польза: при изменении парсера (новые поля XML) можно re-парсить из БД без
+повторных rate-limited запросов к BGG. Размер: ~30-50KB JSONB на игру, ~1.5GB
+на полные 30K ranked-игр.
+
+**Как пользоваться:**
+- После XML-обогащения проверить raw для конкретной игры:
+  `psql -c "SELECT jsonb_object_keys(raw), length(raw->>'xml') FROM game_bgg WHERE bgg_id=822"`.
+- Re-parse без BGG-запроса: загрузить `raw->>'xml'` строкой и вызвать
+  `parse_thing_xml(xml_text)` — получите `BggGame` с обновлённой логикой парсера.
+- Аудит конкретного поля без повторного запроса:
+  `psql -c "SELECT raw->'parsed'->>'recommended_age' FROM game_bgg WHERE bgg_id=822"`.
+
+**Затронутые файлы:**
+- `services/catalog/catalog/parsers/bgg/repository.py` — `upsert_bgg_data` сигнатура + заполнение raw + raw в `set_` блоке.
+- `services/catalog/catalog/parsers/bgg/service.py` — `_parse_things_xml` возвращает tuple, `enrich_one`/`enrich_batch` прокидывают xml_text.
+- `services/catalog/tests/test_bgg_repository.py` — новый файл, 4 integration-теста (запись новых полей, idempotency, XML overwrites CSV, CSV не откатывает XML-territory).
+- `services/catalog/tests/test_bgg_enrich.py` — обновлены 3 теста под новую сигнатуру `_parse_things_xml`.
+
+---
+
 ## 2026-05-10 · [CAT-3] BGG Sync UI + GeekList + daily mini-batch + cron editor
 
 **Что сделано:**

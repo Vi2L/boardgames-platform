@@ -132,12 +132,16 @@ async def main(csv_path: str) -> None:
                 return 0
             async with SessionFactory() as session:
                 # 1. Upsert в games через ON CONFLICT (bgg_id) — возвращаем (id, bgg_id).
+                # source НЕ обновляется — иначе CSV-прогон откатил бы поднятый
+                # XML-обогащением 'bgg' обратно на 'bgg-ranks' (см. upsert_bgg_data,
+                # которое эскалирует source через CASE по той же логике, что и Q1
+                # для game_bgg). title/year обновляются — они меняются от
+                # релиза к релизу BGG.
                 games_stmt = pg_insert(Game.__table__).values(games_batch).on_conflict_do_update(
                     index_elements=["bgg_id"],
                     set_={
                         "title": pg_insert(Game.__table__).excluded.title,
                         "year": pg_insert(Game.__table__).excluded.year,
-                        "source": pg_insert(Game.__table__).excluded.source,
                     },
                 ).returning(Game.__table__.c.id, Game.__table__.c.bgg_id)
                 rows = (await session.execute(games_stmt)).all()
@@ -152,18 +156,20 @@ async def main(csv_path: str) -> None:
                     bgg_records.append({"game_id": game_id, **payload})
 
                 if bgg_records:
+                    # На UPDATE обновляем только CSV-метрики. XML-territory поля
+                    # (source='xml-api', raw={parsed,xml}, fetched_at, а также
+                    # bayes_average/average/users_rated — теперь источник истины
+                    # XML, см. CAT-5) НЕ перезаписываем — иначе ежемесячный
+                    # CSV-прогон откатит XML-обогащение. INSERT (новая игра)
+                    # по-прежнему заливает все поля, включая raw={"csv": row}
+                    # и source='csv-ranks' — это корректная стартовая точка
+                    # для пока-не-обогащённой игры.
                     bgg_stmt = pg_insert(GameBgg.__table__).values(bgg_records).on_conflict_do_update(
                         index_elements=["game_id"],
                         set_={
                             "rank": pg_insert(GameBgg.__table__).excluded.rank,
-                            "bayes_average": pg_insert(GameBgg.__table__).excluded.bayes_average,
-                            "average": pg_insert(GameBgg.__table__).excluded.average,
-                            "users_rated": pg_insert(GameBgg.__table__).excluded.users_rated,
                             "is_expansion": pg_insert(GameBgg.__table__).excluded.is_expansion,
                             "subtype_ranks": pg_insert(GameBgg.__table__).excluded.subtype_ranks,
-                            "raw": pg_insert(GameBgg.__table__).excluded.raw,
-                            "source": pg_insert(GameBgg.__table__).excluded.source,
-                            "fetched_at": pg_insert(GameBgg.__table__).excluded.fetched_at,
                         },
                     )
                     await session.execute(bgg_stmt)

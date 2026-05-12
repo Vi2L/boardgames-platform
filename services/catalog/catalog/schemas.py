@@ -88,6 +88,17 @@ class GameBggOut(_ORMBase):
     playtime_max: int | None = None
     image_url: str | None = None
     thumbnail_url: str | None = None
+    # Расширенная статистика (миграция 0012, CAT-5).
+    average_weight: float | None = None  # complexity 1.00–5.00
+    num_weights: int | None = None
+    # BGG <poll> рекомендации (CAT-6). recommended_players — raw подсчёты
+    # per player count; фронт сам решает, как презентовать (best/recommended/
+    # not_recommended counts → бар-чарт или метка «лучше всего с N»).
+    recommended_players: dict[str, dict[str, int]] | None = None
+    recommended_age: int | None = None
+    language_dependence: int | None = None  # 1..5
+    # Timestamp последнего XML-обогащения (CAT-7). NULL — игра только в CSV.
+    bgg_stats_updated_at: datetime | None = None
     source: str | None = None
     fetched_at: datetime
 

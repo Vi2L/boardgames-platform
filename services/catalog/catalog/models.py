@@ -359,7 +359,31 @@ class GameBgg(Base):
     image_url: Mapped[str | None] = mapped_column(Text)
     thumbnail_url: Mapped[str | None] = mapped_column(Text)
 
-    # Аудит и raw
+    # Расширенная статистика BGG XML (миграция 0012, CAT-5). Источник истины
+    # для этих метрик — XML API: CSV-выгрузка не содержит average_weight /
+    # num_weights и отстаёт от XML на ~неделю. CSV перестаёт обновлять
+    # эти поля начиная с 0012 (см. import_bgg_ranks.py — поля исключены
+    # из ON CONFLICT set_).
+    average_weight: Mapped[float | None] = mapped_column(Float)  # complexity 1.00–5.00
+    num_weights: Mapped[int | None] = mapped_column(Integer)
+    # BGG <poll> рекомендации (CAT-6). recommended_players — raw подсчёты
+    # per player count: {"1": {best, recommended, not_recommended}, "6+": {...}}.
+    # Скаляры recommended_age / language_dependence — winning value из голосов
+    # (tie → min). totalvotes=0 → NULL.
+    recommended_players: Mapped[dict[str, dict[str, int]] | None] = mapped_column(JSONB)
+    recommended_age: Mapped[int | None] = mapped_column(Integer)
+    # language_dependence — диапазон 1..5, но используем Integer для консистентности
+    # с остальными числовыми полями game_bgg (rank, users_rated, num_weights).
+    language_dependence: Mapped[int | None] = mapped_column(Integer)
+    # Timestamp последнего XML-обогащения (CAT-7). NULL означает «никогда не
+    # обогащалось через XML API» — игра присутствует только из CSV-выгрузки.
+    # Используется отдельно от `fetched_at` (который трогает любой upsert) для
+    # точной фильтрации «нужно обогатить через XML» в enrich_batch.
+    bgg_stats_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Аудит и raw. Для XML-обогащения raw содержит {"parsed": <asdict(BggGame)>,
+    # "xml": <raw item XML>} — позволяет re-парсить из БД при расширении парсера
+    # без повторных запросов к BGG (rate-limited 1/sec).
     raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
     source: Mapped[str | None] = mapped_column(String(32))  # 'csv-ranks' | 'xml-api'
     fetched_at: Mapped[datetime] = mapped_column(

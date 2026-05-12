@@ -21,6 +21,40 @@
         <link type="boardgamedesigner" id="232" value="Klaus-Jürgen Wrede"/>
         <link type="boardgamepublisher" id="3" value="Hans im Glück"/>
         <link type="boardgamepublisher" id="37" value="Z-Man Games"/>
+        <poll name="suggested_numplayers" title="User Suggested Number of Players" totalvotes="500">
+            <results numplayers="2">
+                <result value="Best" numvotes="100"/>
+                <result value="Recommended" numvotes="200"/>
+                <result value="Not Recommended" numvotes="50"/>
+            </results>
+            <results numplayers="3">
+                <result value="Best" numvotes="250"/>
+                <result value="Recommended" numvotes="100"/>
+                <result value="Not Recommended" numvotes="10"/>
+            </results>
+            <results numplayers="6+">
+                <result value="Best" numvotes="5"/>
+                <result value="Recommended" numvotes="20"/>
+                <result value="Not Recommended" numvotes="300"/>
+            </results>
+        </poll>
+        <poll name="suggested_playerage" title="User Suggested Player Age" totalvotes="200">
+            <results>
+                <result value="6" numvotes="30"/>
+                <result value="8" numvotes="120"/>
+                <result value="10" numvotes="40"/>
+                <result value="21 and up" numvotes="10"/>
+            </results>
+        </poll>
+        <poll name="language_dependence" title="Language Dependence" totalvotes="300">
+            <results>
+                <result level="1" value="No necessary in-game text" numvotes="180"/>
+                <result level="2" value="Some necessary text" numvotes="180"/>
+                <result level="3" value="Moderate" numvotes="20"/>
+                <result level="4" value="Extensive" numvotes="10"/>
+                <result level="5" value="Unplayable in another language" numvotes="5"/>
+            </results>
+        </poll>
         <statistics page="1">
             <ratings>
                 <usersrated value="118000"/>
@@ -31,6 +65,8 @@
                 <ranks>
                     <rank type="subtype" id="1" name="boardgame" friendlyname="Board Game Rank" value="155" bayesaverage="7.32"/>
                 </ranks>
+                <averageweight value="1.89"/>
+                <numweights value="24000"/>
             </ratings>
         </statistics>
     </item>

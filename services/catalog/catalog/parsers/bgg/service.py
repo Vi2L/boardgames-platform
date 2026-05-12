@@ -92,16 +92,17 @@ class EnrichStats:
 ProgressCb = Callable[[int, int, BggGame | None], Awaitable[None]]
 
 
-def _parse_things_xml(xml_text: str) -> list[BggGame]:
-    """Парсит batch-ответ `/thing?id=1,2,3`. Каждый <item> → BggGame.
+def _parse_things_xml(xml_text: str) -> list[tuple[BggGame, str]]:
+    """Парсит batch-ответ `/thing?id=1,2,3`. Каждый <item> → (BggGame, sub_xml).
 
     Зачем не использовать `parse_thing_xml`: тот находит первый `<item>` и
     возвращает один. Здесь нужны все. Логика парсинга одного item'а — уже
     в `parse_thing_xml`, дублировать не хочу: эмитим под-XML на каждый item
-    и переиспользуем его.
+    и переиспользуем его. sub_xml возвращается вторым элементом tuple — он
+    же идёт в `raw.xml` через `upsert_bgg_data` (CAT-7).
     """
     root = ET.fromstring(xml_text)
-    games: list[BggGame] = []
+    games: list[tuple[BggGame, str]] = []
     for item in root.findall("item"):
         # Оборачиваем item в фейковый <items>...</items>, чтобы переиспользовать
         # `parse_thing_xml`, который ожидает root <items>.
@@ -110,7 +111,7 @@ def _parse_things_xml(xml_text: str) -> list[BggGame]:
         sub_xml = ET.tostring(sub, encoding="unicode")
         bgg = parse_thing_xml(sub_xml)
         if bgg is not None:
-            games.append(bgg)
+            games.append((bgg, sub_xml))
     return games
 
 
@@ -141,7 +142,8 @@ async def enrich_one(
     bgg = parse_thing_xml(xml_text)
     if bgg is None:
         return None
-    await upsert_bgg_data(session, bgg)
+    # xml_text идёт в raw.xml для аудита/re-парсинга (CAT-7).
+    await upsert_bgg_data(session, bgg, xml_text)
     return bgg
 
 
@@ -260,12 +262,12 @@ async def enrich_batch(
                 await asyncio.sleep(rate_limit_sec)
             first_batch = False
 
-            # Маппинг bgg_id → got, чтобы понять, что не вернулось.
-            got: dict[int, BggGame] = {}
+            # Маппинг bgg_id → (BggGame, sub_xml). sub_xml нужен для raw.xml (CAT-7).
+            got: dict[int, tuple[BggGame, str]] = {}
             try:
                 xml_text = await client.fetch_things(chunk)
-                for bgg in _parse_things_xml(xml_text):
-                    got[bgg.bgg_id] = bgg
+                for bgg, sub_xml in _parse_things_xml(xml_text):
+                    got[bgg.bgg_id] = (bgg, sub_xml)
             except Exception as exc:  # noqa: BLE001 — fault tolerance
                 logger.exception("BGG batch failed: ids=%s", chunk)
                 # Весь batch проваливается — все его ID идут в errors.
@@ -281,15 +283,16 @@ async def enrich_batch(
             if not dry_run:
                 async with session_factory() as session:
                     for bgg_id in chunk:
-                        bgg = got.get(bgg_id)
+                        entry = got.get(bgg_id)
                         processed += 1
-                        if bgg is None:
+                        if entry is None:
                             stats.skipped += 1
                             if progress_cb is not None:
                                 await progress_cb(processed, total, None)
                             continue
+                        bgg, sub_xml = entry
                         try:
-                            await upsert_bgg_data(session, bgg)
+                            await upsert_bgg_data(session, bgg, sub_xml)
                             stats.enriched += 1
                         except Exception as exc:  # noqa: BLE001
                             logger.exception("upsert failed for bgg_id=%s", bgg_id)
@@ -302,7 +305,8 @@ async def enrich_batch(
                 # dry_run: считаем, что все вернувшиеся были бы обогащены.
                 for bgg_id in chunk:
                     processed += 1
-                    bgg = got.get(bgg_id)
+                    entry = got.get(bgg_id)
+                    bgg = entry[0] if entry is not None else None
                     if bgg is None:
                         stats.skipped += 1
                     else:

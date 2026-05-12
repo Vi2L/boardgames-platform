@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import asdict
 from datetime import datetime, timezone
 
 from sqlalchemy import case, func
@@ -46,17 +47,35 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-async def upsert_bgg_data(session: AsyncSession, bgg: BggGame) -> int:
+async def upsert_bgg_data(
+    session: AsyncSession,
+    bgg: BggGame,
+    xml_text: str = "",
+) -> int:
     """Идемпотентный upsert одной BGG-игры. Возвращает `game_id`.
 
     1. **games** — INSERT or UPDATE по `bgg_id` (UNIQUE). На UPDATE используем
        COALESCE: новое значение применяется только если текущее пусто.
        Так не теряются ручные правки оператора.
 
-    2. **game_bgg** — UPSERT по `game_id` (PK). Полностью перезаписываем
-       поля из XML-API (BGG здесь авторитетный источник). `source='xml-api'`,
-       `fetched_at=now()`. raw на этапе 2 пустой dict; этап 3 (full seed)
-       начнёт заполнять полным XML-blob'ом для аудита.
+    2. **game_bgg** — UPSERT по `game_id` (PK). Полная перезапись XML-полей —
+       BGG здесь источник истины. Сюда же входят `bayes_average`/`average`/
+       `users_rated` (CAT-5: XML свежее CSV, который запаздывает на неделю).
+       CSV-only поля (`rank`, `is_expansion`, `subtype_ranks`) НЕ
+       перезаписываются — они приходят из ежемесячной выгрузки ranks.csv.
+
+       `raw` (CAT-7) хранит `{"parsed": <asdict(BggGame)>, "xml": <raw item XML>}`
+       для аудита и re-парсинга без повторных запросов к BGG. `xml_text=""` —
+       fallback для legacy-вызовов через `routers/imports.py`, где сырой XML
+       не пробрасывается.
+
+       `bgg_stats_updated_at` — timestamp последнего XML-обогащения. Отдельно
+       от `fetched_at`, чтобы CSV-импорт мог обновлять `fetched_at` (если
+       захочет) без сбрасывания признака «обогащено через XML».
+
+       `source='xml-api'` — флаг XML-территории; CSV больше не понижает его
+       обратно до `csv-ranks` (см. `import_bgg_ranks.py` — `source` исключён
+       из ON CONFLICT set_).
 
     3. **game_aliases** — для каждого alternate name `INSERT ON CONFLICT DO
        NOTHING` (на `uq_alias_per_game`). Безопасно для повторных прогонов:
@@ -121,12 +140,20 @@ async def upsert_bgg_data(session: AsyncSession, bgg: BggGame) -> int:
     game_id = (await session.execute(games_stmt)).scalar_one()
 
     # ── 2. game_bgg (satellite) ──────────────────────────────────────────
-    # Полная перезапись XML-полей. ranks (rank/bayes_average/...) НЕ
-    # трогаются — их источник CSV-выгрузка, она уже была применена через
-    # `import_bgg_ranks.py` и обновляется отдельным процессом.
+    # XML — источник истины для всех динамических метрик (CAT-5) + расширенных
+    # полей (CAT-6) + raw blob (CAT-7). НЕ перезаписываются только CSV-only
+    # поля: `rank`, `is_expansion`, `subtype_ranks` — они приходят из ежемесячной
+    # boardgames_ranks.csv через import_bgg_ranks.
+    now = _utcnow()
+    raw_blob = {"parsed": asdict(bgg), "xml": xml_text}
     bgg_insert = pg_insert(bgg_t).values(
         game_id=game_id,
         bgg_id=bgg.bgg_id,
+        # CSV-метрики, которые XML тоже отдаёт — после CAT-5 XML их перезаписывает.
+        bayes_average=bgg.rating_bayes,
+        average=bgg.rating_avg,
+        users_rated=bgg.users_rated,
+        # XML-only поля каталога (этап 2).
         description=bgg.description,
         designers=bgg.designers or None,
         publishers=bgg.publishers or None,
@@ -139,14 +166,26 @@ async def upsert_bgg_data(session: AsyncSession, bgg: BggGame) -> int:
         playtime_max=bgg.playtime_max,
         image_url=bgg.cover_url,
         thumbnail_url=bgg.thumbnail_url,
-        raw={},
+        # Расширенная статистика (CAT-5) — только в XML, CSV их не знает.
+        average_weight=bgg.average_weight,
+        num_weights=bgg.num_weights,
+        # Polls (CAT-6).
+        recommended_players=bgg.recommended_players,
+        recommended_age=bgg.recommended_age,
+        language_dependence=bgg.language_dependence,
+        # Аудит (CAT-7).
+        raw=raw_blob,
+        bgg_stats_updated_at=now,
         source="xml-api",
-        fetched_at=_utcnow(),
+        fetched_at=now,
     )
     bgg_excluded = bgg_insert.excluded
     bgg_stmt = bgg_insert.on_conflict_do_update(
         index_elements=["game_id"],
         set_={
+            "bayes_average": bgg_excluded.bayes_average,
+            "average": bgg_excluded.average,
+            "users_rated": bgg_excluded.users_rated,
             "description": bgg_excluded.description,
             "designers": bgg_excluded.designers,
             "publishers": bgg_excluded.publishers,
@@ -159,10 +198,15 @@ async def upsert_bgg_data(session: AsyncSession, bgg: BggGame) -> int:
             "playtime_max": bgg_excluded.playtime_max,
             "image_url": bgg_excluded.image_url,
             "thumbnail_url": bgg_excluded.thumbnail_url,
-            # raw на этапе 2 не пишем — пустой dict уже стоит. На этапе 3
-            # сюда пойдёт полный XML payload для аудита.
+            "average_weight": bgg_excluded.average_weight,
+            "num_weights": bgg_excluded.num_weights,
+            "recommended_players": bgg_excluded.recommended_players,
+            "recommended_age": bgg_excluded.recommended_age,
+            "language_dependence": bgg_excluded.language_dependence,
+            "raw": bgg_excluded.raw,
+            "bgg_stats_updated_at": bgg_excluded.bgg_stats_updated_at,
             "source": "xml-api",  # не понижаем обратно до csv-ranks
-            "fetched_at": _utcnow(),
+            "fetched_at": bgg_excluded.fetched_at,
         },
     )
     await session.execute(bgg_stmt)
