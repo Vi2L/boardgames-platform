@@ -89,7 +89,9 @@ catalog/
 ```
 games  (canonical, slim + денормализованные внешние ID и локализация РФ)
   ├── game_aliases   (cross-source aliases для матчинга, +language, +verified)
-  ├── game_bgg       (1:1) — BGG: rank, scores, designers, mechanics, raw
+  ├── game_bgg       (1:1) — BGG: rank, scores, designers, mechanics,
+  │                   stats (complexity/num_weights), polls (recommended_*),
+  │                   raw {parsed, xml}
   ├── game_wikidata  (1:1) — labels/aliases/descriptions per language, entity_id
   ├── game_dicefest  (N:1) — публикатор РФ, preorder_price, external_links
   └── (FUTURE) game_tesera
@@ -135,9 +137,16 @@ docker compose exec catalog python -m catalog.scripts.import_bgg_ranks /tmp/boar
 ```
 
 Заливает ~162K записей в `games` + `game_bgg` за ~50 секунд. Идемпотентно
-(`ON CONFLICT (bgg_id) DO UPDATE`). Поля: rank, bayes_average, average,
-users_rated, is_expansion, subtype_ranks. Description/mechanics/designers
-остаются пустыми — для них нужен XML API через `POST /import/bgg`.
+(`ON CONFLICT (bgg_id) DO UPDATE`). При **INSERT** (новая игра): rank,
+bayes_average, average, users_rated, is_expansion, subtype_ranks, source='csv-ranks',
+raw={"csv": row}. При **UPDATE** существующей записи — обновляются только
+`rank`/`is_expansion`/`subtype_ranks` (миграция 0012, CAT-5): XML — источник
+истины для остальных метрик, CSV не понижает source/raw/fetched_at и не
+перетирает свежие данные XML-обогащения.
+
+Description/mechanics/designers/poll'ы и стат-поля (`average_weight`,
+`num_weights`, `recommended_*`, `language_dependence`) остаются пустыми —
+для них нужен XML API через `POST /import/bgg` или batch.
 
 CSV-файл — официальная выгрузка BGG, обновляется ежемесячно. Скачивается
 с https://boardgamegeek.com/data_dumps/bg_ranks (требует BGG-аккаунт).
@@ -165,8 +174,12 @@ curl -X POST 'http://localhost:8002/import/bgg?wait=true' \
   -H 'content-type: application/json' -d '{"bgg_id":822}'
 ```
 
-Скачивает XML, заполняет `game_bgg` `description`/`designers`/`mechanics`/
-`categories`/`min_players` и т.д. По одной игре за вызов (rate-limit BGG).
+Скачивает XML, заполняет `game_bgg`: каталог-поля (`description`/`designers`/
+`mechanics`/`categories`/`min_players`/...), статистику (`bayes_average`/
+`average`/`users_rated`/`average_weight`/`num_weights`), poll'ы
+(`recommended_players` JSONB, `recommended_age`, `language_dependence`),
+raw blob (`{"parsed": <BggGame>, "xml": <item>}`), `bgg_stats_updated_at`.
+По одной игре за вызов (rate-limit BGG).
 
 ### XML API BGG batch — массовое обогащение топ-N (этап 2-3)
 
@@ -207,9 +220,15 @@ curl http://localhost:8002/import/jobs/42 | jq '.progress, .log_lines | last'
   пустые поля (description / designers / players_min/max / age_min / playtime_*
   / cover_url). `source` из `'bgg-ranks'` поднимается до `'bgg'`.
 - **game_bgg** (satellite): полная перезапись XML-полей (description, designers,
-  mechanics, categories, min/max_players, image_url, ...). `source='xml-api'`,
-  `fetched_at=now()` — это resume-state, повторный прогон со
-  `skip_recent_days=30` пропустит недавно обогащённые.
+  mechanics, categories, min/max_players, image_url, ...). С миграции 0012
+  (CAT-5/6/7) дополнительно перезаписываются `bayes_average`/`average`/
+  `users_rated` (XML — источник истины), заполняются `average_weight`,
+  `num_weights`, `recommended_players` JSONB, `recommended_age`,
+  `language_dependence`, `raw = {"parsed": <BggGame>, "xml": <item XML>}`,
+  `bgg_stats_updated_at=now()`. `rank`/`is_expansion`/`subtype_ranks`
+  остаются CSV-territory. `source='xml-api'`, `fetched_at=now()` — это
+  resume-state, повторный прогон со `skip_recent_days=30` пропустит
+  недавно обогащённые.
 - **game_aliases**: alternate names (преимущественно EN) с `source='bgg'`,
   `language='en'`, `verified=False`, ON CONFLICT DO NOTHING на
   `uq_alias_per_game`.

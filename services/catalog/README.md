@@ -147,7 +147,11 @@ curl -X POST 'http://localhost:8002/import/bgg?wait=true' \
   -H 'content-type: application/json' -d '{"bgg_id":822}'
 ```
 
-Заполнит `game_bgg.description/designers/mechanics/categories/min_players/...`.
+Заполнит `game_bgg.description/designers/mechanics/categories/min_players/...`,
+а также статистику (`bayes_average`/`average`/`users_rated`/`average_weight`/
+`num_weights`), poll'ы (`recommended_players` JSONB, `recommended_age`,
+`language_dependence`) и `raw` blob (`{"parsed", "xml"}` — для re-parse без
+повторного запроса). См. devlog 2026-05-12 [CAT-5/6/7].
 
 ## Alembic
 
