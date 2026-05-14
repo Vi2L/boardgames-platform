@@ -12,6 +12,7 @@ from fastapi import FastAPI, HTTPException, Query
 from .browser_client import BrowserClient
 from .catalog_publisher import CatalogPublisher
 from .stores.avito import AvitoParser
+from .stores.avito_qrator import AvitoQratorClient
 from .db import PriceDatabase
 from .service import PriceService
 from .stats_api import router as stats_router
@@ -29,11 +30,12 @@ _db: PriceDatabase
 _service: PriceService
 _catalog_publisher: CatalogPublisher
 _browser_client: BrowserClient | None = None
+_avito_qrator: AvitoQratorClient | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _db, _service, _catalog_publisher, _browser_client
+    global _db, _service, _catalog_publisher, _browser_client, _avito_qrator
 
     db_path = os.getenv("DB_PATH", "data/prices.sqlite")
     ttl = float(os.getenv("CACHE_TTL_HOURS", "4"))
@@ -54,22 +56,26 @@ async def lifespan(app: FastAPI):
     _catalog_publisher.attach_db(_db)
     await _catalog_publisher.start()
 
-    # Browser-as-a-service: создаём до списка парсеров — AvitoParser получает его в конструктор.
+    # Browser-as-a-service: создаётся только если задан URL. После перехода
+    # AvitoParser на L0 (curl-cffi + JSON-endpoint) browser-сервис для авито
+    # уже не требуется — оставлен для будущих парсеров с JS-rendered HTML.
     if browser_url:
         _browser_client = BrowserClient(browser_url)
         import logging
         logging.getLogger(__name__).info("browser_client initialized: %s", browser_url)
     app.state.browser_client = _browser_client
 
+    # AvitoQratorClient — L0 для avito.ru через curl-cffi. Создаём всегда,
+    # один на процесс — внутри пул соединений и кеш `_avisc`.
+    _avito_qrator = AvitoQratorClient()
+
     parsers = [
         HobbyGamesParser(proxy=proxy),
         LavkaIgrParser(proxy=proxy),
         GagaParser(proxy=proxy),
         CrowdGamesParser(proxy=proxy),
+        AvitoParser(qrator_client=_avito_qrator),
     ]
-    # Авито использует browser-as-a-service: добавляем только если он доступен.
-    if _browser_client:
-        parsers.append(AvitoParser(browser_client=_browser_client))
 
     # Регистрируем магазины в БД и подмешиваем _db для SnapshotRecorder.
     # Парсер не зависит от БД для базовой работы; _db нужен только при
@@ -88,6 +94,8 @@ async def lifespan(app: FastAPI):
     await _catalog_publisher.close()
     if _browser_client is not None:
         await _browser_client.close()
+    if _avito_qrator is not None:
+        await _avito_qrator.close()
 
 
 app = FastAPI(title="Board Game Price Parser", lifespan=lifespan)
@@ -318,36 +326,25 @@ async def dlq_delete(dlq_id: int):
         raise HTTPException(status_code=404, detail="DLQ item not found")
 
 
-@app.post("/api/avito/cookies")
+@app.post("/api/avito/cookies", deprecated=True)
 async def upload_avito_cookies(cookies: list[dict]):
-    """Принять куки avito.ru от Chrome-расширения и сохранить в .scratch/avito_cookies.json.
+    """DEPRECATED. Endpoint оставлен временно, чтобы старые установки
+    Chrome-расширения (services/parsers/chrome-extension — теперь в DEPRECATED/)
+    не валились с 404, а получали понятный сигнал.
 
-    Chrome extensions могут читать httpOnly куки (через chrome.cookies API), включая
-    _avisc, который не экспортируется обычными инструментами. Расширение вызывает
-    этот endpoint автоматически при каждом визите на avito.ru.
+    После перехода AvitoParser на L0 (curl-cffi + /web/1/js/items) внешние
+    куки не нужны — `_avisc` берётся изнутри контейнера. См. devlog 2026-05-14.
 
-    После записи файла AvitoParser подхватывает новые куки при следующем поиске
-    (динамический перезагрузчик проверяет mtime файла).
+    Возвращает 410 Gone — рекомендация деинсталлировать расширение.
     """
-    import json as _json
-    cookie_path = os.path.join(".scratch", "avito_cookies.json")
-    os.makedirs(".scratch", exist_ok=True)
-    with open(cookie_path, "w") as f:
-        _json.dump(cookies, f, ensure_ascii=False, indent=2)
-
-    # Notify the AvitoParser instance to reload cookies on next search
-    for p in _service._parsers.values():
-        if hasattr(p, "_cookie_file_mtime"):
-            p._cookie_file_mtime = 0  # force reload
-
-    key_names = {c.get("name") for c in cookies}
-    has_avisc = "_avisc" in key_names
-    return {
-        "received": len(cookies),
-        "has_avisc": has_avisc,
-        "has_v": "v" in key_names,
-        "path": cookie_path,
-    }
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "Endpoint deprecated. AvitoParser получает _avisc через curl-cffi, "
+            "Chrome-расширение больше не требуется — удалите его и сервис "
+            "browser/CHROME_CDP_URL."
+        ),
+    )
 
 
 @app.delete("/api/cache")

@@ -8,6 +8,46 @@
 
 ---
 
+## 2026-05-14 · [AVT-CONT] Avito-парсер: container-only через L0 (curl-cffi + /web/1/js/items)
+
+**Что сделано:**
+AvitoParser перенесён с цепочки «нативный Mac Chrome + chrome-extension +
+browser-service» на L0-стратегию — `curl-cffi` с TLS-импесронацией Chrome 124
+и обращение напрямую к публичному JSON-endpoint avito `/web/1/js/items`,
+который раньше дёргал фронт после CSR-загрузки страницы. Новый модуль
+`services/parsers/parsers/stores/avito_qrator.py` инкапсулирует cookie-jar,
+ротацию `_avisc` (Max-Age=60, refresh ≥50s), retry-with-fresh-session при
+429/403. `AvitoParser` теперь только маппит JSON в `ParsedProduct`.
+Зависимость от хостового браузера убрана: `docker compose --profile full up -d`
+поднимает рабочий парсер без других действий. Chrome-расширение перенесено в
+`services/parsers/DEPRECATED/chrome-extension/`, `POST /api/avito/cookies`
+возвращает 410 Gone. В browser-service удалён режим `CHROME_CDP_URL`,
+из docker-compose убран сервис `chrome-vnc`. PoC-скрипты сохранены в
+`bin/probe_avito_l0*.py`.
+
+**Как пользоваться:**
+- Из коробки: `docker compose --profile full up -d` → `curl --get
+  "http://127.0.0.1:8001/api/debug/parse" --data-urlencode "q=Каркассон"
+  --data-urlencode "stores=avito" --data-urlencode "limit=5"`.
+- Ожидаемая латентность: cold (после простоя >60s) ~2.0–2.5 сек, hot — ~500–700 мс.
+  Метрика видна в `parser_log.search_ms` и в `/dashboard` → Парсеры.
+- Если когда-нибудь сломается endpoint — повторить `bin/probe_avito_l0_xhr.py`:
+  он покажет, отдаёт ли avito JSON и какой именно.
+
+**Затронутые файлы:**
+- `services/parsers/parsers/stores/avito_qrator.py` — новый, L0-клиент с TLS-imp.
+- `services/parsers/parsers/stores/avito.py` — переписан, только маппинг JSON.
+- `services/parsers/parsers/api.py` — `AvitoQratorClient` в lifespan, `AvitoParser`
+  регистрируется всегда, `/api/avito/cookies` → 410.
+- `services/parsers/tests/test_avito_parser.py` — новый, 8 unit-тестов.
+- `services/parsers/DEPRECATED/chrome-extension/` — перенесено + README с откатом.
+- `services/browser/browser/api.py` — удалён CHROME_CDP_URL ветка lifespan.
+- `docker-compose.yml` — убраны env `AVITO_COOKIES`, `CHROME_CDP_URL`, сервис `chrome-vnc`.
+- `.env.example` — упрощён browser-блок, удалён avito-cookies-блок.
+- `bin/probe_avito_l0.py`, `bin/probe_avito_l0_xhr.py` — PoC-скрипты для диагностики.
+
+---
+
 ## 2026-05-12 · [CAT-6] BGG `<poll>` рекомендации — суг. число игроков, возраст, language dependence
 
 **Что сделано:**

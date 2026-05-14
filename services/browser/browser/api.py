@@ -7,14 +7,16 @@
    headless=_CAMOUFOX_HEADLESS использует встроенный Xvfb — скрывает headless-маркеры.
 
 2. **playwright** (fallback) — Playwright Chromium/Chrome. Работает для сайтов
-   без жёсткого bot-detection. Может быть заблокирован Qrator на avito.ru.
+   без жёсткого bot-detection.
 
-Три режима навигации (общие для обоих backend'ов):
+Два режима навигации (общие для обоих backend'ов):
 
 A. **Shared browser** (profile_id не задан) — новый BrowserContext на каждый запрос.
 B. **Persistent profile** (profile_id задан) — один контекст на profile_id,
    cookies/localStorage сохраняются между запросами.
-C. **CDP mode** (CHROME_CDP_URL задан) — подключение к реальному Chrome по CDP.
+
+Примечание: режим CDP к host-Chrome (CHROME_CDP_URL) удалён 2026-05-14
+вместе с уходом AvitoParser на L0 — больше нет сценария, где он был нужен.
 """
 from __future__ import annotations
 
@@ -49,8 +51,6 @@ _PROFILES_DIR = Path(os.getenv("BROWSER_PROFILES_DIR", "/data/profiles"))
 _BROWSER_BACKEND = os.getenv("BROWSER_BACKEND", "camoufox")
 # Только для playwright-fallback: "chrome" или "chromium".
 _BROWSER_CHANNEL: str | None = os.getenv("BROWSER_CHANNEL") or None
-# CDP URL реального Chrome (напр. ws://host.docker.internal:9222).
-_CDP_URL: str | None = os.getenv("CHROME_CDP_URL") or None
 
 # Playwright-only stealth JS (не нужен для camoufox — патчится на C++ уровне).
 _STEALTH_JS = """\
@@ -207,23 +207,12 @@ async def _get_persistent_session(profile_id: str, proxy: str | None) -> _Persis
 async def lifespan(app: FastAPI):
     semaphore = asyncio.Semaphore(_MAX_CONCURRENT)
 
-    if _CDP_URL:
-        # CDP mode: подключаемся к реальному Chrome.
-        # BROWSER_BACKEND игнорируется — всегда используется playwright CDP.
-        pw = await async_playwright().start()
-        import logging
-        logging.getLogger(__name__).info("CDP mode: connecting to %s", _CDP_URL)
-        browser = await pw.chromium.connect_over_cdp(_CDP_URL)
-        app.state.playwright = pw
-        app.state.cam_cm = None
-
-    elif _BROWSER_BACKEND == "camoufox":
+    if _BROWSER_BACKEND == "camoufox":
         # Camoufox shared browser (один Browser, новый context на запрос)
         cam_cm = AsyncCamoufox(headless=_CAMOUFOX_HEADLESS)
         browser = await cam_cm.__aenter__()   # возвращает Browser-совместимый объект
         app.state.playwright = None
         app.state.cam_cm = cam_cm
-
     else:
         # Playwright fallback
         pw = await async_playwright().start()
@@ -236,7 +225,6 @@ async def lifespan(app: FastAPI):
 
     app.state.browser = browser
     app.state.semaphore = semaphore
-    app.state.cdp_mode = bool(_CDP_URL)
 
     yield
 
@@ -248,8 +236,7 @@ async def lifespan(app: FastAPI):
     if app.state.cam_cm:
         await app.state.cam_cm.__aexit__(None, None, None)
     else:
-        if not _CDP_URL:
-            await browser.close()
+        await browser.close()
         if app.state.playwright:
             await app.state.playwright.stop()
 
@@ -323,7 +310,7 @@ async def info(request: Request):
         "profiles_dir": str(_PROFILES_DIR),
         "active_profiles": list(_persistent_sessions.keys()),
     }
-    if _BROWSER_BACKEND == "camoufox" and not _CDP_URL:
+    if _BROWSER_BACKEND == "camoufox":
         result["camoufox"] = pkg_version("camoufox")
     else:
         try:

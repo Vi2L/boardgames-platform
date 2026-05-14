@@ -110,17 +110,13 @@ services:
       # В сети bg catalog доступен по имени сервиса.
       CATALOG_INGEST_URL: http://catalog:8002/ingest/offers
       CATALOG_API_KEY: ${CATALOG_API_KEY:-}
-      # Опциональный browser-as-a-service. Если задан — parsers инициализируют
-      # BrowserClient и вешают его на app.state.browser_client.
-      # Используется при запуске с --profile browser.
+      # Опциональный browser-as-a-service. AvitoParser НЕ требует его
+      # (работает через curl-cffi + публичный JSON /web/1/js/items).
+      # Оставлен как инфра для будущих парсеров с JS-rendered HTML.
       BROWSER_SERVICE_URL: ${BROWSER_SERVICE_URL:-}
-      # Куки Авито из реального браузера (JSON-строка или путь к файлу).
-      # Позволяет обойти Qrator без прокси. См. .env.example для инструкций.
-      AVITO_COOKIES: ${AVITO_COOKIES:-}
     volumes:
       - prices-data:/data
-      # Bind на .scratch (gitignored) — удобно класть avito_cookies.json туда.
-      # Внутри контейнера доступно как /scratch/avito_cookies.json.
+      # Bind на .scratch (gitignored) — для probe-скриптов и временных дампов.
       - ./.scratch:/scratch:ro
     depends_on:
       catalog:
@@ -182,11 +178,9 @@ services:
       # Прокси для всех fetch-запросов.
       BROWSER_PROXY_URL: ${BROWSER_PROXY_URL:-}
       # AMD64 cloud: BROWSER_BACKEND=playwright + BROWSER_CHANNEL=chrome (Chrome в Dockerfile)
-      # ARM64 local: BROWSER_BACKEND=camoufox (Camoufox в Dockerfile) или нативный Mac Chrome
+      # ARM64 local: BROWSER_BACKEND=camoufox (Camoufox в Dockerfile)
       BROWSER_BACKEND: ${BROWSER_BACKEND:-camoufox}
       BROWSER_CHANNEL: ${BROWSER_CHANNEL:-}
-      # CDP к реальному Chrome: ws://host.docker.internal:9222
-      CHROME_CDP_URL: ${CHROME_CDP_URL:-}
       # Директория для persistent профилей (куки/localStorage сохраняются между запросами).
       BROWSER_PROFILES_DIR: /data/profiles
     volumes:
@@ -204,26 +198,6 @@ services:
     networks:
       - bg
     profiles: ["browser"]
-
-  # Опциональный Chrome с noVNC для ручной прогревки сессии Авито.
-  # Запуск: docker compose --profile vnc up -d chrome-vnc
-  # Доступ: http://localhost:7900 (пароль: boardgames)
-  # Сценарий: открыть avito.ru → решить капчу → экспортировать куки через Cookie-Editor
-  # → POST /fetch с cookies=[] для инжекции в camoufox-профиль.
-  chrome-vnc:
-    image: selenium/standalone-chrome:latest
-    container_name: bg-chrome-vnc
-    ports:
-      - "7900:7900"
-      - "4444:4444"
-    environment:
-      SE_VNC_PASSWORD: boardgames
-      SE_SCREEN_WIDTH: 1920
-      SE_SCREEN_HEIGHT: 1080
-    shm_size: 2gb
-    networks:
-      - bg
-    profiles: ["vnc"]
 
 volumes:
   pgdata:
