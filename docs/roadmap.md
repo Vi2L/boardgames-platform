@@ -187,6 +187,15 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,
   пробующий replay'нуть DLQ-записи с экспоненциальным backoff;
   алерт при `attempt_count > 10`.
+- [PRS-3] **Avito L2-fallback через camoufox** — пока L0
+  (curl-cffi + `/web/1/js/items`) даёт 200, fallback не нужен.
+  Завести, если в проде на avito.ru начнётся стабильный поток 429/403:
+  при ошибке L0 переключаться на browser-сервис, который дёргает тот же
+  endpoint через camoufox с накопленным persistent profile. См. devlog
+  2026-05-14 [AVT-CONT].
+- [PRS-4] **Удаление `services/parsers/DEPRECATED/chrome-extension/`** —
+  целевая дата **2026-05-28** (две недели стабильной работы L0). Снять
+  блокер: 14 дней `parser_log` по avito с `success=1 ratio ≥ 95%`.
 
 ### Инфра
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал
@@ -200,9 +209,11 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   (пересобирать только то, что менялось).
 
 ### Известные ограничения (не баги, а константы)
-- **Парсеры — только 4 магазина** (hobbygames, lavkaigr, gaga,
-  crowdgames). Добавление нового — задача на parsers + правка
-  `STORE_LABELS`.
+- **Парсеры — 5 источников** (hobbygames, lavkaigr, gaga,
+  crowdgames, avito). Добавление нового — задача на parsers + правка
+  `STORE_LABELS`. Avito работает через `AvitoQratorClient` (curl-cffi +
+  TLS-impersonation) — это единственный парсер с anti-bot обходом,
+  остальные ходят по обычному HTTP.
 - **Tesera blocked from non-RU IPs** — Cloudflare режет
   `api.tesera.ru`. Решается прокси (см.
   `services/catalog/CLAUDE.md` секция «Tesera — отложено»).
