@@ -5,7 +5,7 @@
 | Папка | Что | Стек | Порт |
 |---|---|---|---|
 | [services/catalog](services/catalog/) | Каталог игр + матчинг офферов | FastAPI · Postgres · SQLAlchemy async · Alembic | 8002 |
-| [services/parsers](services/parsers/) | Парсинг цен 4 магазинов | FastAPI · SQLite · aiosqlite | 8001 |
+| [services/parsers](services/parsers/) | Парсинг цен 6 источников | FastAPI · SQLite · aiosqlite | 8001 |
 | [services/web-test](services/web-test/) | Внутренний debug-портал | FastAPI · React + Vite · SQLite | 8000 |
 
 В будущем:

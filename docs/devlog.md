@@ -8,6 +8,51 @@
 
 ---
 
+## 2026-05-14 · [PRS-WB] Wildberries-парсер (search-only через публичный JSON)
+
+**Что сделано:**
+Новый `WildberriesParser` (`services/parsers/parsers/stores/wildberries.py`) —
+шестой источник цен в сервисе. Использует публичный JSON endpoint
+`search.wb.ru/exactmatch/ru/common/v5/search` (тот же, что дёргает фронт WB),
+один HTTP-запрос → до 100 товаров. Без обогащения со страницы товара
+(минимум HTTP). **Pluggable backend**: `httpx` или `curl-cffi` (TLS-imp
+Chrome 124) — переключение через env `WB_BACKEND` или query-параметр
+`/api/debug/parse?wb_backend=curl-cffi`. Default — `curl-cffi`, потому
+что Angie у WB агрессивнее rate-limit'ит vanilla httpx из DC-IP.
+**Soft twin-search**: один запрос → локальная фильтрация по
+`subjectId=120` («Настольные игры»), при недоборе до limit — добор общей
+выдачей. Retry-once при HTTP 429 (через 2 сек). 14 unit-тестов, full suite
+96/96 ✓. Probe-скрипты `bin/probe_wb*.py` сохранены для диагностики.
+
+**Почему legacy v5, а не v13:** WB v13 теперь — preset-router (возвращает
+shardKey, а не товары), реальные products живут в `catalog.wb.ru` — а тот
+шлёт **403 Forbidden** на любой DC-IP. v5 — legacy без preset-routing,
+возвращает 100 products одним запросом.
+
+**Как пользоваться:**
+- Поиск по умолчанию: `curl --get "http://127.0.0.1:8001/api/debug/parse"
+  --data-urlencode "q=Каркассон" --data-urlencode "stores=wildberries"
+  --data-urlencode "limit=5"` → 5 настолок subjectId=120.
+- Сравнить backends на лету: `?wb_backend=httpx` vs `?wb_backend=curl-cffi`
+  в том же URL.
+- Cold-start ~1–2.5 сек, hot ~500–800 мс (зависит от текущего rate-limit'а
+  WB к контейнеру). При устойчивом 429 после retry — error попадает в
+  `parser_log` и `/dashboard`, остальные парсеры продолжают работать
+  (graceful degradation в `PriceService`).
+
+**Затронутые файлы:**
+- `services/parsers/parsers/stores/wildberries.py` — новый парсер.
+- `services/parsers/parsers/api.py` — регистрация в lifespan, добавлен
+  query-параметр `wb_backend` в `/api/debug/parse`.
+- `services/parsers/tests/test_wildberries_parser.py` — 14 новых unit-тестов.
+- `.env.example` — секция `WB_BACKEND` / `WB_API_VERSION`.
+- `services/parsers/README.md` + `services/parsers/CLAUDE.md` — Wildberries
+  в таблице магазинов и в архитектуре.
+- `bin/probe_wb.py` / `probe_wb2.py` / `probe_wb3.py` / `probe_wb4.py` —
+  диагностические скрипты для ретроспективы.
+
+---
+
 ## 2026-05-14 · [AVT-CONT] Avito-парсер: container-only через L0 (curl-cffi + /web/1/js/items)
 
 **Что сделано:**

@@ -21,6 +21,7 @@ from .stores.crowdgames import CrowdGamesParser
 from .stores.gaga import GagaParser
 from .stores.hobbygames import HobbyGamesParser
 from .stores.lavkaigr import LavkaIgrParser
+from .stores.wildberries import WildberriesParser
 
 # ---------------------------------------------------------------------------
 # Инициализация (один раз при старте)
@@ -75,6 +76,9 @@ async def lifespan(app: FastAPI):
         GagaParser(proxy=proxy),
         CrowdGamesParser(proxy=proxy),
         AvitoParser(qrator_client=_avito_qrator),
+        # WB backend выбирается из env WB_BACKEND (default curl-cffi).
+        # Override на лету — через /api/debug/parse?wb_backend=httpx.
+        WildberriesParser(),
     ]
 
     # Регистрируем магазины в БД и подмешиваем _db для SnapshotRecorder.
@@ -434,6 +438,10 @@ async def debug_parse(
     q: str = Query(..., min_length=1, description="Запрос для парсера"),
     stores: str | None = Query(None, description="Фильтр по магазинам через запятую"),
     limit: int = Query(5, ge=1, le=20),
+    wb_backend: str | None = Query(
+        None,
+        description="Override WildberriesParser backend на этот запрос: 'httpx' | 'curl-cffi'",
+    ),
 ):
     """Запустить парсеры мимо кеша и вернуть сырые ParsedProduct + метрики.
 
@@ -442,7 +450,14 @@ async def debug_parse(
     - НЕ сохраняет товары в products / price_observations
     - НЕ пишет в request_log
     - В parser_log пишет с is_test=1 — все аналитические запросы это исключают
+
+    `wb_backend` — temporary override для WildberriesParser. Создаёт on-the-fly
+    отдельный инстанс с указанным backend'ом, не трогая глобальный
+    `_service._parsers['wildberries']`. Удобно для сравнения httpx vs curl-cffi
+    в Live Test, не требует рестарта контейнера.
     """
+    from .stores.wildberries import WildberriesParser
+
     target_slugs = (
         [s.strip() for s in stores.split(",")] if stores else list(_service._parsers)
     )
@@ -451,6 +466,9 @@ async def debug_parse(
         parser = _service._parsers.get(slug)
         if parser is None:
             return slug, {"error": f"unknown store: {slug}", "products": [], "count": 0}
+        # WB backend override через query param.
+        if slug == "wildberries" and wb_backend in ("httpx", "curl-cffi"):
+            parser = WildberriesParser(backend=wb_backend)
         t0 = time.monotonic()
         try:
             products = await parser.search(q, limit=limit)

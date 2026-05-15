@@ -11,7 +11,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Что доступно через UI (по доменам):
 
-- **Поиск**: SSE через 4 магазина с фильтром out-of-stock и бейджем «не
+- **Поиск**: SSE через 6 источников с фильтром out-of-stock и бейджем «не
   в наличии», бейдж sale (HG `extra.on_sale`), личные программы лояльности
   (HG бонусы до 15% / Лавка % + донор VK) с пересчётом цены и сортировкой,
   колонки Min 30д / Min всё (агрегаты по `price_observations`).

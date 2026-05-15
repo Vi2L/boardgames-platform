@@ -114,9 +114,13 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
            ├─ LavkaIgrParser    (stores/lavkaigr.py)    — работает без ограничений
            ├─ GagaParser        (stores/gaga.py)        — cp1251, работает без ограничений
            ├─ CrowdGamesParser  (stores/crowdgames.py)  — каталог издателя, локальный поиск
-           └─ AvitoParser       (stores/avito.py)       — C2C-объявления;
-                                 L0-обход Qrator через curl-cffi + публичный
-                                 JSON /web/1/js/items (см. stores/avito_qrator.py)
+           ├─ AvitoParser       (stores/avito.py)       — C2C-объявления;
+           │                     L0-обход Qrator через curl-cffi + публичный
+           │                     JSON /web/1/js/items (см. stores/avito_qrator.py)
+           └─ WildberriesParser (stores/wildberries.py) — публичный JSON
+                                 search.wb.ru/.../v5/search; pluggable backend
+                                 (httpx | curl-cffi); локальный фильтр
+                                 subjectId=120 = «Настольные игры»
 ```
 
 **Ключевые модули:**
@@ -190,6 +194,7 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
 - **HobbyGames**: работает с любого IP. URL поиска — `/catalog/search?keyword=`, данные в JSON-LD `ItemList` (не HTML). `players`/`age_min`/`playtime` недоступны в структурированном виде.
 - **CrowdGames**: издатель (не магазин). Весь каталог `/collection/igry-crowd-games` (~167 игр, 8+ страниц). Поиск локальный: обходим все страницы через `data-collection-infinity`, фильтруем по запросу в памяти. Кеш TTL спасает от повторных обходов. `players`/`age_min`/`playtime` недоступны. `enrich_ms` в метриках = None (этапа нет).
 - **Avito (L0-стратегия, 2026-05-14)**: парсер работает **только через `curl-cffi`** с TLS-impersonation Chrome 124 — никакого браузера/Playwright/Camoufox. Запрос идёт прямо в публичный JSON `/web/1/js/items` (тот же, что дёргает фронт avito.ru после CSR-загрузки). Низкоуровневый клиент — `stores/avito_qrator.py:AvitoQratorClient`: держит один `AsyncSession` на процесс, авто-ротация `_avisc` (Max-Age=60s, refresh ≥50s), retry-with-fresh-session при 429/403. Cold-start ~2.0–2.5s, hot ~500–700ms. **Без хост-зависимостей** — chrome-extension перенесён в `DEPRECATED/` (удалить после 2026-05-28), `POST /api/avito/cookies` отдаёт 410 Gone. Если когда-нибудь endpoint сломается — повторить `bin/probe_avito_l0_xhr.py` для diagnostics.
+- **Wildberries (2026-05-14)**: парсер через публичный JSON `search.wb.ru/exactmatch/ru/common/v5/search` — тот же, что дёргает фронт WB. Один HTTP-запрос → 100 items (без pagination). **Pluggable backend** через env `WB_BACKEND=httpx|curl-cffi` (default `curl-cffi` — Angie/WB агрессивно rate-limit'ит DC-IP, TLS-impersonation проходит чаще). Override на лету — query-параметр `?wb_backend=...` в `/api/debug/parse`. WB endpoint v8+ требует preset-routing через `catalog.wb.ru` (тот всегда 403 из Docker) — поэтому используем legacy v5 без preset-redirect. **Soft twin-search**: локальный фильтр `subjectId=120` («Настольные игры»), при недоборе до `limit` — добиваем общей выдачей. Retry-once при HTTP 429 (через 2s). Если сломается — `bin/probe_wb4.py` для диагностики. См. roadmap [PRS-5] про enrichment через `card.wb.ru/cards/v{N}/detail`.
 - **cp1251 (GaGa)**: gaga.ru возвращает тело в cp1251. httpx декодирует автоматически по `Content-Type`. Поисковый запрос нужно кодировать в cp1251 перед percent-encoding: `quote(query.encode('cp1251'))`. В `parser_snapshot` body хранится как BLOB и декодируется по сохранённому `encoding` при выдаче.
 - **SQLite `lower()`**: не поддерживает Unicode → используем `normalized_title` (Python `.lower()`).
 - **Цены в копейках**: `ParsedProduct.price` и `ProductRecord.price` — всегда копейки. `/search` конвертирует в рубли (`price_rub`), `/history` отдаёт сырые копейки (`price`). `/api/debug/parse` возвращает оба формата (`price` + `price_rub`) — для дебага удобно видеть raw.

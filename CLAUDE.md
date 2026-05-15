@@ -16,7 +16,7 @@
 | Папка | Что | Порт | Локальный CLAUDE.md |
 |---|---|---|---|
 | [services/catalog](services/catalog/) | Каталог + матчинг (FastAPI · Postgres · SQLAlchemy async) | 8002 | [services/catalog/CLAUDE.md](services/catalog/CLAUDE.md) |
-| [services/parsers](services/parsers/) | Парсинг 4 магазинов (FastAPI · SQLite · async) | 8001 | [services/parsers/CLAUDE.md](services/parsers/CLAUDE.md) |
+| [services/parsers](services/parsers/) | Парсинг 6 источников (FastAPI · SQLite · async) | 8001 | [services/parsers/CLAUDE.md](services/parsers/CLAUDE.md) |
 | [services/web-test](services/web-test/) | Внутренний debug-портал (FastAPI · React) | 8000 | [services/web-test/CLAUDE.md](services/web-test/CLAUDE.md) |
 
 ## Запуск (канонический способ — Docker)

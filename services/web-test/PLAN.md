@@ -103,8 +103,8 @@ Web-test превратился из тонкой обёртки над `/api/se
 
 ## Известные ограничения
 
-- **Парсеры — только 4 магазина** (hobbygames, lavkaigr, gaga,
-  crowdgames). Добавление нового — задача на parsers, в web-test
+- **Парсеры — 6 источников** (hobbygames, lavkaigr, gaga, crowdgames,
+  avito, wildberries). Добавление нового — задача на parsers, в web-test
   только дополнение `STORE_LABELS` в `frontend/src/lib/stores.ts`.
 - **Tesera blocked from non-RU IPs** — Cloudflare блокирует
   `api.tesera.ru` с большинства не-RU-IP. Import Wizard вкладка Tesera

@@ -10,38 +10,43 @@
  */
 
 export const STORE_LABELS: Record<string, string> = {
-  hobbygames: 'HobbyGames',
-  lavkaigr:   'Лавка игр',
-  gaga:       'GaGa',
-  crowdgames: 'Crowd Games',
-  avito:      'Авито',
+  hobbygames:  'HobbyGames',
+  lavkaigr:    'Лавка игр',
+  gaga:        'GaGa',
+  crowdgames:  'Crowd Games',
+  avito:       'Авито',
+  wildberries: 'Wildberries',
 }
 
 /** Полные домены — для второстепенных мест (ParserCard, tooltip). */
 export const STORE_DOMAINS: Record<string, string> = {
-  hobbygames: 'hobbygames.ru',
-  lavkaigr:   'lavkaigr.ru',
-  gaga:       'gaga.ru',
-  crowdgames: 'crowdgames.ru',
-  avito:      'avito.ru',
+  hobbygames:  'hobbygames.ru',
+  lavkaigr:    'lavkaigr.ru',
+  gaga:        'gaga.ru',
+  crowdgames:  'crowdgames.ru',
+  avito:       'avito.ru',
+  wildberries: 'wildberries.ru',
 }
 
 /** Для бейджа в таблице/Drawer — приглушённые насыщенные тона на тёмном фоне. */
 export const STORE_BADGE_COLORS: Record<string, string> = {
-  hobbygames: 'bg-blue-900/70 text-blue-300',
-  lavkaigr:   'bg-green-900/70 text-green-300',
-  gaga:       'bg-orange-900/70 text-orange-300',
-  crowdgames: 'bg-purple-900/70 text-purple-300',
-  avito:      'bg-teal-900/70 text-teal-300',
+  hobbygames:  'bg-blue-900/70 text-blue-300',
+  lavkaigr:    'bg-green-900/70 text-green-300',
+  gaga:        'bg-orange-900/70 text-orange-300',
+  crowdgames:  'bg-purple-900/70 text-purple-300',
+  avito:       'bg-teal-900/70 text-teal-300',
+  // WB фирменно-фиолетовый, чтобы отличался от crowdgames (purple) — берём rose.
+  wildberries: 'bg-rose-900/70 text-rose-300',
 }
 
 /** Для бордера карточек ParserCard — те же оттенки, но прозрачнее. */
 export const STORE_BORDER_COLORS: Record<string, string> = {
-  hobbygames: 'bg-blue-900/40 border-blue-800',
-  lavkaigr:   'bg-green-900/40 border-green-800',
-  gaga:       'bg-orange-900/40 border-orange-800',
-  crowdgames: 'bg-purple-900/40 border-purple-800',
-  avito:      'bg-teal-900/40 border-teal-800',
+  hobbygames:  'bg-blue-900/40 border-blue-800',
+  lavkaigr:    'bg-green-900/40 border-green-800',
+  gaga:        'bg-orange-900/40 border-orange-800',
+  crowdgames:  'bg-purple-900/40 border-purple-800',
+  avito:       'bg-teal-900/40 border-teal-800',
+  wildberries: 'bg-rose-900/40 border-rose-800',
 }
 
 export function getStoreLabel(slug: string, fallback?: string): string {

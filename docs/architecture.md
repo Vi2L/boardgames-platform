@@ -25,7 +25,7 @@ FastAPI на Python 3.12, async-стек.
 ┌────┴───────────────┐                  ┌───────────┴──────┐
 │  services/parsers  │ ──── HTTP ─────► │ services/web-test│
 │  FastAPI :8001     │   /search etc.   │  FastAPI :8000   │
-│  - 4 магазина      │                  │  + React :5173   │
+│  - 6 источников    │                  │  + React :5173   │
 │  - SQLite (кеш)    │                  │  - debug портал  │
 │  - dashboard       │                  │  - ручной матчинг│
 └────────────────────┘                  └──────────────────┘
@@ -58,8 +58,8 @@ Tesera, Wikidata + ручной ввод) и `Offer` (предложения м�
 
 ### services/parsers (порт 8001)
 
-Сервис парсинга цен. Опрашивает 4 интернет-магазина настольных игр
-(`hobbygames`, `lavkaigr`, `gaga`, `crowdgames`), кеширует результаты в
+Сервис парсинга цен. Опрашивает 6 источников (`hobbygames`, `lavkaigr`,
+`gaga`, `crowdgames`, `avito`, `wildberries`), кеширует результаты в
 SQLite, опционально пушит в catalog через webhook.
 
 **Особенности:**

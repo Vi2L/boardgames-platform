@@ -196,6 +196,12 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [PRS-4] **Удаление `services/parsers/DEPRECATED/chrome-extension/`** —
   целевая дата **2026-05-28** (две недели стабильной работы L0). Снять
   блокер: 14 дней `parser_log` по avito с `success=1 ratio ≥ 95%`.
+- [PRS-5] **WB enrichment через `card.wb.ru/cards/v{N}/detail`** — search
+  даёт только цену/название/бренд/рейтинг. Через `card.wb.ru` доступны
+  characteristics (players, age, playtime, description). Сейчас не делаем
+  потому что (1) `card.wb.ru` блокирует DC-IP жёстче `search.wb.ru` и
+  (2) для MVP цены без характеристик хватает. Завести если возникнет
+  потребность в WB-данных для matching v2 (T2 embeddings).
 
 ### Инфра
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал
@@ -209,11 +215,10 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   (пересобирать только то, что менялось).
 
 ### Известные ограничения (не баги, а константы)
-- **Парсеры — 5 источников** (hobbygames, lavkaigr, gaga,
-  crowdgames, avito). Добавление нового — задача на parsers + правка
-  `STORE_LABELS`. Avito работает через `AvitoQratorClient` (curl-cffi +
-  TLS-impersonation) — это единственный парсер с anti-bot обходом,
-  остальные ходят по обычному HTTP.
+- **Парсеры — 6 источников** (hobbygames, lavkaigr, gaga,
+  crowdgames, avito, wildberries). Добавление нового — задача на parsers +
+  правка `STORE_LABELS`. Avito и Wildberries работают через TLS-impersonation
+  (curl-cffi с `impersonate="chrome124"`) — остальные ходят по обычному HTTP.
 - **Tesera blocked from non-RU IPs** — Cloudflare режет
   `api.tesera.ru`. Решается прокси (см.
   `services/catalog/CLAUDE.md` секция «Tesera — отложено»).

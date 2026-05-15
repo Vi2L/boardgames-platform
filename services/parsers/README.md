@@ -1,6 +1,6 @@
 # Board Game Price Parser
 
-Сервис сравнения цен на настольные игры в российских интернет-магазинах. Парсит 5 источников, кеширует результаты в SQLite и отдаёт REST API для мобильного приложения или веб-фронтенда.
+Сервис сравнения цен на настольные игры в российских интернет-магазинах. Парсит 6 источников, кеширует результаты в SQLite и отдаёт REST API для мобильного приложения или веб-фронтенда.
 
 В составе — встроенный dashboard на `/dashboard`: аналитика, мониторинг парсеров, обозреватель БД и Live Test для отладки.
 
@@ -13,6 +13,7 @@
 | [GaGa.ru](https://gaga.ru) | `gaga` | цена, фото, игроки, возраст, время, рейтинг, галерея, правила PDF, размеры |
 | [Crowd Games](https://www.crowdgames.ru) | `crowdgames` | цена, фото, наличие; весь каталог издателя (~167 игр) |
 | [Авито](https://www.avito.ru) | `avito` | цена, фото, описание, локация, категория (C2C-объявления) |
+| [Wildberries](https://www.wildberries.ru) | `wildberries` | цена, бренд, рейтинг, отзывы (search-only, без обогащения со страницы товара) |
 
 ## Быстрый старт
 
@@ -163,9 +164,12 @@ PriceService  — TTL-кеш per-store, asyncio.gather, graceful degradation
            ├─ LavkaIgrParser     — HTML + og:meta
            ├─ GagaParser         — HTML cp1251 + card-features
            ├─ CrowdGamesParser   — каталог издателя, локальный поиск
-           └─ AvitoParser        — JSON /web/1/js/items через AvitoQratorClient
-                                   (curl-cffi + TLS-impersonation Chrome 124,
-                                    обход Qrator без браузера)
+           ├─ AvitoParser        — JSON /web/1/js/items через AvitoQratorClient
+           │                       (curl-cffi + TLS-impersonation Chrome 124,
+           │                        обход Qrator без браузера)
+           └─ WildberriesParser  — JSON search.wb.ru v5; pluggable backend
+                                   (httpx | curl-cffi); soft twin-search
+                                   по subjectId=120 («Настольные игры»)
 ```
 
 Каждый парсер: (1) страница поиска → базовые поля, (2) страница товара → обогащение (`players`, `age_min`, `playtime`, `rules_url`, `image_url_hd`, `gallery`, …). Search и enrich времена логируются раздельно — видно на /dashboard в табе «Парсеры».
