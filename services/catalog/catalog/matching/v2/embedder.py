@@ -70,6 +70,11 @@ async def embed_one(text: str, *, client: httpx.AsyncClient | None = None) -> li
         embeddings = data.get("embeddings") or []
         if not embeddings or not embeddings[0]:
             raise OllamaError("empty embedding response")
+        # Успешный реальный вызов после half-open probe закрывает Circuit Breaker.
+        # Импорт здесь (не top-level) чтобы embedder не тащил health-singleton на
+        # стадии import — health.py инициализируется в lifespan'е раньше.
+        from catalog.matching.v2.health import OllamaHealth
+        OllamaHealth.get_instance().record_success(settings.ml_embed_model)
         return list(embeddings[0])
     except httpx.ConnectError as e:
         raise OllamaUnavailable(f"connect: {e}") from e

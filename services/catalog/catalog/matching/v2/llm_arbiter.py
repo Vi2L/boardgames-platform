@@ -13,7 +13,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 import httpx
 
@@ -48,56 +47,73 @@ def _format_candidates(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _extract_first_json_object(raw: str) -> dict | None:
+    """Находит первый валидный JSON-объект в строке (даже с markdown-обвязкой).
+
+    Идём по позициям `{` и пробуем `JSONDecoder.raw_decode` от каждой —
+    это автоматически корректно обрабатывает вложенные объекты и пробелы.
+    Старая реализация на regex `\\{.*?\\}` ломалась на вложенных скобках
+    (non-greedy останавливался на первой `}` внутри nested object).
+    """
+    decoder = json.JSONDecoder()
+    pos = 0
+    while True:
+        idx = raw.find("{", pos)
+        if idx == -1:
+            return None
+        try:
+            obj, _end = decoder.raw_decode(raw, idx)
+        except json.JSONDecodeError:
+            pos = idx + 1
+            continue
+        if isinstance(obj, dict):
+            return obj
+        pos = idx + 1
+
+
 def _parse_response(raw: str, valid_ids: set[int]) -> dict | None:
     """Парсит JSON, валидирует структуру.
 
-    1. Прямой json.loads.
-    2. Если invalid: regex поиск {.*} в raw (LLM иногда добавляет markdown).
+    1. Прямой json.loads (быстрый путь — при format='json' Ollama обычно
+       возвращает чистый JSON).
+    2. Fallback: ищем первый валидный JSON-объект через JSONDecoder.raw_decode —
+       работает с markdown-обвязкой и вложенными объектами.
     3. Whitelist game_id — отсекает галлюцинации.
 
     Возвращает dict с обязательными ключами или None.
     """
-    for attempt in range(2):
-        try:
-            data = json.loads(raw)
-        except json.JSONDecodeError:
-            if attempt == 0:
-                # Non-greedy `\{.*?\}` поглощает только первый JSON-объект.
-                # Жадный `.*` поглотит "..." между двумя объектами и даст
-                # invalid JSON. См. code review: edge case при деградации модели.
-                m = re.search(r"\{.*?\}", raw, re.DOTALL)
-                if m:
-                    raw = m.group()
-                    continue
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        data = _extract_first_json_object(raw)
+        if data is None:
             return None
 
-        # Базовая валидация структуры
-        if not isinstance(data, dict):
-            return None
-        gid = data.get("game_id")
-        if gid is not None:
-            try:
-                gid = int(gid)
-            except (TypeError, ValueError):
-                gid = None
-            # Whitelist: LLM не может вернуть несуществующий id
-            if gid is not None and gid not in valid_ids:
-                logger.warning("LLM hallucinated game_id=%s, not in candidates", gid)
-                gid = None
-        data["game_id"] = gid
-
-        kind = data.get("kind")
-        if kind not in ("base", "expansion", "accessory"):
-            data["kind"] = None
-
+    # Базовая валидация структуры
+    if not isinstance(data, dict):
+        return None
+    gid = data.get("game_id")
+    if gid is not None:
         try:
-            data["confidence"] = float(data.get("confidence", 0.0))
+            gid = int(gid)
         except (TypeError, ValueError):
-            data["confidence"] = 0.0
+            gid = None
+        # Whitelist: LLM не может вернуть несуществующий id
+        if gid is not None and gid not in valid_ids:
+            logger.warning("LLM hallucinated game_id=%s, not in candidates", gid)
+            gid = None
+    data["game_id"] = gid
 
-        return data
+    kind = data.get("kind")
+    if kind not in ("base", "expansion", "accessory"):
+        data["kind"] = None
 
-    return None
+    try:
+        data["confidence"] = float(data.get("confidence", 0.0))
+    except (TypeError, ValueError):
+        data["confidence"] = 0.0
+
+    return data
 
 
 async def tier_3_llm(
@@ -157,6 +173,9 @@ async def tier_3_llm(
             if resp.status_code != 200:
                 raise OllamaError(f"http_{resp.status_code}: {resp.text[:200]}")
             content = resp.json().get("message", {}).get("content", "")
+            # Успешный реальный вызов после half-open probe закрывает цепь.
+            from catalog.matching.v2.health import OllamaHealth
+            OllamaHealth.get_instance().record_success(settings.ml_llm_model)
     except (httpx.ConnectError, httpx.TimeoutException) as e:
         raise OllamaUnavailable(f"connect: {e}") from e
 
