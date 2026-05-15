@@ -729,6 +729,38 @@ class SchedulerConfig(Base):
     )
 
 
+class RuntimeFlag(Base):
+    """Хранилище runtime-настроек, которые должны меняться без рестарта
+    (таблица runtime_flags, миграция 0013).
+
+    Семантический сосед `SchedulerConfig` — оба хранят значения, переопределяющие
+    Settings, и обновляются через REST без перезапуска. Отличие: SchedulerConfig
+    специализирован под APScheduler-job'ы, RuntimeFlag — general-purpose bool/int
+    (сейчас единственный потребитель — `ml_enabled` kill-switch для matching v2).
+
+    `Settings` обёрнут в `@lru_cache` per-process, поэтому значение из ENV/`.env`
+    фризится при первом обращении — хот-перезагрузка через Settings невозможна
+    без `cache_clear()` и broadcast по инстансам. RuntimeFlag решает это через БД.
+
+    Схема намеренно минимальная — одна колонка на тип значения. Если завтра
+    понадобится string/int флаг, добавляем `value_str` / `value_int` без
+    миграции данных по существующим ключам.
+
+    Чтение — через `catalog.runtime_flags.is_ml_enabled` / `get_bool` (in-memory
+    TTL-кэш 5 сек, чтобы не бомбить БД на каждый ingest), запись — через
+    `PATCH /admin/runtime-flags/{key}`.
+    """
+
+    __tablename__ = "runtime_flags"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value_bool: Mapped[bool | None] = mapped_column(Boolean)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+    updated_by: Mapped[str | None] = mapped_column(Text)
+
+
 class BggGeeklist(Base):
     """Snapshot'ы BGG GeekList-ов (таблица bgg_geeklists, миграция 0010).
 
@@ -926,6 +958,11 @@ class MatchQueue(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), default=_now,
     )
+    # Момент когда воркер забрал запись через claim_batch (status='processing').
+    # NULL до первого claim. `recover_stuck` использует именно это поле — не
+    # `created_at`, иначе при горячем рестарте только что заклеймленная запись
+    # с давним created_at ошибочно возвращалась бы в pending.
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     processed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     __table_args__ = (

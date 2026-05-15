@@ -362,6 +362,26 @@ class TeseraImportRequest(BaseModel):
     items: list[str | int] | None = None
 
 
+class RuntimeFlagBoolUpdate(BaseModel):
+    """PATCH /admin/runtime-flags/{key} — обновить bool-флаг."""
+
+    value: bool = Field(description="новое значение флага")
+
+
+class RuntimeFlagOut(_ORMBase):
+    """GET /admin/runtime-flags/{key} — текущее состояние флага.
+
+    Наследует `_ORMBase` (`from_attributes=True`) чтобы конструироваться
+    напрямую из ORM-объекта `RuntimeFlag` через `model_validate(row)` —
+    как остальные `*Out`-схемы (см. `SchedulerJobOut`, `GameOut`).
+    """
+
+    key: str
+    value_bool: bool | None
+    updated_at: datetime
+    updated_by: str | None
+
+
 # ---------- ingest от parsers ----------
 # Request-side (IngestRequest, IngestOfferIn) живёт в общем пакете
 # bg_shared.ingest — он же используется publisher'ом в services/parsers.

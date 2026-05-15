@@ -196,15 +196,19 @@ async def ingest_offers(
 
                 # Сохраняем решение в Tier 0 cache: следующий ingest того же
                 # title_raw попадёт в T0 без T1.
-                source_cache = "auto_t1" if result.tier == 1 else "auto_t0"
-                await save_decision(
-                    session,
-                    title_norm=normalize_title(product.title),
-                    game_id=new_game_id,
-                    source=source_cache,
-                    tier=result.tier,
-                    score=new_score,
-                )
+                # При T0 cache hit (`result.tier in (None, 0)`) запись УЖЕ в
+                # match_decisions — не пересохраняем, иначе перезаписали бы
+                # `decided_at` свежим now() и бессрочный manual-decision
+                # стал бы перетираться по auto_t0-семантике.
+                if result.tier == 1:
+                    await save_decision(
+                        session,
+                        title_norm=normalize_title(product.title),
+                        game_id=new_game_id,
+                        source="auto_t1",
+                        tier=result.tier,
+                        score=new_score,
+                    )
 
                 # Аудит-запись.
                 await log_change(

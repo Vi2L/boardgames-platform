@@ -1,22 +1,26 @@
 """APScheduler-job: обрабатывает match_queue (T2 + T3).
 
 Каждые N секунд (Settings.match_worker_interval_sec):
-  1. Если Ollama down — skip cycle (не открываем БД-транзакцию).
-  2. claim_batch(N) с FOR UPDATE SKIP LOCKED — атомарно берём batch.
-  3. Per offer:
+  1. Если `is_ml_enabled() == False` (runtime_flags) — skip cycle.
+  2. Если Ollama down — skip cycle (не открываем БД-транзакцию).
+  3. claim_batch(N) с FOR UPDATE SKIP LOCKED — атомарно берём batch,
+     проставляем claimed_at=now() (используется recover_stuck).
+  4. Per offer:
        a. tier_2_vector — embed + cosine search.
        b. Если matched (score ≥ 0.85, single confident) → finalize_success.
-       c. Если 2+ кандидата ≥ 0.70 → tier_3_llm.
+       c. Если ambiguous (≥2 кандидата ≥ 0.70) → tier_3_llm.
        d. Если LLM matched (confidence ≥ 0.75) → finalize_success.
-       e. Иначе — finalize_skipped (manual queue T4).
-  4. UPDATE offers + INSERT match_log в той же транзакции.
+       e. Если 1 кандидат < auto_threshold (`vec_below_threshold`) → finalize_skipped
+          напрямую, без T3 (один слабый кандидат не стоит вызова LLM).
+       f. Иначе — finalize_skipped (manual queue T4).
+  5. UPDATE offers + INSERT match_log в той же транзакции.
 
 При OllamaError — откатываем batch обратно в pending (с attempts+1, backoff).
 При других exceptions — логируем и помечаем 'failed' (operator вмешается).
 
 Идемпотентность: claim_batch использует FOR UPDATE SKIP LOCKED, race conditions
 не страшны. Если случилась паника между claim и finalize — recover_stuck()
-вернёт записи в pending при следующем старте.
+вернёт записи в pending при следующем старте (по `claimed_at`, не `created_at`).
 """
 from __future__ import annotations
 
@@ -43,6 +47,7 @@ from catalog.matching.v2.queue_repo import (
     finalize_success,
     reschedule_retry,
 )
+from catalog.runtime_flags import is_ml_enabled
 from catalog.models import Offer
 
 logger = logging.getLogger(__name__)
@@ -58,8 +63,10 @@ async def match_worker_job() -> None:
     settings = get_settings()
     health = OllamaHealth.get_instance()
 
-    # Quick exit без открытия БД-транзакции
-    if not settings.ml_enabled:
+    # Quick exit без открытия БД-транзакции.
+    # `is_ml_enabled` читает runtime_flags с TTL 5 сек — оператор может
+    # выключить ML без рестарта сервиса (PATCH /admin/runtime-flags/ml_enabled).
+    if not await is_ml_enabled():
         return
     if not health.is_available_for(settings.ml_embed_model):
         logger.debug("match_worker: bge-m3 down, skip cycle")
@@ -120,8 +127,17 @@ async def _process_one(q, settings, SessionFactory) -> None:
 
         result = t2
 
-        # Если T2 не уверен (несколько близких) — T3 LLM
-        if not t2.matched and t2.candidates and len(t2.candidates) >= 1:
+        # Если T2 ambiguous (≥2 кандидата score ≥ min_score) — нужен T3 LLM
+        # арбитр для выбора одного из них.
+        # `vec_below_threshold` (1 кандидат < auto_threshold) — НЕ запускаем T3:
+        # один слабый кандидат не стоит вызова LLM, отдаём оператору в T4.
+        is_ambiguous = (
+            not t2.matched
+            and t2.reason == "vec_ambiguous"
+            and t2.candidates
+            and len(t2.candidates) >= 2
+        )
+        if is_ambiguous:
             health = OllamaHealth.get_instance()
             if health.is_available_for(settings.ml_llm_model):
                 try:
@@ -141,8 +157,12 @@ async def _process_one(q, settings, SessionFactory) -> None:
                     await session.commit()
                     return
             else:
-                # LLM недоступен — оффер в manual с лучшим T2 кандидатом
-                await finalize_skipped(session, q.id, reason="llm_disabled", score=t2.score)
+                # LLM circuit breaker open — оффер в manual с лучшим T2 кандидатом.
+                # Используем то же значение reason что и для `OllamaUnavailable` /
+                # `_update_offer_unmatched` — иначе оператор видит "llm_disabled"
+                # в queue.error_detail и "llm_unavailable" в offers.match_reason для
+                # одного и того же события, что затрудняет диагностику.
+                await finalize_skipped(session, q.id, reason="llm_unavailable", score=t2.score)
                 await _update_offer_unmatched(
                     session, q.offer_id, "llm_unavailable", tier=2, score=t2.score,
                 )

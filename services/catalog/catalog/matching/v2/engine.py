@@ -24,6 +24,7 @@ from catalog.matching.v2.domain import (
     MatchResult,
     normalize_title,
 )
+from catalog.runtime_flags import is_ml_enabled
 from catalog.matching.v2.tiers import tier_0_cache, tier_1_trgm
 
 logger = logging.getLogger(__name__)
@@ -33,8 +34,10 @@ class MatchEngine:
     """Оркестратор. Не stateless — держит ссылку на OllamaHealth и threshold'ы.
 
     Не singleton: создаётся per-request (через FastAPI Depends) или per-batch
-    в worker'е. Это потому что engine читает actуal Settings (для hot-reload
-    через UI без рестарта сервиса; пока не реализовано, но архитектура готова).
+    в worker'е. Чтения, которые должны hot-reload'иться (`ml_enabled` через
+    `runtime_flags`), делаются непосредственно в `match_sync` через
+    `is_ml_enabled()`. Остальное (`match_t1_auto_threshold` и т.п.) пока
+    зафиксировано на момент создания engine'а — Settings обёрнут lru_cache.
     """
 
     def __init__(self, session: AsyncSession):
@@ -75,8 +78,9 @@ class MatchEngine:
             return t1
 
         # Sync tier'ы не дали уверенного матча. Решаем — нужен ли async.
-        # ML может быть выключен через Settings.ml_enabled (kill switch).
-        if not self.settings.ml_enabled:
+        # ML может быть выключен через runtime_flags.ml_enabled — kill switch
+        # без рестарта (PATCH /admin/runtime-flags/ml_enabled).
+        if not await is_ml_enabled(self.session):
             return MatchResult(
                 game_id=None,
                 tier=t1.tier if t1 else None,
@@ -104,16 +108,22 @@ class MatchEngine:
         self,
         ctx: MatchContext,
     ) -> MatchResult:
-        """Async pipeline: Tier 2 → Tier 3. Вызывается воркером.
+        """Async pipeline: Tier 2 (bge-m3 cosine) → Tier 3 (qwen LLM-арбитр).
 
-        Реализация добавляется в Step 5 (T2) и Step 6 (T3). Stub возвращает
-        unmatched с reason='not_implemented' для обратной совместимости.
+        Используется альтернативно к `worker.py` flow — нужен для тестов
+        и кейсов когда матчинг хочется выполнить в request-pipeline'е без
+        очереди (например, `POST /matching/{offer_id}/reassess` мог бы
+        дёрнуть сюда вместо enqueue).
 
-        После Step 5+6: вернёт MatchResult с tier=2 или 3 при успехе, либо
-        unmatched с reason='ml_unavailable' / 'no_candidates' / 'llm_low_confidence'.
+        Возвращает:
+          - matched MatchResult (tier=2/3) при успехе T2 или T3.
+          - unmatched (`vec_no_candidates`) если pgvector ничего не вернул.
+          - unmatched (`ml_unavailable`) если bge-m3 down.
+          - unmatched (`llm_unavailable`) если bge-m3 ok, но LLM down — у
+            оператора будет T2-кандидат для контекста в manual queue.
+          - результат `tier_3_llm` (matched или `llm_low_confidence`/`llm_no_match`)
+            если T2 был ambiguous.
         """
-        # NOTE: финальная имплементация в catalog/matching/v2/embeddings.py
-        # и llm_arbiter.py — Step 5 и Step 6.
         from catalog.matching.v2.embeddings import tier_2_vector
         from catalog.matching.v2.llm_arbiter import tier_3_llm
         from catalog.matching.v2.health import OllamaHealth

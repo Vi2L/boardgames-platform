@@ -24,6 +24,7 @@ from catalog.routers import ingest as ingest_router
 from catalog.routers import matching as matching_router
 from catalog.routers import parsers as parsers_router
 from catalog.routers import promotion as promotion_router
+from catalog.routers import runtime_flags as runtime_flags_router
 from catalog.routers import scheduler as scheduler_router
 from catalog.routers import sources as sources_router
 from catalog.scheduler import create_scheduler
@@ -109,6 +110,7 @@ def create_app() -> FastAPI:
     app.include_router(matching_router.router)
     app.include_router(parsers_router.router)
     app.include_router(promotion_router.router)
+    app.include_router(runtime_flags_router.router)
     app.include_router(scheduler_router.router)
     app.include_router(sources_router.router)
     return app

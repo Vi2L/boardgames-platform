@@ -88,11 +88,16 @@ async def claim_batch(
     RETURNING — без второго SELECT (защита от stale read при concurrent
     reject через UI).
     """
+    # SET claimed_at=now() — это поле читает `recover_stuck` при старте
+    # сервиса, чтобы отличить «давно лежит в pending» (старый created_at)
+    # от «только что заклеймлено воркером» (свежий claimed_at). Без этой
+    # денормализации recover мог ошибочно возвращать запись в pending.
     rows = (await session.execute(
         text(
             """
             UPDATE match_queue
-            SET status = 'processing'
+            SET status = 'processing',
+                claimed_at = now()
             WHERE id IN (
                 SELECT id FROM match_queue
                 WHERE status = 'pending'
@@ -220,20 +225,31 @@ async def recover_stuck(session: AsyncSession, *, stale_minutes: int = 5) -> int
     Сценарий: воркер упал в середине batch'а — записи остались в 'processing'
     навсегда. Вызывается в lifespan на старте сервиса.
 
-    Учитываем `stale_minutes`: только записи без processed_at старше N минут
-    считаются «зависшими». Это защита от race при двойном старте сервиса
-    (например, hot-restart docker compose) — у текущего воркера могут быть
-    in-flight записи в 'processing', которые ещё валидны.
+    Условие — `claimed_at < now() - N min` (момент когда воркер забрал
+    запись через `claim_batch`), НЕ `created_at`. Раньше использовался
+    created_at, из-за чего запись, давно лежавшая в pending и только что
+    переведённая в processing, ошибочно возвращалась в pending при горячем
+    рестарте → могла обработаться повторно после рестарта.
 
     Через 5 минут любой батч точно завершён (max batch_size=32 × ~3 сек = 96 сек).
+
+    `claimed_at IS NULL` пропускается — это «легаси»-строки из времён до
+    миграции 0013 (`claimed_at` колонки не было). Их безопаснее оставить
+    оператору на разбор, чем перепрогонять без точного timestamp claim'а.
     """
+    # SET claimed_at = NULL вместе с возвратом в pending. Иначе при повторном
+    # старте сервиса recover_stuck снова бы «нашёл» те же строки (status уже
+    # pending, UPDATE не сработает, но всё равно семантический мусор) и
+    # дебаггер не понял бы при просмотре строки — её клеймнул воркер или это
+    # старый recover.
     result = await session.execute(
         text(
             """
             UPDATE match_queue
-            SET status = 'pending'
+            SET status = 'pending', claimed_at = NULL
             WHERE status = 'processing'
-              AND created_at < now() - (:stale || ' minutes')::interval
+              AND claimed_at IS NOT NULL
+              AND claimed_at < now() - (:stale || ' minutes')::interval
             """
         ).bindparams(stale=stale_minutes)
     )
