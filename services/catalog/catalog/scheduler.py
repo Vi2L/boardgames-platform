@@ -346,6 +346,25 @@ def _register_job(
     )
 
 
+def _register_interval_job(
+    scheduler: AsyncIOScheduler,
+    job_id: str,
+    interval_sec: int,
+) -> None:
+    """Симметричный `_register_job` для interval-jobs (ml_health_check,
+    match_worker). Использует прямой runner (`_interval_runner`), а не
+    `_make_cron_job` — interval-jobs не идут через ImportJob-паттерн.
+    """
+    scheduler.add_job(
+        _interval_runner(job_id),
+        IntervalTrigger(seconds=interval_sec, timezone="UTC"),
+        id=job_id,
+        replace_existing=True,
+        max_instances=1,
+        coalesce=True,
+    )
+
+
 async def create_scheduler() -> AsyncIOScheduler:
     """Создаёт и конфигурирует APScheduler на основе `scheduler_configs` в БД.
 
@@ -380,18 +399,10 @@ async def create_scheduler() -> AsyncIOScheduler:
         if cfg.job_id in _INTERVAL_JOBS:
             interval_sec = int(cfg.params.get("interval_sec", 30))
             try:
-                runner = _interval_runner(cfg.job_id)
+                _register_interval_job(scheduler, cfg.job_id, interval_sec)
             except ValueError:
                 logger.error("scheduler: %s — unknown interval runner", cfg.job_id)
                 continue
-            scheduler.add_job(
-                runner,
-                IntervalTrigger(seconds=interval_sec, timezone="UTC"),
-                id=cfg.job_id,
-                replace_existing=True,
-                max_instances=1,
-                coalesce=True,
-            )
             logger.info(
                 "scheduler: %s зарегистрирован (interval=%ds, params=%s)",
                 cfg.job_id, interval_sec, cfg.params,
@@ -451,6 +462,23 @@ async def reload_job_from_db(scheduler: AsyncIOScheduler, job_id: str) -> None:
             logger.info("scheduler: %s удалён (enabled=false)", job_id)
         except Exception:
             pass
+        return
+
+    # Interval-jobs (ml_health_check, match_worker) — отдельная ветка:
+    # CronTrigger тут неприменим (PATCH меняет params.interval_sec, а не cron).
+    # Без этой ветки hot-reload через PATCH /scheduler/jobs/{id} молча игнорировал
+    # бы interval_sec — оставался старый scheduler.add_job из create_scheduler.
+    if cfg.job_id in _INTERVAL_JOBS:
+        interval_sec = int((cfg.params or {}).get("interval_sec", 30))
+        try:
+            _register_interval_job(scheduler, cfg.job_id, interval_sec)
+        except ValueError:
+            logger.error("scheduler: reload %s — unknown interval runner", cfg.job_id)
+            return
+        logger.info(
+            "scheduler: %s reloaded (interval=%ds, params=%s)",
+            cfg.job_id, interval_sec, cfg.params,
+        )
         return
 
     try:

@@ -87,6 +87,16 @@ async def stats(session: AsyncSession = Depends(get_session)) -> dict:
 
     total = sum(r.total for r in by_store)
 
+    # Состояние очереди match_queue (matching v2). Здесь:
+    # - `pending` — ждут воркера (T2/T3).
+    # - `processing` — в работе прямо сейчас.
+    # - `skipped` — ML дошёл до T4 (manual). Эти офферы НЕ всплывают в
+    #   `/matching/queue` сами по себе (тот фильтрует по `offers.match_status`),
+    #   но они существуют в очереди как «отдано оператору». Без этой метрики
+    #   оператор не знал бы что они есть.
+    # - `failed` — исчерпан backoff retry; оператор должен глянуть error_detail.
+    queue_counts = await v2_count_by_status(session)
+
     return {
         "total_unmatched": total,
         "by_store": [
@@ -99,6 +109,13 @@ async def stats(session: AsyncSession = Depends(get_session)) -> dict:
         ],
         "by_bucket": {r.bucket: r.total for r in by_bucket},
         "thresholds": {"auto": 0.6, "candidate": 0.3},
+        "queue": {
+            "pending": queue_counts.get("pending", 0),
+            "processing": queue_counts.get("processing", 0),
+            "skipped": queue_counts.get("skipped", 0),
+            "failed": queue_counts.get("failed", 0),
+            "done": queue_counts.get("done", 0),
+        },
     }
 
 

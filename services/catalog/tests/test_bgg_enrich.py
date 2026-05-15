@@ -128,9 +128,14 @@ async def test_client_fetch_things_handles_202_then_200():
 
 
 def _stub_select_candidates(ids: list[int]):
-    """Хелпер: monkeypatch для `_select_enrich_candidates`, чтобы не ходить в БД."""
+    """Хелпер: monkeypatch для `_select_enrich_candidates`, чтобы не ходить в БД.
 
-    async def _stub(session, *, rank_le, skip_recent_days, limit):
+    `**kwargs` чтобы stub был forward-compatible с новыми селекторами
+    (`year_in`, etc.) — расширение сигнатуры _select_enrich_candidates не
+    должно ломать unit-тесты enrich_batch.
+    """
+
+    async def _stub(session, *, rank_le, skip_recent_days, limit, **_kwargs):
         return list(ids)
 
     return _stub

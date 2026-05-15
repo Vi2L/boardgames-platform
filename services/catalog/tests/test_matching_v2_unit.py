@@ -305,3 +305,119 @@ def test_match_context_minimal():
 def test_pending_status_constant():
     """Используется в queue_repo и tests — должна быть единственной точкой."""
     assert MATCH_STATUS_PENDING == "pending_ml"
+
+
+# ── runtime_flags: TTL-кэш + sentinel-логика ────────────────────────────────
+
+
+class TestRuntimeFlagsCache:
+    """Без БД: проверяем cache-логику get_bool через прямой write в `_cache`.
+
+    Главные точки риска (из ревью):
+      1. Cached `None` ≠ MISS — должен вернуть `default`, не пойти в SELECT.
+      2. Cached `False` ≠ None ≠ MISS — должен вернуть `False`, а не fallback.
+      3. После TTL expiry cache_get возвращает MISS → нужен новый SELECT.
+    """
+
+    def setup_method(self) -> None:
+        # Тест не должен видеть состояние из других тестов / прода.
+        from catalog import runtime_flags as rf
+        rf.reset_for_tests()
+
+    @pytest.mark.asyncio
+    async def test_cached_false_returns_false_not_default(self):
+        """Cached `False` — валидное значение флага, не должен возвращаться default."""
+        from catalog import runtime_flags as rf
+
+        rf._cache.set("ml_enabled", False)
+        # Если cache отработал — БД даже не запрашивается (session=None и
+        # _load_from_db не вызывается, потому что кэш hit).
+        result = await rf.get_bool("ml_enabled", default=True, session=None)
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_cached_none_returns_default(self):
+        """Cached `None` = «строки нет в БД». get_bool возвращает default."""
+        from catalog import runtime_flags as rf
+
+        rf._cache.set("ml_enabled", None)
+        result = await rf.get_bool("ml_enabled", default=True, session=None)
+        assert result is True
+        result_alt = await rf.get_bool("ml_enabled", default=False, session=None)
+        assert result_alt is False
+
+    @pytest.mark.asyncio
+    async def test_miss_after_ttl_expires(self, monkeypatch):
+        """После истечения TTL `get_cached` возвращает `_MISS`, попадаем в БД-путь.
+
+        Симулируем БД-путь через monkeypatch `_load_from_db`, чтобы не требовать
+        живой PG в unit-тесте.
+        """
+        from catalog import runtime_flags as rf
+
+        rf._cache.set("ml_enabled", False)
+        # Сдвигаем expires_at в прошлое — кэш «протух».
+        rf._cache._cache["ml_enabled"].expires_at = 0.0
+
+        async def fake_load(key, session):
+            return True  # БД говорит True
+
+        monkeypatch.setattr(rf, "_load_from_db", fake_load)
+        result = await rf.get_bool("ml_enabled", default=False, session=None)
+        assert result is True  # пришло из «БД», не cached False
+
+    @pytest.mark.asyncio
+    async def test_invalidate_clears_entry(self, monkeypatch):
+        """`_cache.invalidate` сбрасывает ключ → следующий get_bool попадает
+        в DB-путь (а не возвращает cached). Это контракт `set_bool`, который
+        делает invalidate после успешного UPSERT."""
+        from catalog import runtime_flags as rf
+
+        rf._cache.set("ml_enabled", False)
+        rf._cache.invalidate("ml_enabled")
+        assert rf._cache.get_cached("ml_enabled") is rf._MISS
+
+        async def fake_load(key, session):
+            return True
+
+        monkeypatch.setattr(rf, "_load_from_db", fake_load)
+        result = await rf.get_bool("ml_enabled", default=False, session=None)
+        assert result is True
+
+
+# ── OllamaHealth half-open Circuit Breaker ──────────────────────────────────
+
+
+class TestHalfOpenCircuitBreaker:
+    """Проверяем закрытие цепи через `record_success` и half-open пробу
+    после `recovery_timeout`. Без HTTP — только in-memory state.
+    """
+
+    def setup_method(self) -> None:
+        OllamaHealth.reset_for_tests()
+
+    def test_record_success_closes_circuit_after_failures(self):
+        """После 3 failures цепь open. `record_success` (вызывается embedder/llm
+        после успешного HTTP) должен закрыть её без ожидания фонового check()."""
+        h = OllamaHealth.get_instance()
+        for _ in range(3):
+            h._record_failure("bge-m3", "timeout")
+        assert h._status["bge-m3"] is False  # open
+        assert "bge-m3" in h._last_failure_at
+
+        h.record_success("bge-m3")
+        assert h._status["bge-m3"] is True  # closed
+        assert h._failures["bge-m3"] == 0
+        assert "bge-m3" not in h._last_failure_at  # таймер сброшен
+
+    def test_half_open_after_recovery_timeout(self):
+        """Open + прошёл `_recovery_timeout` → `is_available_for` возвращает True
+        (probe). До таймаута — False (закрыто)."""
+        h = OllamaHealth.get_instance()
+        for _ in range(3):
+            h._record_failure("bge-m3", "timeout")
+        assert h.is_available_for("bge-m3") is False  # open, нет probe
+
+        # Сдвигаем last_failure в далёкое прошлое.
+        h._last_failure_at["bge-m3"] = time.time() - h._recovery_timeout - 1
+        assert h.is_available_for("bge-m3") is True  # half-open probe

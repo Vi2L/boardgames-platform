@@ -22,7 +22,12 @@ from catalog.models import MatchDecision
 
 
 def _ttl_days_for(source: str) -> int | None:
-    """Возвращает TTL для записи match_decisions per source. None = бессрочно."""
+    """Возвращает TTL для записи match_decisions per source. None = бессрочно.
+
+    `auto_t0` намеренно отсутствует — T0 cache hit означает что запись уже
+    в кэше, повторное сохранение не имеет смысла. Caller (ingest) пропускает
+    `save_decision` при tier=None / tier=0.
+    """
     settings = get_settings()
     return {
         "manual": None,

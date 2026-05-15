@@ -98,6 +98,26 @@ async def revert_one(
     if log.action == MatchAction.REVERT.value:
         raise ValueError("нельзя revert revert-action")
 
+    # ВАЖНО: читаем offer.title_raw ДО UPDATE — нам нужен title для очистки
+    # match_decisions. Раньше offer.get вызывался ПОСЛЕ UPDATE, и при удалённом
+    # оффере (CASCADE → нет offer) decisions оставались в кэше → T0 продолжал
+    # возвращать «откатанный» матч. Теперь снимаем snapshot title заранее.
+    offer = await session.get(Offer, log.offer_id)
+    cached_title_norm: str | None = None
+    if offer is not None:
+        cached_title_norm = normalize_title(offer.title_raw)
+    else:
+        # Оффер удалён — match_log запись осталась за счёт ON DELETE CASCADE
+        # на FK (это редкость, но возможно при ручном `DELETE FROM offers`).
+        # Решения в decisions очистить не можем (нет title), но remaining
+        # revert-логика всё равно должна выполниться: записать revert_log
+        # для аудита и пометить исходный log как reverted.
+        logger.warning(
+            "revert_one(log_id=%d): offer_id=%d удалён, match_decisions "
+            "не очищаются — T0 cache может содержать устаревший матч",
+            log_id, log.offer_id,
+        )
+
     # Восстанавливаем оффер
     await session.execute(
         update(Offer)
@@ -115,11 +135,10 @@ async def revert_one(
     # при записи в save_decision. Postgres `immutable_unaccent` НЕ эквивалентен
     # NFKD (например, лигатура 'ﬁ' через NFKD → 'fi', через unaccent остаётся);
     # инвалидация по SQL-нормализации могла бы не найти запись.
-    offer = await session.get(Offer, log.offer_id)
-    if offer is not None:
+    if cached_title_norm is not None:
         await session.execute(
             text("DELETE FROM match_decisions WHERE title_norm = :norm")
-            .bindparams(norm=normalize_title(offer.title_raw))
+            .bindparams(norm=cached_title_norm)
         )
 
     # Опциональное удаление alias

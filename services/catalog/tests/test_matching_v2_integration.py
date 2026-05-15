@@ -38,6 +38,7 @@ from catalog.matching.v2.queue_repo import (
     enqueue,
     finalize_skipped,
     finalize_success,
+    recover_stuck,
     reschedule_retry,
 )
 from catalog.matching.v2.tiers import tier_0_cache, tier_1_trgm
@@ -395,6 +396,113 @@ class TestMatchQueue:
         counts = await count_by_status(session)
         assert counts.get("done", 0) == 1
         assert counts.get("pending", 0) == 0
+
+    async def test_claim_batch_sets_claimed_at(self, session: AsyncSession):
+        """`claim_batch` денормализует момент claim'а в `claimed_at` — это
+        источник правды для `recover_stuck` (не `created_at`).
+        """
+        await _seed_game(session)
+        offer = Offer(
+            store_slug="t", external_id="cl1", url="http://x",
+            title_raw="ClaimedAt", match_status="unmatched",
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+
+        await enqueue(
+            session, offer_id=offer.id, store_slug="t",
+            title_raw="ClaimedAt", title_norm="claimedat",
+        )
+        await session.commit()
+
+        # До claim: claimed_at = NULL.
+        row = (await session.execute(
+            select(MatchQueue).where(MatchQueue.offer_id == offer.id)
+        )).scalar_one()
+        assert row.claimed_at is None
+
+        await claim_batch(session, 10)
+        await session.commit()
+
+        # После claim: claimed_at заполнен.
+        await session.refresh(row)
+        assert row.claimed_at is not None
+        assert row.status == "processing"
+
+    async def test_recover_stuck_skips_null_claimed_at(self, session: AsyncSession):
+        """Legacy-строки (claimed_at IS NULL) НЕ подбираются recover_stuck —
+        безопаснее оставить оператору на разбор, чем перепрогонять без точного
+        timestamp claim'а. Это контракт миграции 0013.
+        """
+        await _seed_game(session)
+        offer = Offer(
+            store_slug="t", external_id="leg1", url="http://x",
+            title_raw="Legacy", match_status="unmatched",
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+
+        await enqueue(
+            session, offer_id=offer.id, store_slug="t",
+            title_raw="Legacy", title_norm="legacy",
+        )
+        await session.commit()
+
+        # Симулируем legacy-строку: processing + claimed_at=NULL + старый created_at.
+        await session.execute(text(
+            "UPDATE match_queue SET status='processing', "
+            "claimed_at=NULL, created_at=now() - interval '1 hour' "
+            "WHERE offer_id=:oid"
+        ).bindparams(oid=offer.id))
+        await session.commit()
+
+        recovered = await recover_stuck(session, stale_minutes=5)
+        await session.commit()
+        assert recovered == 0
+
+        row = (await session.execute(
+            select(MatchQueue).where(MatchQueue.offer_id == offer.id)
+        )).scalar_one()
+        assert row.status == "processing"  # не тронут
+
+    async def test_recover_stuck_returns_stale_processing(self, session: AsyncSession):
+        """Записи с claimed_at старше stale_minutes возвращаются в pending,
+        и claimed_at сбрасывается в NULL (чтобы повторный recover не нашёл их).
+        """
+        await _seed_game(session)
+        offer = Offer(
+            store_slug="t", external_id="st1", url="http://x",
+            title_raw="Stuck", match_status="unmatched",
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+
+        await enqueue(
+            session, offer_id=offer.id, store_slug="t",
+            title_raw="Stuck", title_norm="stuck",
+        )
+        await session.commit()
+
+        await claim_batch(session, 1)
+        # Сдвигаем claimed_at в прошлое (10 минут назад при stale_minutes=5).
+        await session.execute(text(
+            "UPDATE match_queue SET claimed_at=now() - interval '10 minutes' "
+            "WHERE offer_id=:oid"
+        ).bindparams(oid=offer.id))
+        await session.commit()
+
+        recovered = await recover_stuck(session, stale_minutes=5)
+        await session.commit()
+        assert recovered == 1
+
+        row = (await session.execute(
+            select(MatchQueue).where(MatchQueue.offer_id == offer.id)
+        )).scalar_one()
+        assert row.status == "pending"
+        assert row.claimed_at is None  # сброшено для семантической чистоты
 
     async def test_reschedule_retry_backoff(self, session: AsyncSession):
         offer = Offer(
