@@ -342,7 +342,12 @@ async def _run_bgg_batch_job(
         buf = LogBuffer(session, job_id=job_id, flush_every_n=100, flush_every_s=2.0)
 
         rank_le = None if payload.all_ranked else payload.rank_le
-        scope = "all-ranked" if payload.all_ranked else f"rank≤{rank_le}"
+        if payload.year_in:
+            scope = f"year∈{payload.year_in}"
+        elif payload.all_ranked:
+            scope = "all-ranked"
+        else:
+            scope = f"rank≤{rank_le}"
         buf.set_progress(phase="starting", current=0, total=0)
         buf.log(
             f"BGG batch enrich: scope={scope} batch_size={payload.batch_size} "
@@ -372,6 +377,7 @@ async def _run_bgg_batch_job(
                 await client.__aenter__()
             stats = await enrich_batch(
                 rank_le=rank_le,
+                year_in=payload.year_in,
                 batch_size=payload.batch_size,
                 skip_recent_days=payload.skip_recent_days,
                 limit=payload.limit,
@@ -438,20 +444,26 @@ async def import_bgg_batch(
 ) -> ImportJobOut:
     """Запустить batch-обогащение catalog'а через BGG XML API.
 
-    Один из `rank_le` / `all_ranked` обязателен. Прогресс пишется в
-    `ImportJob.progress` и `log_lines`, читать через `GET /import/jobs/{id}`.
+    Один из `rank_le` / `all_ranked` / `year_in` обязателен. Прогресс пишется
+    в `ImportJob.progress` и `log_lines`, читать через `GET /import/jobs/{id}`.
 
     `wait=true` — синхронный режим для тестов. В продакшене — fire-and-forget.
     """
-    if payload.rank_le is None and not payload.all_ranked:
+    selectors = [
+        ("rank_le", payload.rank_le is not None),
+        ("all_ranked", payload.all_ranked),
+        ("year_in", bool(payload.year_in)),
+    ]
+    active = [name for name, on in selectors if on]
+    if not active:
         raise HTTPException(
             status_code=400,
-            detail="rank_le или all_ranked обязателен",
+            detail="один из rank_le / all_ranked / year_in обязателен",
         )
-    if payload.rank_le is not None and payload.all_ranked:
+    if len(active) > 1:
         raise HTTPException(
             status_code=400,
-            detail="rank_le и all_ranked взаимоисключают друг друга",
+            detail=f"{', '.join(active)} взаимоисключают друг друга",
         )
 
     job = ImportJob(

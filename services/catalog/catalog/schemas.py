@@ -254,8 +254,12 @@ class BggImportRequest(BaseModel):
 class BggBatchImportRequest(BaseModel):
     """POST /import/bgg/batch — массовое XML-обогащение топ-N или всех ranked игр.
 
-    Ровно один из `rank_le` / `all_ranked` обязателен (валидация — model_validator
+    Ровно один из `rank_le` / `all_ranked` / `year_in` обязателен (валидация —
     в роутере, чтобы 422 был с понятным сообщением).
+
+    `year_in` — выборка по `games.year` (например `[2025, 2026]` для новинок).
+    В отличие от `rank_le` / `all_ranked` включает игры без rank: для свежих
+    выпусков это норма (BGG ranks обновляются раз в месяц).
     """
 
     rank_le: int | None = Field(
@@ -265,6 +269,13 @@ class BggBatchImportRequest(BaseModel):
     all_ranked: bool = Field(
         default=False,
         description="обработать все ranked-игры (~25 минут при rate-limit 1/сек).",
+    )
+    year_in: list[int] | None = Field(
+        default=None,
+        description=(
+            "обработать игры с games.year ∈ списку (включает не-ranked). "
+            "Пример: [2025, 2026] для новинок текущего сезона."
+        ),
     )
     batch_size: int = Field(default=20, ge=1, le=20)
     skip_recent_days: int = Field(

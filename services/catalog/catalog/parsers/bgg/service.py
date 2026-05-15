@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from catalog.db import get_engine
-from catalog.models import GameBgg
+from catalog.models import Game, GameBgg
 from catalog.parsers.bgg.client import THING_BATCH_MAX, BggClient
 from catalog.parsers.bgg.models import BggGame, BggSearchHit
 from catalog.parsers.bgg.parser import parse_search_xml, parse_thing_xml
@@ -159,22 +159,38 @@ async def _select_enrich_candidates(
     rank_le: int | None,
     skip_recent_days: int,
     limit: int | None,
+    year_in: list[int] | None = None,
 ) -> list[int]:
     """Выбирает bgg_id'ы кандидатов на enrich.
 
     Условия:
-      - rank IS NOT NULL (только ranked игры — у несранкованных нет смысла
-        тянуть полный XML на этапе 2)
-      - rank <= rank_le (если задан)
+      - `year_in` задан → выборка через JOIN с games.year ∈ списку.
+        Включает игры без rank (для новинок 2025-2026 это норма — BGG
+        обновляет rank раз в месяц, у свежих изданий его может не быть).
+        Сортировка по rank ASC NULLS LAST.
+      - `year_in` НЕ задан → классическая выборка: rank IS NOT NULL,
+        rank <= rank_le (если задан), сортировка по rank ASC.
       - source IS DISTINCT FROM 'xml-api' OR fetched_at < now() - skip_recent_days
-        (skip_recent_days=0 → не пропускаем недавние, прогон полный)
-
-    Сортировка по rank ASC — топ-N сначала. Это даёт смысл для интерактивного
-    запуска через UI: оператор видит, что популярные игры обогатились первыми.
+        (skip_recent_days=0 → не пропускаем недавние, прогон полный) —
+        общее условие для resume.
     """
-    stmt = select(GameBgg.bgg_id).where(GameBgg.rank.is_not(None)).order_by(GameBgg.rank)
-    if rank_le is not None:
-        stmt = stmt.where(GameBgg.rank <= rank_le)
+    if year_in:
+        # Year-based: JOIN с games, не требуем rank IS NOT NULL.
+        # NULLS LAST в order — чтобы ranked игры пошли первыми, не-ranked в хвосте.
+        stmt = (
+            select(GameBgg.bgg_id)
+            .join(Game, Game.id == GameBgg.game_id)
+            .where(Game.year.in_(year_in))
+            .order_by(GameBgg.rank.asc().nullslast())
+        )
+    else:
+        stmt = (
+            select(GameBgg.bgg_id)
+            .where(GameBgg.rank.is_not(None))
+            .order_by(GameBgg.rank)
+        )
+        if rank_le is not None:
+            stmt = stmt.where(GameBgg.rank <= rank_le)
     if skip_recent_days > 0:
         cutoff = datetime.now(timezone.utc) - timedelta(days=skip_recent_days)
         # Свежие записи ('xml-api', fetched_at >= cutoff) пропускаем.
@@ -191,6 +207,7 @@ async def _select_enrich_candidates(
 async def enrich_batch(
     *,
     rank_le: int | None = None,
+    year_in: list[int] | None = None,
     batch_size: int = THING_BATCH_MAX,
     skip_recent_days: int = 30,
     limit: int | None = None,
@@ -244,6 +261,7 @@ async def enrich_batch(
             candidates = await _select_enrich_candidates(
                 session,
                 rank_le=rank_le,
+                year_in=year_in,
                 skip_recent_days=skip_recent_days,
                 limit=limit,
             )
