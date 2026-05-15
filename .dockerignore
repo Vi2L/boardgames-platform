@@ -32,8 +32,35 @@ services/*/data
 docs
 .claude
 README.md
+**/README.md
+**/CLAUDE.md
 
 # Plan файлы и envs
 .env
 .env.local
 .env.*.local
+
+# --- Тесты ---
+# В production-образах не нужны. Каждый сервис тестируется отдельно.
+**/tests
+
+# --- Скрипты разработчика и временные артефакты ---
+# `.scratch/` (cookies для парсеров, backup-дампы) монтируется как volume
+# в compose, в build context отправлять не нужно — это десятки МБ.
+.scratch
+bin
+*.log
+*.tmp
+
+# --- IDE и OS ---
+.idea
+.vscode
+.DS_Store
+**/.DS_Store
+
+# --- Локальные тулчейн-артефакты ---
+# uv.lock (~450 KB) — пока ни один Dockerfile его не использует
+# (билд идёт через pyproject.toml). Если переходим на reproducible
+# builds через `uv sync --frozen` — эту строку убрать.
+uv.lock
+.python-version
