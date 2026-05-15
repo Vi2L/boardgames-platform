@@ -178,6 +178,148 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [WT-F6.2] **Баннер «admin-функции отключены»** при отсутствии
   `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
 
+**Поиск**
+- [WT-F8] **Log поисковых запросов на странице `/`** — сейчас журнал
+  запросов лежит на `/database` → вкладка «Журнал» (`DatabasePage.tsx:55`,
+  компонент `SearchesTab`, endpoint `/api/db/searches`). На самой странице
+  поиска видны только последние 10 запросов в dropdown'е `SuggestInput`
+  (localStorage через `lib/searchHistory.ts`) — это не журнал, а typeahead.
+
+  *Цель*: открываемая панель/drawer прямо с `/`, чтобы быстро посмотреть
+  свои последние N запросов с метаданными — когда искал, сколько товаров
+  пришло, какие магазины, потраченное время. Это перекрывает потребность
+  «помню что неделю назад искал X и что-то странное приходило, нужно
+  повторить».
+
+  *Объём (minimal)*:
+  - Кнопка «Журнал» рядом с `SearchForm` (icon `History`) → открывает
+    `<SearchLogDrawer>` (по аналогии с `ProductDrawer`).
+  - В drawer: таблица последних 50 поисков из `/api/db/searches` —
+    колонки `query` / `когда` / `results_count` / `duration_ms`
+    (если есть в schema; иначе добавить в `db_local.local_searches`).
+  - Клик по строке → пре-заполняет `SearchForm` тем же query и
+    запускает поиск (через Zustand `useSearchStore.setQuery + submit`).
+  - Поиск по тексту запросов (debounced, через query-param `?query=`
+    в `/api/db/searches` — уже поддерживается, см. `db.py:101`).
+
+  *Объём (nice-to-have, по согласованию)*:
+  - Группировка по дню («Сегодня», «Вчера», «На этой неделе»).
+  - Фильтр по магазину (если в `local_searches` появится колонка
+    `stores_json` или `result_stores`).
+  - Inline-метрика «retry рейт»: процент запросов где какой-то стор
+    вернул ошибку (полезно для дебага парсеров).
+
+  *Что НЕ делать*:
+  - Не дублировать `/database` → `SearchesTab` полностью. Drawer — это
+    «быстрый доступ», полная таблица с пагинацией остаётся там.
+  - Не убирать dropdown typeahead с localStorage — он работает мгновенно
+    без сетевого запроса и нужен на фокусе input'а.
+
+**Парсеры / Debug**
+- [WT-F9] **Убрать пункт «Парсеры» из сайдбара** — `/parsers` сейчас
+  показывает 6 карточек `<ParserCard>` с двумя действиями: «Запустить»
+  (`POST /parsers/{slug}/run`) и trash (`DELETE /parsers/cache`).
+  Функциональность дублирует:
+  - Live Test (`/debug` → таб «Live Test») — ручной прогон парсера
+    мимо кеша с raw `ParsedProduct`.
+  - Источники (`/sources/{provider}`) — это «новый дом» для
+    диагностики per-source (видно в App.tsx:13,27).
+
+  *План*:
+  - Удалить запись из `NAV` в `App.tsx:22`. `<Route path="/parsers">`
+    оставить ещё одну итерацию (deep-link через bookmark'и) с
+    `<Navigate to="/sources" replace>` либо с баннером
+    «страница переехала на /sources». Через 2-3 недели — удалить роут
+    и `ParsersPage.tsx`.
+  - Action «Очистить кеш» (Trash) — перенести в `/debug` или в
+    `/sources/{provider}` как отдельную кнопку «Invalidate cache»
+    рядом с Live Test. Это единственное действие, которого нет ни в
+    Debug, ни в Sources.
+  - Бейдж «parsers API доступен/ошибка» — уже частично есть в
+    `HealthBadge` (сайдбар внизу), дублировать не нужно.
+
+  *Риск*: кто-то ходит по `/parsers` из закладок → редирект + toast
+  «страница переехала», лог события в `console.info` для отлова.
+
+- [WT-F10] **Аудит функциональности `/debug` и план расширения** —
+  пройти по 5 текущим табам (Live Test / Сравнить / По URL / Контракт
+  / Raw HTTP) и проверить:
+  - Каждый таб реально нужен, нет dead-кода после слияния `/parsers`
+    в Debug (если WT-F9 заехал).
+  - Все endpoints `/api/debug/*` (`app/api/debug.py`) имеют UI;
+    нет «orphan endpoints» без потребителя.
+  - Контракт-валидатор покрывает все 6 парсеров (heatmap field-coverage
+    не отстал от новых полей `extra.on_sale`, `extra.in_stock`).
+
+  *Кандидаты на добавление* (накинуть и решить):
+  - **Replay по `parser_log`** — выбрать запись из истории парсера
+    (table `parser_log` в parsers-БД), переиграть запрос на текущей
+    версии кода, посмотреть diff с записанным результатом. Закрывает
+    кейс «магазин поменял HTML, что именно у нас сломалось».
+  - **Прогон по списку URL** — массовый Live Test (загрузить CSV
+    из 50 URL'ов одного магазина, посмотреть field-coverage и тайминги
+    на батче). Сейчас «По URL» — только 1 URL за раз.
+  - **TLS-impersonation profile picker** — для curl-cffi парсеров
+    (avito, wildberries) — переключатель `impersonate="chrome124"` /
+    `safari17` / `firefox120` в Live Test, чтобы быстро проверить
+    как меняется ответ при смене JA3.
+  - **HTTP request recorder & replay** — записать сессию curl-cffi
+    (headers + cookies + JA3) в фикстуру `tests/fixtures/<store>/`,
+    повторить в pytest. Сейчас это делается руками с raw-снепшотами.
+  - **Diff двух snapshot'ов** — есть для тестов (`/testing/diff`),
+    добавить в Debug кнопку «сравнить с snapshot N дней назад»
+    прямо из Raw HTTP таба.
+  - **Headless rate-limit tester** — серия запросов с разным интервалом,
+    графики 200/429/403 по времени. Помогает калибровать
+    `_get_with_backoff` для парсеров.
+
+  *Не входит*: переезд `/sources` в `/debug` — это разные домены
+  (источники = «что подключено», debug = «как это диагностировать»).
+
+**BGG Sync UI**
+- [WT-F7] **Удобное редактирование всех настроек BGG Sync** —
+  на `/bgg-sync` сейчас редактируются только `cron_expr` + `enabled`
+  + сырая JSON-строка `params` (`SchedulerHealth.tsx:CronEditor`).
+  Остальные настройки разбросаны: BGG bearer token и
+  `BGG_FAMILY_CASCADE_ENABLED` — только через ENV/Settings,
+  Hotness/GeekList запускаются без явного UI для расписания
+  обновления. Цель — единая «панель настроек» вкладки.
+
+  *Объём* (что должно стать редактируемым из UI):
+  - Per-job динамическая форма вместо textarea с JSON. Источник схемы —
+    JOB_METADATA registry на бэке (`services/catalog/.../scheduler/jobs.py`):
+    добавить `params_schema: list[FieldSpec]` (тип, default, label,
+    description, validation), endpoint `/api/scheduler/jobs/{id}/schema`
+    или включить schema в payload `fetchSchedulerJobs`. Рендер —
+    `<SchemaForm fields={...}>` с типами `int`/`bool`/`string`/`enum`/
+    `cron`. Эта же схема валидирует payload в `rescheduleJob`.
+  - Cron-builder помимо raw expr: пресеты («каждый час», «ежедневно
+    в HH:MM UTC», «по воскресеньям 05:00 UTC») + human-readable preview
+    («Раз в неделю, воскресенье 05:00 UTC → следующий запуск …»).
+    Библиотека-кандидат: `cronstrue` (lightweight, i18n включает RU).
+  - Global Settings-секция в шапке вкладки: BGG bearer token (masked),
+    `BGG_FAMILY_CASCADE_ENABLED` toggle, rate-limit (req/sec) для cascade.
+    Бэк: расширить `/api/settings` (catalog) под whitelist BGG-ключей,
+    UI — отдельная карточка `<BggGlobalSettings>` сверху над списком job'ов.
+  - Bulk actions: «pause all», «resume all», «trigger all overdue»
+    (когда `next_run_at < now() - cron-interval`).
+
+  *Не входит*: миграция Hotness/GeekList панелей под общую форму —
+  они уже имеют собственные триггеры (`HotnessPanel.tsx`,
+  `GeeklistPanel.tsx`); им добавится только blok «расписание»
+  если эти job'ы появятся в `JOB_METADATA`.
+
+  *Зависимости*: CAT-8/CAT-9/CAT-10 добавят новые job'ы
+  (`bgg_family_refresh`, `bgg_yearly_releases`) с нетривиальными
+  параметрами — без schema-driven формы каждый из них принесёт
+  правку фронта руками. Делать WT-F7 **до** ландинга CAT-10
+  выгоднее, чем потом ретрофитить три формы сразу.
+
+  *Риски*: schema-driven формы соблазняют переусложнить (валидация
+  cross-field, conditional fields). Держаться минимума: тип + label
+  + description + default + simple required-flag. Cross-field
+  валидация — на бэке в момент `rescheduleJob`.
+
 **Технический долг**
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка
   invalidate для cache-keys одного домена вместо ручного
