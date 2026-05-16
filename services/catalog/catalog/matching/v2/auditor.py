@@ -72,6 +72,51 @@ async def log_change(
     return log.id
 
 
+_PROGRESS_ACTIONS = (
+    MatchAction.T2_PROGRESS.value,
+    MatchAction.T3_PROGRESS.value,
+)
+
+
+async def log_progress(
+    session: AsyncSession,
+    *,
+    offer_id: int,
+    action: MatchAction,
+    tier: int,
+    payload: str,
+    score: float | None = None,
+    performed_by: str = "worker",
+) -> int:
+    """Записывает прогресс-строку в match_log БЕЗ изменения offer'а.
+
+    Используется воркером для отображения промежуточных стадий T2/T3 в UI
+    Штучного матчинга (live-stages). Не меняет offers.game_id / match_status.
+    `payload` — текстовое описание (например JSON с топ-кандидатами), пишется
+    в `reason` (text). `tier` — 2 для T2_PROGRESS, 3 для T3_PROGRESS.
+
+    Revert этих записей запрещён — `revert_one` отказывает с ValueError.
+    """
+    if action not in (MatchAction.T2_PROGRESS, MatchAction.T3_PROGRESS):
+        raise ValueError(f"log_progress: action {action} не является progress-action")
+    log = MatchLog(
+        offer_id=offer_id,
+        action=action.value,
+        prev_game_id=None,
+        new_game_id=None,
+        prev_status=None,
+        # Progress не меняет статус — но колонка NOT NULL, пишем 'progress' как marker.
+        new_status="progress",
+        tier=tier,
+        score=score,
+        reason=payload,
+        performed_by=performed_by,
+    )
+    session.add(log)
+    await session.flush()
+    return log.id
+
+
 async def revert_one(
     session: AsyncSession,
     log_id: int,
@@ -97,6 +142,9 @@ async def revert_one(
         raise ValueError(f"match_log.id={log_id} already reverted at {log.reverted_at}")
     if log.action == MatchAction.REVERT.value:
         raise ValueError("нельзя revert revert-action")
+    if log.action in _PROGRESS_ACTIONS:
+        # T2/T3 progress-entries — не изменения offer'а, revert бессмысленен.
+        raise ValueError(f"нельзя revert progress-action ({log.action})")
 
     # ВАЖНО: читаем offer.title_raw ДО UPDATE — нам нужен title для очистки
     # match_decisions. Раньше offer.get вызывался ПОСЛЕ UPDATE, и при удалённом

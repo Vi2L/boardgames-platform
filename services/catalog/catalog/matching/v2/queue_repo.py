@@ -264,6 +264,153 @@ async def count_pending(session: AsyncSession) -> int:
     return int(row)
 
 
+async def depth_history(
+    session: AsyncSession,
+    *,
+    range_hours: int = 24,
+    bucket_minutes: int = 60,
+) -> dict:
+    """Pending-depth по bucket'ам за последние N часов.
+
+    Возвращает {points: [{ts, pending, processing}], current, peak, drainage_rate_per_min}.
+
+    Реализация — приблизительная: точная история глубины очереди не сохраняется
+    (нет snapshot-таблицы), поэтому реконструируем по `match_queue` строкам:
+      - `created_at` — когда запись попала в очередь.
+      - `processed_at` — когда воркер её завершил.
+    Для каждого bucket b считаем COUNT WHERE created_at <= b AND
+    (processed_at IS NULL OR processed_at > b) AND status != 'skipped'-historic.
+    Это аппроксимация: длинные skipped после processed_at не учитываются как
+    «снято с очереди в момент processed_at», что близко к истине.
+
+    Для production-grade точности нужна отдельная таблица snapshot'ов (cron-job
+    раз в минуту пишет 5 чисел). Этот endpoint — fallback пока её нет.
+
+    `drainage_rate_per_min` — простой diff между последним и предпоследним bucket'ом
+    делённый на bucket_minutes; отрицательный = очередь растёт.
+    """
+    # Генерируем bucket-сетку через generate_series. Каждый bucket представлен
+    # его правой границей (момент времени, на который мы измеряем глубину).
+    sql = """
+        WITH buckets AS (
+            SELECT generate_series(
+                date_trunc('minute', now() - (:hours || ' hours')::interval),
+                date_trunc('minute', now()),
+                (:bucket_min || ' minutes')::interval
+            ) AS ts
+        )
+        SELECT
+            b.ts,
+            COUNT(*) FILTER (
+                WHERE q.created_at <= b.ts
+                  AND (q.processed_at IS NULL OR q.processed_at > b.ts)
+                  AND (q.status = 'pending' OR (q.status = 'processing' AND q.claimed_at <= b.ts))
+            ) AS depth
+        FROM buckets b
+        LEFT JOIN match_queue q ON true
+        GROUP BY b.ts
+        ORDER BY b.ts ASC
+    """
+    rows = (await session.execute(
+        text(sql).bindparams(hours=range_hours, bucket_min=bucket_minutes)
+    )).mappings().all()
+
+    points = [{"ts": r["ts"].isoformat(), "depth": int(r["depth"])} for r in rows]
+    depths = [p["depth"] for p in points]
+    current = depths[-1] if depths else 0
+    peak = max(depths) if depths else 0
+    drainage = 0.0
+    if len(depths) >= 2 and bucket_minutes > 0:
+        # depths[-2] → depths[-1]: положительный drainage = снижение (хорошо)
+        delta = depths[-2] - depths[-1]
+        drainage = delta / bucket_minutes
+    return {
+        "points": points,
+        "current": current,
+        "peak": peak,
+        "drainage_rate_per_min": round(drainage, 2),
+        "range_hours": range_hours,
+        "bucket_minutes": bucket_minutes,
+    }
+
+
+async def lookup_queue_item(session: AsyncSession, queue_id: int) -> dict | None:
+    """Детальная информация об одной match_queue записи для UI штучного матчинга.
+
+    Возвращает None если записи нет.
+
+    `position_in_pending` — сколько pending-записей "впереди" этой в порядке
+    обработки воркером (priority DESC, created_at ASC). Полезно для UI «ваш
+    оффер 12-й в очереди».
+    """
+    row = (await session.execute(
+        text(
+            """
+            SELECT id, offer_id, store_slug, title_raw, status, priority,
+                   attempts, error_detail,
+                   created_at::text  AS created_at,
+                   claimed_at::text  AS claimed_at,
+                   processed_at::text AS processed_at,
+                   next_attempt_at::text AS next_attempt_at,
+                   result_game_id, result_score, result_tier
+            FROM match_queue
+            WHERE id = :id
+            """
+        ).bindparams(id=queue_id)
+    )).mappings().one_or_none()
+    if row is None:
+        return None
+
+    result = dict(row)
+
+    if result["status"] == "pending":
+        # COUNT(*) записей которые воркер возьмёт раньше этой:
+        # priority DESC, created_at ASC (тот же ORDER что в claim_batch).
+        pos_row = (await session.execute(
+            text(
+                """
+                SELECT COUNT(*) FROM match_queue
+                WHERE status = 'pending'
+                  AND (next_attempt_at IS NULL OR next_attempt_at <= now())
+                  AND (
+                      priority > :priority
+                      OR (priority = :priority AND created_at < :created_at::timestamptz)
+                  )
+                """
+            ).bindparams(
+                priority=int(result["priority"]),
+                created_at=result["created_at"],
+            )
+        )).scalar_one()
+        result["position_in_pending"] = int(pos_row)
+    else:
+        result["position_in_pending"] = None
+
+    return result
+
+
+async def cancel_pending(session: AsyncSession, queue_id: int) -> str:
+    """Удалить pending-запись из очереди. Если processing/done — отказ.
+
+    Возвращает строку с финальным статусом операции:
+      'cancelled' / 'not_found' / 'already_processing' / 'already_done'.
+    """
+    row = (await session.execute(
+        text("SELECT status FROM match_queue WHERE id = :id").bindparams(id=queue_id)
+    )).scalar_one_or_none()
+    if row is None:
+        return "not_found"
+    if row == "processing":
+        return "already_processing"
+    if row in ("done", "failed", "skipped"):
+        return f"already_{row}"
+    await session.execute(
+        text("DELETE FROM match_queue WHERE id = :id AND status = 'pending'")
+        .bindparams(id=queue_id)
+    )
+    return "cancelled"
+
+
 async def count_by_status(session: AsyncSession) -> dict[str, int]:
     """Аггрегаты для UI: {pending, processing, done, failed, skipped}."""
     rows = (await session.execute(

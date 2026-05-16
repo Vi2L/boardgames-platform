@@ -28,6 +28,11 @@ class MatchAction(str, Enum):
     UNLINK = "unlink"       # отвязать (вернуть в unmatched)
     REASSESS = "reassess"   # batch reassess
     REVERT = "revert"       # откат конкретной записи match_log
+    # Промежуточные progress-entries для UI Штучного матчинга. Не меняют
+    # offer.game_id — пишутся через `log_progress()` вместо `log_change()`.
+    # При revert игнорируются (revert_one фильтрует по action не in PROGRESS).
+    T2_PROGRESS = "t2_progress"  # T2 vec_search завершён, top-кандидаты в reason JSON
+    T3_PROGRESS = "t3_progress"  # T3 LLM-запрос начат / завершён, payload в reason
 
 
 # Допустимые значения match_status (расширение существующих).

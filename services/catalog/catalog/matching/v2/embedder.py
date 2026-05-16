@@ -42,6 +42,7 @@ async def embed_one(text: str, *, client: httpx.AsyncClient | None = None) -> li
 
     text — пустая строка не разрешена; вернёт OllamaError.
     """
+    import time as _time
     if not text or not text.strip():
         raise OllamaError("embed_one: empty text")
 
@@ -50,6 +51,7 @@ async def embed_one(text: str, *, client: httpx.AsyncClient | None = None) -> li
         settings = get_settings()
         client = httpx.AsyncClient(base_url=settings.ollama_base_url, timeout=30.0)
 
+    started = _time.monotonic()
     try:
         settings = get_settings()
         # Новый API Ollama: /api/embed (вместо /api/embeddings)
@@ -71,14 +73,18 @@ async def embed_one(text: str, *, client: httpx.AsyncClient | None = None) -> li
         if not embeddings or not embeddings[0]:
             raise OllamaError("empty embedding response")
         # Успешный реальный вызов после half-open probe закрывает Circuit Breaker.
-        # Импорт здесь (не top-level) чтобы embedder не тащил health-singleton на
-        # стадии import — health.py инициализируется в lifespan'е раньше.
+        # Также пишем latency в rolling-buffer для UI p50/p95/rps.
+        duration_ms = (_time.monotonic() - started) * 1000.0
         from catalog.matching.v2.health import OllamaHealth
-        OllamaHealth.get_instance().record_success(settings.ml_embed_model)
+        OllamaHealth.get_instance().record_success(settings.ml_embed_model, duration_ms)
         return list(embeddings[0])
     except httpx.ConnectError as e:
+        from catalog.matching.v2.health import OllamaHealth
+        OllamaHealth.get_instance().record_error(get_settings().ml_embed_model, f"connect: {e}")
         raise OllamaUnavailable(f"connect: {e}") from e
     except httpx.TimeoutException as e:
+        from catalog.matching.v2.health import OllamaHealth
+        OllamaHealth.get_instance().record_error(get_settings().ml_embed_model, f"timeout: {e}")
         raise OllamaUnavailable(f"timeout: {e}") from e
     finally:
         if own_client:

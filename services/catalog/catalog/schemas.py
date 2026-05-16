@@ -336,6 +336,10 @@ class SchedulerJobOut(_ORMBase):
     # Описание провайдера для UI (display_name, doc) — заполняется в роутере из реестра.
     display_name: str | None = None
     description: str | None = None
+    # Ring-buffer последних тиков (только для interval-jobs: match_worker /
+    # ml_health_check). Каждый элемент = {ts, duration_ms, error}.
+    # Источник — `catalog.scheduler.get_tick_history(job_id)`.
+    tick_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SchedulerRescheduleRequest(BaseModel):
@@ -360,6 +364,36 @@ class TeseraImportRequest(BaseModel):
     alias: str | None = None
     tesera_id: int | None = None
     items: list[str | int] | None = None
+
+
+class AutoRecoveryRuleOut(_ORMBase):
+    """GET/POST /admin/auto-recovery-rules — JSON-полиморфные правила."""
+    id: int
+    name: str
+    condition: dict[str, Any]
+    action: dict[str, Any]
+    enabled: bool
+    last_triggered_at: datetime | None = None
+    last_result: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    updated_by: str | None = None
+
+
+class AutoRecoveryRuleCreate(BaseModel):
+    """POST /admin/auto-recovery-rules — создать правило."""
+    name: str = Field(min_length=1, max_length=128)
+    condition: dict[str, Any]
+    action: dict[str, Any]
+    enabled: bool = True
+
+
+class AutoRecoveryRuleUpdate(BaseModel):
+    """PATCH /admin/auto-recovery-rules/{id} — partial update."""
+    name: str | None = Field(default=None, min_length=1, max_length=128)
+    condition: dict[str, Any] | None = None
+    action: dict[str, Any] | None = None
+    enabled: bool | None = None
 
 
 class RuntimeFlagBoolUpdate(BaseModel):

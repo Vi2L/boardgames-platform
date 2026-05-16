@@ -33,7 +33,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from catalog.config import get_settings
 from catalog.db import get_engine
-from catalog.matching.v2.auditor import log_change
+from catalog.matching.v2.auditor import log_change, log_progress
 from catalog.matching.v2.decisions import save_decision
 from catalog.matching.v2.domain import MatchAction, MatchContext
 from catalog.matching.v2.embedder import OllamaError, OllamaUnavailable
@@ -125,6 +125,36 @@ async def _process_one(q, settings, SessionFactory) -> None:
             await session.commit()
             return
 
+        # T2 progress-entry для UI live-stages. Топ-кандидаты + reason идут в
+        # JSON-payload — UI SingleMatchTab показывает их inline пока T3 крутится.
+        # JSON в текстовом поле (reason) — простой подход; альтернатива — JSONB
+        # колонка в match_log, но это дополнительная миграция без сильного выигрыша.
+        try:
+            import json as _json
+            t2_payload = _json.dumps({
+                "reason": t2.reason,
+                "score": t2.score,
+                "candidates": [
+                    {
+                        "game_id": c.get("game_id"),
+                        "title": c.get("title"),
+                        "title_ru": c.get("title_ru"),
+                        "score": c.get("score"),
+                    }
+                    for c in (t2.candidates or [])[:5]
+                ],
+            }, ensure_ascii=False)
+            await log_progress(
+                session,
+                offer_id=q.offer_id,
+                action=MatchAction.T2_PROGRESS,
+                tier=2,
+                payload=t2_payload[:2000],  # safety cap на длину reason text
+                score=t2.score,
+            )
+        except Exception:  # noqa: BLE001 — progress не должен ронять основной flow
+            logger.exception("match_worker: log_progress T2 failed (non-fatal)")
+
         result = t2
 
         # Если T2 ambiguous (≥2 кандидата score ≥ min_score) — нужен T3 LLM
@@ -140,6 +170,23 @@ async def _process_one(q, settings, SessionFactory) -> None:
         if is_ambiguous:
             health = OllamaHealth.get_instance()
             if health.is_available_for(settings.ml_llm_model):
+                # T3 progress-entry "querying" — UI видит «LLM querying» до того
+                # как finalize запишет основной auto_t3 / skipped.
+                try:
+                    import json as _json
+                    await log_progress(
+                        session,
+                        offer_id=q.offer_id,
+                        action=MatchAction.T3_PROGRESS,
+                        tier=3,
+                        payload=_json.dumps({
+                            "phase": "querying",
+                            "candidates_count": len(t2.candidates or []),
+                        }, ensure_ascii=False),
+                    )
+                except Exception:  # noqa: BLE001
+                    logger.exception("match_worker: log_progress T3 failed (non-fatal)")
+
                 try:
                     t3 = await tier_3_llm(
                         ctx, t2.candidates,

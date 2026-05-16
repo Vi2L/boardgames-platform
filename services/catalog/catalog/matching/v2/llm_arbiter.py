@@ -161,6 +161,8 @@ async def tier_3_llm(
         "options": {"temperature": 0.0},
     }
 
+    import time as _time
+    started = _time.monotonic()
     try:
         async with httpx.AsyncClient(
             base_url=settings.ollama_base_url, timeout=60.0,
@@ -173,10 +175,14 @@ async def tier_3_llm(
             if resp.status_code != 200:
                 raise OllamaError(f"http_{resp.status_code}: {resp.text[:200]}")
             content = resp.json().get("message", {}).get("content", "")
-            # Успешный реальный вызов после half-open probe закрывает цепь.
+            # Успешный реальный вызов после half-open probe закрывает цепь;
+            # latency идёт в rolling-buffer для UI p50/p95/rps.
+            duration_ms = (_time.monotonic() - started) * 1000.0
             from catalog.matching.v2.health import OllamaHealth
-            OllamaHealth.get_instance().record_success(settings.ml_llm_model)
+            OllamaHealth.get_instance().record_success(settings.ml_llm_model, duration_ms)
     except (httpx.ConnectError, httpx.TimeoutException) as e:
+        from catalog.matching.v2.health import OllamaHealth
+        OllamaHealth.get_instance().record_error(settings.ml_llm_model, f"connect: {e}")
         raise OllamaUnavailable(f"connect: {e}") from e
 
     parsed = _parse_response(content, valid_ids)

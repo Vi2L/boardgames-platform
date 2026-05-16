@@ -21,6 +21,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.auth import require_scope
+from catalog.config import get_settings
 from catalog.db import get_session
 from catalog.matching.matcher import (
     AUTO_MATCH_THRESHOLD,
@@ -42,8 +43,11 @@ from catalog.matching.v2.decisions import (
 from catalog.matching.v2.domain import MatchAction
 from catalog.matching.v2.health import OllamaHealth
 from catalog.matching.v2.queue_repo import (
+    cancel_pending as v2_cancel_pending,
     count_by_status as v2_count_by_status,
+    depth_history as v2_depth_history,
     enqueue as v2_enqueue,
+    lookup_queue_item as v2_lookup_queue_item,
 )
 from catalog.models import Game, GameAlias, MatchLog, Offer
 from catalog.schemas import MatchingQueueOut, MatchLinkRequest, OfferOut
@@ -1108,3 +1112,161 @@ async def lookup_offer(
     if o is None:
         raise HTTPException(status_code=404, detail=f"offer {offer_id} not found")
     return _offer_to_lookup(o)
+
+
+# ─── Matcher v2: queue depth / lookup / cancel (UX-improvements §A/§D/§E) ────
+
+
+class QueueDepthPoint(BaseModel):
+    ts: str
+    depth: int
+
+
+class QueueDepthOut(BaseModel):
+    points: list[QueueDepthPoint]
+    current: int
+    peak: int
+    drainage_rate_per_min: float
+    range_hours: int
+    bucket_minutes: int
+
+
+@router.get(
+    "/queue/depth",
+    response_model=QueueDepthOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def queue_depth_history(
+    range_hours: int = Query(24, ge=1, le=24 * 7),
+    bucket_minutes: int = Query(60, ge=1, le=60 * 24),
+    session: AsyncSession = Depends(get_session),
+) -> QueueDepthOut:
+    """Глубина очереди по bucket'ам — для UI header sparkline.
+
+    Реконструкция: точная snapshot-таблица отсутствует, считаем по
+    created_at / processed_at. Подробности — в `queue_repo.depth_history`.
+    """
+    data = await v2_depth_history(
+        session, range_hours=range_hours, bucket_minutes=bucket_minutes,
+    )
+    return QueueDepthOut.model_validate(data)
+
+
+class QueueItemLookupOut(BaseModel):
+    id: int
+    offer_id: int
+    store_slug: str
+    title_raw: str
+    status: str
+    priority: int
+    attempts: int
+    error_detail: str | None = None
+    created_at: str
+    claimed_at: str | None = None
+    processed_at: str | None = None
+    next_attempt_at: str | None = None
+    result_game_id: int | None = None
+    result_score: float | None = None
+    result_tier: int | None = None
+    # position_in_pending — COUNT записей которые воркер возьмёт раньше этой.
+    # None если status != 'pending'.
+    position_in_pending: int | None = None
+
+
+@router.get(
+    "/queue/{queue_id}",
+    response_model=QueueItemLookupOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def lookup_queue_item(
+    queue_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> QueueItemLookupOut:
+    """Lookup одной match_queue записи для UI Штучного матчинга.
+
+    Возвращает 404 если записи нет. Если status='pending' — поле
+    position_in_pending показывает «номер в очереди» (offset от head по
+    порядку claim_batch).
+    """
+    data = await v2_lookup_queue_item(session, queue_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"queue item {queue_id} not found")
+    return QueueItemLookupOut.model_validate(data)
+
+
+class CancelQueueItemOut(BaseModel):
+    """`result`: 'cancelled' | 'not_found' | 'already_processing' |
+    'already_done' | 'already_failed' | 'already_skipped'."""
+    queue_id: int
+    result: str
+
+
+class ProbeResultOut(BaseModel):
+    model: str
+    probed: bool
+    """`probed=False` если model unknown в OllamaHealth (не bge-m3/qwen2.5)."""
+    circuit_state: str
+    """closed / open / half_open / unknown — после probe."""
+    last_check_at: str | None = None
+
+
+@router.post(
+    "/ml-models/{name}/probe",
+    response_model=ProbeResultOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def force_probe(name: str) -> ProbeResultOut:
+    """Принудительный health-probe модели Ollama.
+
+    Triggered из UI Контроль → Force probe кнопка на модели с circuit_state
+    half_open/open. Дёргает `OllamaHealth.check()` — это GET /api/tags + проверка
+    наличия запрошенной модели. При успехе → закроет цепь немедленно (не ждём
+    следующий scheduler-job через 30 сек).
+
+    `name` validation — модель должна быть из ml_embed_model / ml_llm_model.
+    Иначе probe бесполезен (мы не дёргаем embed/chat принудительно тут — это
+    отдельная задача heavy probing).
+    """
+    settings = get_settings()
+    allowed = {settings.ml_embed_model, settings.ml_llm_model}
+    if name not in allowed:
+        return ProbeResultOut(
+            model=name, probed=False, circuit_state="unknown",
+            last_check_at=None,
+        )
+
+    health = OllamaHealth.get_instance()
+    await health.check()
+    summary = health.status_summary
+    return ProbeResultOut(
+        model=name,
+        probed=True,
+        circuit_state=summary["circuit_state"].get(name, "unknown"),
+        last_check_at=summary.get("last_check_at"),
+    )
+
+
+@router.delete(
+    "/queue/{queue_id}",
+    response_model=CancelQueueItemOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def cancel_queue_item(
+    queue_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> CancelQueueItemOut:
+    """Отменить pending-запись в очереди. processing/done/failed/skipped — 409.
+
+    Используется в UI Штучного матчинга — кнопка Cancel перед обработкой
+    воркером.
+    """
+    result = await v2_cancel_pending(session, queue_id)
+    await session.commit()
+    if result == "not_found":
+        raise HTTPException(status_code=404, detail=f"queue item {queue_id} not found")
+    if result.startswith("already_"):
+        raise HTTPException(
+            status_code=409,
+            detail=f"queue item {queue_id} {result.replace('_', ' ')} — нельзя отменить",
+        )
+    return CancelQueueItemOut(queue_id=queue_id, result=result)

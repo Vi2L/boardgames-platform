@@ -761,6 +761,39 @@ class RuntimeFlag(Base):
     updated_by: Mapped[str | None] = mapped_column(Text)
 
 
+class AutoRecoveryRule(Base):
+    """Правило автоматического восстановления для matching v2 (миграция 0014).
+
+    Реагирует на изменение системного состояния (например, переход модели в
+    `closed` после downtime) и выполняет действие (например, re-enqueue всех
+    skipped по reason='llm_unavailable'). Закрывает повторяющийся ручной
+    сценарий «после `ollama pull qwen2.5` пойти в UI и нажать re-enqueue».
+
+    `condition` / `action` — JSONB-полиморфные объекты. Семантика типов
+    описана в миграции и парсится runner-сервисом (scheduler-job, см. TODO).
+
+    `last_triggered_at` обновляется при каждом срабатывании — для UI «armed»
+    индикатора и для дедупа (правило не триггерится повторно слишком часто).
+    """
+
+    __tablename__ = "auto_recovery_rules"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    name: Mapped[str] = mapped_column(String(128), nullable=False, unique=True)
+    condition: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    action: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True, server_default="true")
+    last_triggered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_result: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
+    updated_by: Mapped[str | None] = mapped_column(Text)
+
+
 class BggGeeklist(Base):
     """Snapshot'ы BGG GeekList-ов (таблица bgg_geeklists, миграция 0010).
 

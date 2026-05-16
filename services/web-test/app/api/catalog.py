@@ -716,3 +716,102 @@ async def reschedule_job(
         )
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ─── Matcher v2 UX-improvements proxy (handoff §A/§C/§D/§E) ──────────────────
+
+@router.get("/matching/queue/depth")
+async def queue_depth_history(
+    range_hours: int = Query(24, ge=1, le=24 * 7),
+    bucket_minutes: int = Query(60, ge=1, le=60 * 24),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Sparkline-данные глубины очереди — для UI header."""
+    try:
+        return await client.queue_depth_history(
+            range_hours=range_hours, bucket_minutes=bucket_minutes,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/queue/{queue_id}")
+async def lookup_queue_item(
+    queue_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Детали одной queue-записи + position_in_pending для UI Штучного."""
+    try:
+        return await client.lookup_queue_item(queue_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.delete("/matching/queue/{queue_id}")
+async def cancel_queue_item(
+    queue_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Отменить pending-запись. 409 если processing/done."""
+    try:
+        return await client.cancel_queue_item(queue_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/ml-models/{name}/probe")
+async def force_probe_model(
+    name: str,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Force probe модели — закрывает цепь немедленно если Ollama жив."""
+    try:
+        return await client.force_probe_model(name)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ─── Auto-recovery rules proxy (handoff §D) ──────────────────────────────────
+
+@router.get("/admin/auto-recovery-rules")
+async def list_auto_recovery_rules(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> list[dict]:
+    try:
+        return await client.list_auto_recovery_rules()
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/admin/auto-recovery-rules")
+async def create_auto_recovery_rule(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.create_auto_recovery_rule(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.patch("/admin/auto-recovery-rules/{rule_id}")
+async def update_auto_recovery_rule(
+    rule_id: int,
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.update_auto_recovery_rule(rule_id, body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.delete("/admin/auto-recovery-rules/{rule_id}", status_code=204)
+async def delete_auto_recovery_rule(
+    rule_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> None:
+    try:
+        await client.delete_auto_recovery_rule(rule_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e

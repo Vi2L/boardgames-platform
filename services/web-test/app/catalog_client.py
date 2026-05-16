@@ -608,6 +608,62 @@ class CatalogClient:
             raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
         return resp.json()
 
+    # ── Matcher v2: UX-improvements §A/§C/§D/§E ─────────────────────────────
+
+    async def queue_depth_history(
+        self, *, range_hours: int = 24, bucket_minutes: int = 60,
+    ) -> dict[str, Any]:
+        """GET /matching/queue/depth — глубина очереди по bucket'ам для UI sparkline."""
+        resp = await self._client.get(
+            "/matching/queue/depth",
+            params={"range_hours": range_hours, "bucket_minutes": bucket_minutes},
+        )
+        return _ok_or_raise(resp)
+
+    async def lookup_queue_item(self, queue_id: int) -> dict[str, Any]:
+        """GET /matching/queue/{id} — детали одной queue-записи + position_in_pending."""
+        resp = await self._client.get(f"/matching/queue/{queue_id}")
+        return _ok_or_raise(resp)
+
+    async def cancel_queue_item(self, queue_id: int) -> dict[str, Any]:
+        """DELETE /matching/queue/{id} — отменить pending. 409 если processing/done."""
+        resp = await self._client.delete(f"/matching/queue/{queue_id}")
+        return _ok_or_raise(resp)
+
+    async def force_probe_model(self, name: str) -> dict[str, Any]:
+        """POST /matching/ml-models/{name}/probe — принудительный health-check модели."""
+        resp = await self._client.post(f"/matching/ml-models/{name}/probe")
+        return _ok_or_raise(resp)
+
+    # ── Auto-recovery rules CRUD ───────────────────────────────────────────
+
+    async def list_auto_recovery_rules(self) -> list[dict[str, Any]]:
+        resp = await self._client.get("/admin/auto-recovery-rules")
+        if resp.is_error:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = resp.text[:500]
+            raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
+        return resp.json()
+
+    async def create_auto_recovery_rule(self, payload: dict) -> dict[str, Any]:
+        resp = await self._client.post("/admin/auto-recovery-rules", json=payload)
+        return _ok_or_raise(resp)
+
+    async def update_auto_recovery_rule(self, rule_id: int, payload: dict) -> dict[str, Any]:
+        resp = await self._client.patch(f"/admin/auto-recovery-rules/{rule_id}", json=payload)
+        return _ok_or_raise(resp)
+
+    async def delete_auto_recovery_rule(self, rule_id: int) -> None:
+        resp = await self._client.delete(f"/admin/auto-recovery-rules/{rule_id}")
+        if resp.is_error:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = resp.text[:500]
+            raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
+
     # ── Sources: detection runs ────────────────────────────────────────────
 
     async def start_source_run(

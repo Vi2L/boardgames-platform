@@ -24,9 +24,11 @@ import clsx from 'clsx'
 
 import {
   findOfferById, findOffersByTitle, runV2OnOffer,
-  type OfferLookup,
+  fetchQueueItem, cancelQueueItem,
+  type OfferLookup, type QueueItemLookup, type MlStatusWithMetrics,
 } from '../../lib/matching'
 import { fetchMatchLog, fetchMlStatus } from '../../lib/catalog'
+import type { MatchLogEntry } from '../../lib/catalog'
 import { HowItWorks, TierChip } from './HowItWorks'
 import { InfoTip } from './InfoTip'
 
@@ -39,6 +41,7 @@ export function SingleMatchTab() {
   const [selectedOffer, setSelectedOffer] = useState<OfferLookup | null>(null)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [runStartedAt, setRunStartedAt] = useState<number | null>(null)
+  const [queueId, setQueueId] = useState<number | null>(null)
 
   // Lookup by id
   const offerByIdQuery = useQuery({
@@ -78,6 +81,7 @@ export function SingleMatchTab() {
     onSuccess: (data) => {
       toast.success(`Оффер #${data.offer_id} в очереди (priority=${data.priority}). Жди результат…`)
       setRunStartedAt(Date.now())
+      setQueueId(data.queue_id)
       setDrawerOpen(true)
       qc.invalidateQueries({ queryKey: ['matching', 'stats-extended'] })
     },
@@ -180,6 +184,7 @@ export function SingleMatchTab() {
         onClose={() => setDrawerOpen(false)}
         offer={selectedOffer}
         runStartedAt={runStartedAt}
+        queueId={queueId}
       />
     </div>
   )
@@ -334,13 +339,16 @@ interface Stage {
   detail: string
 }
 
-function ProgressDrawer({ open, onClose, offer, runStartedAt }: {
+function ProgressDrawer({ open, onClose, offer, runStartedAt, queueId }: {
   open: boolean
   onClose: () => void
   offer: OfferLookup | null
   runStartedAt: number | null
+  queueId: number | null
 }) {
-  // Poll ml-status to track queue progress
+  const qc = useQueryClient()
+
+  // Poll ml-status to track queue progress + ETA на основе p50 qwen
   const mlStatus = useQuery({
     queryKey: ['catalog', 'ml-status'],
     queryFn: fetchMlStatus,
@@ -348,49 +356,130 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt }: {
     enabled: open,
   })
 
-  // Poll match_log for this offer to detect completion
+  // Poll queue item — для queue position + status transitions
+  const queueItem = useQuery({
+    queryKey: ['matching', 'queue-item', queueId],
+    queryFn: () => fetchQueueItem(queueId!),
+    refetchInterval: open && queueId ? 1500 : false,
+    enabled: open && queueId != null,
+    retry: false,
+  })
+
+  // Poll match_log for this offer — для T2_PROGRESS / T3_PROGRESS / финального решения
   const log = useQuery({
     queryKey: ['matching', 'offer-log', offer?.id],
-    queryFn: () => fetchMatchLog({ offer_id: offer!.id, limit: 5 }),
+    queryFn: () => fetchMatchLog({ offer_id: offer!.id, limit: 10 }),
     refetchInterval: open ? 1500 : false,
     enabled: open && offer != null,
   })
 
-  // Derive stages from latest match_log entry (created by worker after T2/T3)
+  // Cancel — только если queue item ещё pending.
+  const cancelMut = useMutation({
+    mutationFn: () => cancelQueueItem(queueId!),
+    onSuccess: (data) => {
+      if (data.result === 'cancelled') {
+        toast.success('Запрос отменён до обработки')
+        qc.invalidateQueries({ queryKey: ['matching', 'queue-item', queueId] })
+        qc.invalidateQueries({ queryKey: ['matching', 'stats-extended'] })
+      } else {
+        toast.error(`Не удалось отменить: ${data.result}`)
+      }
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  // Derive stages — combining queue item status + match_log progress + final entry.
   const stages = useMemo<Stage[]>(() => {
-    const latest = log.data?.items?.find(
+    const entriesAfterStart = (log.data?.items ?? []).filter(
       l => runStartedAt && new Date(l.performed_at).getTime() >= runStartedAt,
     )
-    const stages: Stage[] = [
+    // Final entry (auto_t1/2/3 / skipped) — последний по времени НЕ progress.
+    const finalEntry = entriesAfterStart.find(
+      l => !['t2_progress', 't3_progress'].includes(l.action),
+    )
+    const t2Progress = entriesAfterStart.find(l => l.action === 't2_progress')
+    const t3Progress = entriesAfterStart.find(l => l.action === 't3_progress')
+
+    const queueStatus = queueItem.data?.status
+
+    const baseStages: Stage[] = [
       { tier: 'T0', title: 'cache lookup',  state: 'pending', detail: 'проверка match_decisions' },
       { tier: 'T1', title: 'pg_trgm',       state: 'pending', detail: 'триграммный поиск ≥ 0.92' },
       { tier: 'T2', title: 'bge-m3 cosine', state: 'pending', detail: 'embedding + cosine top-K' },
       { tier: 'T3', title: 'qwen LLM',      state: 'pending', detail: 'арбитр по 2-3 кандидатам' },
     ]
-    if (!latest) {
-      // ничего не получили — определяем текущий tier через worker progress
-      // T0/T1 — если воркер ещё не взял, остаются pending. Если взял — T0/T1
-      // не пишут лог при miss; пишут только winners. Без специального API мы
-      // не знаем, прошёл ли уже T0+T1. Поэтому пока полагаемся на финальный лог.
-      return stages
+
+    // Если воркер начал обрабатывать (status='processing' или есть progress entries) —
+    // T0/T1 уже прошли (они sync в ingest и здесь не запускаются для re-run).
+    if (queueStatus === 'processing' || t2Progress || t3Progress || finalEntry) {
+      baseStages[0].state = 'skipped'
+      baseStages[0].detail = 'sync tier в ingest — не запускается при re-run'
+      baseStages[1].state = 'skipped'
+      baseStages[1].detail = 'sync tier в ingest — не запускается при re-run'
     }
-    // tier > 0 means winner was T<tier>
-    const winnerTier = latest.tier
-    const stageIdx = ['T0', 'T1', 'T2', 'T3'].indexOf(`T${winnerTier}`)
-    for (let i = 0; i < stages.length; i++) {
-      if (i < stageIdx) stages[i].state = 'skipped'
-      if (i === stageIdx) {
-        stages[i].state = 'done'
-        stages[i].detail = `${latest.action} → game_id #${latest.new_game_id} (score ${latest.score?.toFixed(2) ?? '—'})`
+
+    // T2 progress entry — показывает candidates inline.
+    if (t2Progress) {
+      try {
+        const payload = JSON.parse(t2Progress.reason || '{}')
+        const candidates = payload.candidates || []
+        const isFinal = finalEntry?.tier === 2
+        baseStages[2].state = isFinal ? 'done' : 'running'
+        baseStages[2].detail = isFinal
+          ? `${finalEntry?.action} → game_id #${finalEntry?.new_game_id} (score ${finalEntry?.score?.toFixed(2) ?? '—'})`
+          : `${candidates.length} кандидата${candidates.length === 1 ? '' : 'ов'} (top score ${payload.score?.toFixed(2) ?? '—'})`
+        // top candidates inline в detail
+        if (candidates.length > 0 && !isFinal) {
+          baseStages[2].detail += '\n' + candidates.slice(0, 3).map((c: { game_id?: number; title?: string; score?: number }) =>
+            `  ${c.score?.toFixed(2)}  ${c.title} #${c.game_id}`).join('\n')
+        }
+      } catch {
+        baseStages[2].state = 'running'
+        baseStages[2].detail = 'T2 запущен…'
       }
-      if (i > stageIdx) stages[i].state = 'skipped'
     }
-    return stages
-  }, [log.data, runStartedAt])
+
+    // T3 progress / final
+    if (t3Progress) {
+      const isFinal = finalEntry?.tier === 3
+      baseStages[3].state = isFinal ? 'done' : 'running'
+      baseStages[3].detail = isFinal
+        ? `${finalEntry?.action} → game_id #${finalEntry?.new_game_id} (confidence ${finalEntry?.score?.toFixed(2) ?? '—'})`
+        : 'qwen2.5 querying…'
+    } else if (finalEntry && finalEntry.tier !== 3) {
+      // финал не от T3 — значит T3 был skipped
+      baseStages[3].state = 'skipped'
+      baseStages[3].detail = 'T3 не запускался (T2 single-confident / no candidates)'
+    }
+
+    return baseStages
+  }, [log.data, runStartedAt, queueItem.data])
 
   const queuePending = mlStatus.data?.queue?.pending ?? 0
   const queueProcessing = mlStatus.data?.queue?.processing ?? 0
   const finished = stages.some(s => s.state === 'done')
+
+  // ETA на основе qwen p50_ms (доступен если ml-status вернул metrics)
+  const mlMetrics = (mlStatus.data as MlStatusWithMetrics | undefined)?.metrics
+  const qwenP50 = Object.entries(mlMetrics ?? {}).find(([n]) => n.includes('qwen'))?.[1].p50_ms
+  const etaSec = qwenP50 ? Math.round(qwenP50 / 1000) + 3 : null
+
+  // Esc → close или cancel в зависимости от состояния
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        if (queueItem.data?.status === 'pending' && queueId) {
+          cancelMut.mutate()
+        } else {
+          onClose()
+        }
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open, onClose, queueItem.data?.status, queueId, cancelMut])
 
   return (
     <div
@@ -432,6 +521,17 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt }: {
           <span className="text-gray-700">·</span>
           <span className="text-violet-300">{queueProcessing} processing</span>
         </div>
+
+        {/* Queue position 3-step indicator + Cancel button */}
+        {queueItem.data && (
+          <QueuePositionIndicator
+            item={queueItem.data}
+            etaSec={etaSec}
+            canCancel={queueItem.data.status === 'pending' && queueId != null}
+            onCancel={() => cancelMut.mutate()}
+            cancelling={cancelMut.isPending}
+          />
+        )}
 
         <ol className="space-y-2.5">
           {stages.map((s, i) => (
@@ -486,6 +586,105 @@ function StageRow({ stage, index }: { stage: Stage; index: number }) {
         <div className="text-[11px] text-gray-500 font-mono pl-1">{stage.detail}</div>
       </div>
     </li>
+  )
+}
+
+// ── Queue position 3-step indicator (handoff §E) ──────────────────────────
+
+function QueuePositionIndicator({
+  item, etaSec, canCancel, onCancel, cancelling,
+}: {
+  item: QueueItemLookup
+  etaSec: number | null
+  canCancel: boolean
+  onCancel: () => void
+  cancelling: boolean
+}) {
+  // Steps:
+  //   1. enqueued — всегда (раз создан запрос)
+  //   2. picked — claimed_at not null (воркер взял batch)
+  //   3. processing/done — финальная стадия
+  const step1Done = true   // enqueued — always
+  const step2Done = item.claimed_at != null
+  const step3Active = item.status === 'processing'
+  const step3Done = item.status === 'done' || item.status === 'skipped' || item.status === 'failed'
+
+  return (
+    <div className="border border-gray-800/60 rounded p-3 bg-gray-900/30 space-y-2">
+      <div className="flex items-center justify-between">
+        <div className="text-[10px] uppercase tracking-widest text-gray-500 font-mono">
+          queue position · status={item.status}
+        </div>
+        {item.position_in_pending !== null && item.position_in_pending > 0 && (
+          <span className="text-[10px] font-mono text-amber-300">
+            #{item.position_in_pending + 1} в очереди
+          </span>
+        )}
+      </div>
+
+      {/* 3-step horizontal indicator */}
+      <div className="flex items-center gap-1.5">
+        <PositionStep label="enqueued" done={step1Done} active={false} ts={item.created_at} />
+        <PositionConnector active={step2Done} />
+        <PositionStep label="picked" done={step2Done} active={!step2Done && item.position_in_pending === 0} ts={item.claimed_at} />
+        <PositionConnector active={step3Active || step3Done} />
+        <PositionStep label="processing" done={step3Done} active={step3Active} ts={item.processed_at} />
+      </div>
+
+      <div className="flex items-center justify-between text-[10px] font-mono">
+        {etaSec !== null && (step3Active || (!step3Done && step2Done)) ? (
+          <span className="text-gray-500">
+            ETA <span className="text-emerald-400 tabular-nums">~{etaSec}s</span>
+            <span className="ml-1 text-gray-600">(qwen p50 + ~3s overhead)</span>
+          </span>
+        ) : (
+          <span className="text-gray-600">{item.attempts > 0 && `attempts=${item.attempts}`}</span>
+        )}
+        {canCancel && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono border border-rose-700/60 text-rose-300 hover:bg-rose-900/30 disabled:opacity-40"
+          >
+            {cancelling && <Loader2 size={9} className="animate-spin" />}
+            cancel · <kbd className="px-1 border border-rose-700/40 rounded text-[9px]">Esc</kbd>
+          </button>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function PositionStep({
+  label, done, active, ts,
+}: { label: string; done: boolean; active: boolean; ts: string | null }) {
+  return (
+    <div className="flex flex-col items-center gap-0.5 min-w-[80px]">
+      <div className={clsx(
+        'w-4 h-4 rounded-full border-2 flex items-center justify-center',
+        done && 'bg-emerald-500/20 border-emerald-500 text-emerald-300',
+        active && 'bg-violet-500/20 border-violet-500 text-violet-300 animate-pulse',
+        !done && !active && 'bg-gray-800 border-gray-700 text-gray-600',
+      )}>
+        {done && <CheckCircle2 size={10} />}
+      </div>
+      <div className="text-[9px] uppercase tracking-wider font-mono text-gray-500">{label}</div>
+      {ts && (
+        <div className="text-[9px] font-mono text-gray-600">
+          {new Date(ts).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function PositionConnector({ active }: { active: boolean }) {
+  return (
+    <div className={clsx(
+      'flex-1 h-0.5 rounded-full',
+      active ? 'bg-emerald-500/60' : 'bg-gray-800',
+    )} />
   )
 }
 

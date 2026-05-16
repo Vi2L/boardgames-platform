@@ -13,7 +13,7 @@
  * через inset-shadow, монохромный header с uppercase tracking-wider, метрики
  * font-mono. Цветные акценты только для health states (green/amber/red).
  */
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -23,15 +23,18 @@ import {
 import clsx from 'clsx'
 
 import { fetchMlStatus, startWarmupEmbeddings } from '../../lib/catalog'
-import type { MlStatus } from '../../lib/catalog'
 import {
   fetchRuntimeFlag, setRuntimeFlag,
   fetchWorkerJob, updateWorkerInterval, triggerMatchWorker,
-  type SchedulerJobInfo,
+  forceProbeModel,
+  type SchedulerJobInfoWithHistory, type MlStatusWithMetrics,
 } from '../../lib/matching'
+import { useMatchingMetrics, selectLatencySeries } from '../../store/matching-metrics'
 import { CircuitStateBadge, type CircuitState } from './CircuitStateBadge'
 import { HowItWorks, TierChip } from './HowItWorks'
 import { InfoTip } from './InfoTip'
+import { MetricSpark } from './MetricSpark'
+import { ConfirmPanel } from './ConfirmPanel'
 
 // ── Small format helpers ───────────────────────────────────────────────────
 
@@ -49,13 +52,6 @@ function relativeTime(iso: string | null): string {
   if (ms < 3600_000) return `${Math.round(ms / 60_000)}м назад`
   if (ms < 86_400_000) return `${Math.round(ms / 3600_000)}ч назад`
   return `${Math.round(ms / 86_400_000)}д назад`
-}
-
-// circuit_state у нас в /matching/ml-status пишется как Record<string, string>
-// (см. health.py:status_summary). Не пробрасывается в MlStatus тип в catalog.ts.
-// Здесь читаем как extra field — backend уже возвращает.
-type MlStatusWithCB = MlStatus & {
-  circuit_state?: Record<string, CircuitState>
 }
 
 // ── Main component ─────────────────────────────────────────────────────────
@@ -132,18 +128,28 @@ function KillSwitchCard() {
   })
 
   const enabled = flagQuery.data?.value_bool ?? null
+  const [confirmOff, setConfirmOff] = useState(false)
+
+  const queueQ = useQuery({
+    queryKey: ['matching', 'stats-extended'],
+    queryFn: async () => (await import('../../lib/matching')).fetchMatchingStatsExtended(),
+    refetchInterval: 5000,
+  })
+
   const handleToggle = () => {
     if (enabled === null) return
     if (enabled) {
-      const confirmed = window.confirm(
-        'Выключить ML-pipeline?\n\n' +
-        'Воркер перестанет обрабатывать match_queue. T2 (vector) и T3 (LLM) ' +
-        'не будут запускаться. Новые offers в ingest сразу пойдут в unmatched ' +
-        'с reason="ml_disabled". T0 cache и T1 trgm продолжат работать.',
-      )
-      if (!confirmed) return
+      // §G inline confirm вместо window.confirm — показываем impact preview.
+      setConfirmOff(true)
+    } else {
+      // Включение — без confirm (positive action).
+      setFlag.mutate(true)
     }
-    setFlag.mutate(!enabled)
+  }
+
+  const handleConfirmOff = () => {
+    setFlag.mutate(false)
+    setConfirmOff(false)
   }
 
   return (
@@ -163,21 +169,40 @@ function KillSwitchCard() {
         </span>
       }
     >
-      <div className="flex items-center justify-between gap-6">
-        <div className="space-y-1">
-          <div className="text-sm text-gray-200">
-            {enabled === true && 'Воркер работает, ingest пушит в match_queue при miss T0+T1.'}
-            {enabled === false && 'Воркер пропускает циклы. Все unmatched идут в manual T4.'}
-            {enabled === null && 'Загружаю состояние флага…'}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-6">
+          <div className="space-y-1">
+            <div className="text-sm text-gray-200">
+              {enabled === true && 'Воркер работает, ingest пушит в match_queue при miss T0+T1.'}
+              {enabled === false && 'Воркер пропускает циклы. Все unmatched идут в manual T4.'}
+              {enabled === null && 'Загружаю состояние флага…'}
+            </div>
+            <div className="text-[11px] text-gray-500 font-mono">
+              updated_by={flagQuery.data?.updated_by ?? '—'} · {relativeTime(flagQuery.data?.updated_at ?? null)}
+            </div>
           </div>
-          <div className="text-[11px] text-gray-500 font-mono">
-            updated_by={flagQuery.data?.updated_by ?? '—'} · {relativeTime(flagQuery.data?.updated_at ?? null)}
-          </div>
+          <ToggleSwitch
+            checked={enabled === true}
+            onChange={handleToggle}
+            loading={setFlag.isPending || flagQuery.isLoading}
+          />
         </div>
-        <ToggleSwitch
-          checked={enabled === true}
-          onChange={handleToggle}
-          loading={setFlag.isPending || flagQuery.isLoading}
+
+        <ConfirmPanel
+          open={confirmOff}
+          variant="red"
+          title="Выключить ML-pipeline?"
+          description="T2 (vector) и T3 (LLM) перестанут запускаться. T0 cache и T1 trgm продолжат работать."
+          impact={[
+            `${queueQ.data?.queue?.pending ?? '—'} pending → останутся ждать (воркер пропустит циклы)`,
+            `${queueQ.data?.queue?.processing ?? '—'} processing → завершат batch, потом стоп`,
+            'Новые offers с miss T0+T1 → status="unmatched", reason="ml_disabled"',
+            'Active background-jobs (warmup, reassess) НЕ остановятся',
+          ]}
+          confirmLabel="Выключить ML"
+          loading={setFlag.isPending}
+          onConfirm={handleConfirmOff}
+          onCancel={() => setConfirmOff(false)}
         />
       </div>
     </Card>
@@ -222,27 +247,40 @@ function ToggleSwitch({
   )
 }
 
-// ── Models card ────────────────────────────────────────────────────────────
+// ── Models card — с rps/p50/p95/fail + sparkline + force-probe ─────────────
 
 function ModelsCard() {
+  const qc = useQueryClient()
   const mlStatus = useQuery({
     queryKey: ['catalog', 'ml-status'],
     queryFn: fetchMlStatus,
     refetchInterval: 5000,
   })
 
-  const data = mlStatus.data as MlStatusWithCB | undefined
+  const probe = useMutation({
+    mutationFn: (name: string) => forceProbeModel(name),
+    onSuccess: (data) => {
+      toast.success(`probe ${data.model}: ${data.circuit_state}`)
+      qc.invalidateQueries({ queryKey: ['catalog', 'ml-status'] })
+    },
+    onError: (e: Error) => toast.error(`probe failed: ${e.message}`),
+  })
+
+  const data = mlStatus.data as MlStatusWithMetrics | undefined
   const models = data?.models ?? {}
   const circuitState = data?.circuit_state ?? {}
   const failures = data?.failures ?? {}
+  const metrics = data?.metrics ?? {}
 
   const lastCheckRel = relativeTime(data?.last_check_at ?? null)
   const lastSuccessRel = relativeTime(data?.last_success_at ?? null)
 
+  const snapshots = useMatchingMetrics(s => s.snapshots)
+
   return (
     <Card
       title="ML-модели · Ollama"
-      tooltip="OllamaHealth polling раз в 30 сек через scheduler-job ml_health_check. Circuit Breaker: closed → open после 3 подряд провалов; open → half-open через recovery_timeout (60с)."
+      tooltip="OllamaHealth polling раз в 30 сек через scheduler-job ml_health_check. Circuit Breaker: closed → open после 3 подряд провалов; open → half-open через recovery_timeout (60с). p50/p95/rps — rolling-buffer последних ~60 успешных вызовов."
       right={
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-gray-500 font-mono">
           <span>last_check {lastCheckRel}</span>
@@ -260,6 +298,10 @@ function ModelsCard() {
         {Object.entries(models).map(([name, available]) => {
           const cb = (circuitState[name] ?? (available ? 'closed' : 'open')) as CircuitState
           const fails = failures[name] ?? 0
+          const m = metrics[name]
+          const latencySeries = selectLatencySeries(snapshots, name)
+          const canProbe = cb === 'open' || cb === 'half_open'
+
           return (
             <div
               key={name}
@@ -272,15 +314,57 @@ function ModelsCard() {
                 cb === 'unknown' && 'bg-gray-900/40 border-gray-800',
               )}
             >
-              <div className="flex items-baseline justify-between">
-                <code className="text-sm text-gray-100 font-mono">{name}</code>
+              <div className="flex items-baseline justify-between gap-2">
+                <code className="text-sm text-gray-100 font-mono truncate">{name}</code>
                 <CircuitStateBadge state={cb} />
               </div>
-              <dl className="grid grid-cols-2 gap-2 text-[11px]">
-                <Metric label="failures" value={String(fails)} accent={fails > 0 ? 'red' : 'neutral'} />
-                <Metric label="status" value={available ? 'online' : 'offline'}
-                  accent={available ? 'green' : 'red'} />
+
+              {/* Расширенные метрики rps / p50 / p95 / fail */}
+              <dl className="grid grid-cols-4 gap-2 text-[11px]">
+                <Metric
+                  label="rps"
+                  value={m && m.rps_1m > 0 ? m.rps_1m.toFixed(1) : '—'}
+                  accent="neutral"
+                />
+                <Metric
+                  label="p50"
+                  value={m?.p50_ms != null ? `${Math.round(m.p50_ms)}ms` : '—'}
+                  accent="neutral"
+                />
+                <Metric
+                  label="p95"
+                  value={m?.p95_ms != null ? `${Math.round(m.p95_ms)}ms` : '—'}
+                  accent={m?.p95_ms != null && m.p95_ms > 1000 ? 'amber' : 'neutral'}
+                />
+                <Metric
+                  label="fail"
+                  value={String(fails)}
+                  accent={fails > 0 ? 'red' : 'neutral'}
+                />
               </dl>
+
+              {/* Latency sparkline (если есть точек) */}
+              {latencySeries.length >= 2 && (
+                <MetricSpark
+                  values={latencySeries}
+                  tone={cb === 'closed' ? 'ok' : cb === 'half_open' ? 'warn' : 'danger'}
+                  width={200}
+                  height={20}
+                  label={`latency p50 · ${latencySeries.length} точек`}
+                />
+              )}
+
+              {/* Last error text */}
+              {m?.last_error_text && (
+                <div
+                  className="text-[10px] text-rose-300/80 font-mono truncate"
+                  title={m.last_error_text}
+                >
+                  err: {m.last_error_text}
+                </div>
+              )}
+
+              {/* CB state hints */}
               {cb === 'half_open' && (
                 <div className="text-[10px] text-amber-300 font-mono flex items-center gap-1">
                   <AlertTriangle size={10} />
@@ -290,8 +374,27 @@ function ModelsCard() {
               {cb === 'open' && (
                 <div className="text-[10px] text-red-300 font-mono flex items-center gap-1">
                   <XCircle size={10} />
-                  цепь открыта — все запросы пропускаются
+                  цепь открыта
                 </div>
+              )}
+
+              {/* Force-probe button — только когда цепь нездорова */}
+              {canProbe && (
+                <button
+                  type="button"
+                  onClick={() => probe.mutate(name)}
+                  disabled={probe.isPending}
+                  className={clsx(
+                    'mt-1 inline-flex items-center gap-1 px-2 py-1 rounded',
+                    'bg-violet-700/80 hover:bg-violet-600 disabled:opacity-50',
+                    'text-[10px] font-mono text-white',
+                  )}
+                >
+                  {probe.isPending
+                    ? <Loader2 size={10} className="animate-spin" />
+                    : <Zap size={10} />}
+                  force probe
+                </button>
               )}
             </div>
           )
@@ -340,7 +443,8 @@ function WorkerCard() {
     onError: (e: Error) => toast.error(`Не удалось запустить воркер: ${e.message}`),
   })
 
-  const setInterval = useMutation({
+  // Renamed: `setInterval` локальное имя конфликтовало с глобальным window.setInterval.
+  const setIntervalMut = useMutation({
     mutationFn: (sec: number) => updateWorkerInterval(sec),
     onSuccess: (data) => {
       toast.success(`Интервал обновлён: ${data.params.interval_sec}с`)
@@ -349,8 +453,19 @@ function WorkerCard() {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  const job = workerQuery.data
+  const job = workerQuery.data as SchedulerJobInfoWithHistory | undefined
   const intervalSec = (job?.params?.interval_sec as number) ?? 10
+  const tickHistory = job?.tick_history ?? []
+
+  // Tick countdown — 250ms client tick для прогресс-бара
+  const { secondsLeft, progress } = useWorkerTickCountdown(job?.next_run_at ?? null, intervalSec)
+
+  // 3 mini-sparklines: durations, throughput (durations за интервал), fail rate.
+  // throughput тут грубо — proxy через durations.
+  const durations = tickHistory.map(t => t.duration_ms)
+  const errorRate = tickHistory.length > 0
+    ? tickHistory.filter(t => t.error).length / tickHistory.length
+    : 0
 
   return (
     <Card
@@ -359,12 +474,79 @@ function WorkerCard() {
       right={<JobStatusPill job={job} />}
     >
       <div className="space-y-3">
-        <div className="grid grid-cols-3 gap-3 text-xs">
+        {/* Главный визуал — tick countdown + progress между тиками */}
+        <div className="space-y-1.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <div className="flex items-baseline gap-1.5">
+              <span className="text-2xl font-mono tabular-nums text-violet-300 leading-none">
+                {secondsLeft}
+              </span>
+              <span className="text-[10px] uppercase tracking-wider text-gray-600">
+                sec до next tick
+              </span>
+            </div>
+            <div className="text-[10px] font-mono text-gray-500">
+              interval <span className="text-gray-300">{intervalSec}s</span>
+            </div>
+          </div>
+          <div className="h-1.5 bg-gray-800/60 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-violet-500/80 transition-[width] duration-150"
+              style={{ width: `${progress * 100}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Run-history: 3 mini sparklines */}
+        {durations.length >= 2 && (
+          <div className="grid grid-cols-3 gap-3 pt-2 border-t border-gray-800/50">
+            <div>
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 font-mono mb-0.5">
+                tick duration
+              </div>
+              <MetricSpark
+                values={durations}
+                tone={Math.max(...durations) > intervalSec * 1000 ? 'warn' : 'ok'}
+                width={120}
+                height={20}
+                label={`${(durations[durations.length - 1] / 1000).toFixed(1)}s last`}
+              />
+            </div>
+            <div>
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 font-mono mb-0.5">
+                error rate
+              </div>
+              <div className="flex items-center gap-2">
+                <span className={clsx(
+                  'text-base font-mono tabular-nums',
+                  errorRate > 0.1 ? 'text-rose-300' : 'text-gray-400',
+                )}>
+                  {(errorRate * 100).toFixed(0)}%
+                </span>
+                <span className="text-[9px] text-gray-600">
+                  {tickHistory.filter(t => t.error).length}/{tickHistory.length}
+                </span>
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] uppercase tracking-widest text-gray-500 font-mono mb-0.5">
+                history
+              </div>
+              <div className="text-[10px] font-mono text-gray-500">
+                {tickHistory.length} тиков (~{Math.round((tickHistory.length * intervalSec) / 60)}мин)
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Static info row */}
+        <div className="grid grid-cols-3 gap-3 text-xs pt-2 border-t border-gray-800/50">
           <KV label="last_run_at" value={relativeTime(job?.last_run_at ?? null)} mono />
           <KV label="next_run_at" value={relativeTime(job?.next_run_at ?? null)} mono />
           <KV label="status" value={job?.last_run_status ?? '—'} mono />
         </div>
 
+        {/* Controls: interval + trigger */}
         <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-800/50">
           <div className="flex items-center gap-2">
             <span className="text-[10px] uppercase tracking-widest text-gray-500 font-mono">
@@ -376,8 +558,8 @@ function WorkerCard() {
                 <button
                   key={sec}
                   type="button"
-                  onClick={() => sec !== intervalSec && setInterval.mutate(sec)}
-                  disabled={setInterval.isPending}
+                  onClick={() => sec !== intervalSec && setIntervalMut.mutate(sec)}
+                  disabled={setIntervalMut.isPending}
                   className={clsx(
                     'px-2.5 py-1 text-[11px] font-mono transition-colors',
                     sec === intervalSec
@@ -405,7 +587,7 @@ function WorkerCard() {
             {trigger.isPending
               ? <Loader2 size={12} className="animate-spin" />
               : <PlayCircle size={12} />}
-            Запустить тик сейчас
+            Запустить тик сейчас (R)
           </button>
         </div>
 
@@ -417,7 +599,24 @@ function WorkerCard() {
   )
 }
 
-function JobStatusPill({ job }: { job: SchedulerJobInfo | undefined }) {
+// Локальный clientside countdown — обновляется каждые 250ms пока есть next_run_at.
+function useWorkerTickCountdown(nextRunAt: string | null, intervalSec: number) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!nextRunAt) return
+    const id = window.setInterval(() => setNow(Date.now()), 250)
+    return () => window.clearInterval(id)
+  }, [nextRunAt])
+  if (!nextRunAt) return { secondsLeft: 0, progress: 0 }
+  const target = new Date(nextRunAt).getTime()
+  const secondsLeft = Math.max(0, (target - now) / 1000)
+  const progress = intervalSec > 0
+    ? Math.min(1, 1 - secondsLeft / intervalSec)
+    : 0
+  return { secondsLeft: Math.ceil(secondsLeft), progress }
+}
+
+function JobStatusPill({ job }: { job: SchedulerJobInfoWithHistory | undefined }) {
   if (!job) return null
   const status = job.last_run_status
   const enabled = job.enabled

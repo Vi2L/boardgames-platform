@@ -245,13 +245,47 @@ async def _ml_health_check_runner() -> None:
 
 
 async def _match_worker_runner() -> None:
-    """Один тик match_worker — берёт batch из match_queue, processes T2/T3."""
+    """Один тик match_worker — берёт batch из match_queue, processes T2/T3.
+
+    Замеряет длительность тика и пишет в `_TICK_HISTORY` (ring buffer 30).
+    История идёт в `/scheduler/jobs/match_worker` для UI sparkline'а
+    Worker run-history.
+    """
+    import time as _time
     from catalog.matching.v2.worker import match_worker_job
 
+    started = _time.monotonic()
+    error = False
     try:
         await match_worker_job()
     except Exception:
         logger.exception("match_worker_runner failed")
+        error = True
+    duration_ms = (_time.monotonic() - started) * 1000.0
+    _push_tick("match_worker", duration_ms=duration_ms, error=error)
+
+
+# Ring-buffer per-interval-job для UI run-history. Хранит до 30 последних
+# тиков (~5 мин при 10s interval). Reset при рестарте сервиса — OK, это
+# operational metric, не persistence.
+_TICK_HISTORY: dict[str, list[dict]] = {}
+
+
+def _push_tick(job_id: str, *, duration_ms: float, error: bool) -> None:
+    buf = _TICK_HISTORY.setdefault(job_id, [])
+    buf.append({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "duration_ms": round(duration_ms, 1),
+        "error": error,
+    })
+    # Trim — держим только 30 последних. list.pop(0) O(n) для 30 — норм.
+    while len(buf) > 30:
+        buf.pop(0)
+
+
+def get_tick_history(job_id: str) -> list[dict]:
+    """Reader для UI: возвращает копию ring-buffer тиков. Empty list если нет данных."""
+    return list(_TICK_HISTORY.get(job_id, []))
 
 
 def _interval_runner(job_id: str):

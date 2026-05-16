@@ -16,6 +16,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   Loader2, RefreshCw, ChevronRight, Filter, X, ArrowUpRight,
+  Plus, Trash2, AlertCircle, Power,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -23,9 +24,17 @@ import {
   fetchMatchingStatsExtended,
   fetchSkippedQueue,
   reEnqueueSkipped,
+  fetchQueueDepthHistory,
+  fetchAutoRecoveryRules,
+  createAutoRecoveryRule,
+  updateAutoRecoveryRule,
+  deleteAutoRecoveryRule,
+  type AutoRecoveryRule,
 } from '../../lib/matching'
 import { HowItWorks, TierChip } from './HowItWorks'
 import { InfoTip } from './InfoTip'
+import { MetricSpark } from './MetricSpark'
+import { ConfirmPanel } from './ConfirmPanel'
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
@@ -37,6 +46,9 @@ export function QueuePanel() {
       </HowItWorks>
 
       <QueueStrip />
+      <DepthChartSection />
+      <ReasonBreakdownSection />
+      <AutoRecoveryRulesSection />
       <ReEnqueueSection />
       <ManualQueueLink />
     </div>
@@ -163,6 +175,10 @@ function ReEnqueueSection() {
     },
     onError: (e: Error) => toast.error(e.message),
   })
+
+  // §G inline confirms — заменяют window.confirm для двух bulk-операций.
+  const [confirmSelected, setConfirmSelected] = useState(false)
+  const [confirmAll, setConfirmAll] = useState(false)
 
   const handleSelectAll = () => {
     if (!skipped.data) return
@@ -321,11 +337,7 @@ function ReEnqueueSection() {
           <div className="w-px h-5 bg-gray-700 mx-1" />
           <button
             type="button"
-            onClick={() => {
-              if (selected.size === 0) return
-              const ok = window.confirm(`Re-enqueue ${selected.size} выбранных skipped → pending?`)
-              if (ok) reEnqueueSelected.mutate(Array.from(selected))
-            }}
+            onClick={() => setConfirmSelected(true)}
             disabled={selected.size === 0 || reEnqueueSelected.isPending}
             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] rounded bg-violet-700 hover:bg-violet-600 disabled:opacity-30 text-white"
           >
@@ -334,14 +346,7 @@ function ReEnqueueSection() {
           </button>
           <button
             type="button"
-            onClick={() => {
-              const ok = window.confirm(
-                `Re-enqueue ВСЕХ ${total} skipped` +
-                (hasFilters ? ' по текущему фильтру?' : '?') +
-                '\n\nЭти записи вернутся в pending. Воркер обработает их в ближайшие тики.',
-              )
-              if (ok) reEnqueueAllFiltered.mutate()
-            }}
+            onClick={() => setConfirmAll(true)}
             disabled={total === 0 || reEnqueueAllFiltered.isPending}
             className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] rounded border border-amber-700/60 text-amber-300 hover:bg-amber-900/30 disabled:opacity-30"
           >
@@ -350,6 +355,52 @@ function ReEnqueueSection() {
           </button>
         </div>
       </footer>
+
+      {/* §G inline confirms */}
+      <ConfirmPanel
+        open={confirmSelected}
+        variant="amber"
+        title={`re-enqueue ${selected.size} выбранных`}
+        description="Выбранные skipped будут возвращены в pending. Воркер обработает их в ближайший тик."
+        impact={[
+          `${selected.size} skipped → pending · attempts=0`,
+          'обработка начнётся в течение 10 сек',
+        ]}
+        confirmLabel={`re-enqueue ${selected.size}`}
+        loading={reEnqueueSelected.isPending}
+        onConfirm={() => {
+          reEnqueueSelected.mutate(Array.from(selected))
+          setConfirmSelected(false)
+        }}
+        onCancel={() => setConfirmSelected(false)}
+        className="mx-4 mb-4"
+      />
+      <ConfirmPanel
+        open={confirmAll}
+        variant="amber"
+        title={`re-enqueue ВСЕ ${total} skipped`}
+        description={hasFilters
+          ? 'Все skipped по текущему фильтру → pending.'
+          : 'Все skipped в системе → pending. Это много — учитывай нагрузку на воркер.'}
+        filterSummary={hasFilters ? [
+          ...(storeFilter.length > 0 ? [{ tone: 'neutral' as const, label: `store · ${storeFilter.join(', ')}` }] : []),
+          ...(reasonFilter.length > 0 ? [{ tone: 'amber' as const, label: `reason · ${reasonFilter.join(', ')}` }] : []),
+        ] : undefined}
+        impact={[
+          `${total} skipped → pending`,
+          hasFilters
+            ? 'Только с текущим фильтром (store/reason)'
+            : 'Без фильтров — это все skipped в БД',
+        ]}
+        confirmLabel={`re-enqueue ${total}`}
+        loading={reEnqueueAllFiltered.isPending}
+        onConfirm={() => {
+          reEnqueueAllFiltered.mutate()
+          setConfirmAll(false)
+        }}
+        onCancel={() => setConfirmAll(false)}
+        className="mx-4 mb-4"
+      />
     </section>
   )
 }
@@ -412,6 +463,393 @@ function ChipGroup({ icon, label, options, selected, onChange }: {
             очистить
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+// ── §D.1 Depth chart 24h ───────────────────────────────────────────────────
+
+function DepthChartSection() {
+  const depthQ = useQuery({
+    queryKey: ['matching', 'queue-depth-24h'],
+    queryFn: () => fetchQueueDepthHistory({ range_hours: 24, bucket_minutes: 60 }),
+    refetchInterval: 60_000,
+    retry: false,
+  })
+
+  const depth = depthQ.data
+  if (!depth || depth.points.length === 0) {
+    return null  // ничего не показываем если backend не отдал — gracefully degrade
+  }
+
+  // ETA пустоты: при положительном drainage_rate_per_min — через сколько pending → 0.
+  const etaMinutes = depth.drainage_rate_per_min > 0
+    ? Math.ceil(depth.current / depth.drainage_rate_per_min)
+    : null
+
+  return (
+    <section className={clsx(
+      'rounded-lg border border-gray-800/80 bg-gray-900/40 overflow-hidden',
+      'shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]',
+    )}>
+      <header className="px-4 py-2.5 border-b border-gray-800/60 bg-black/20 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-300 flex items-center gap-2">
+          depth · 24h
+          <InfoTip text="Глубина очереди (pending+processing) за последние 24 часа. Реконструкция на основе created_at / processed_at — не точный snapshot. Drainage rate показывает изменение pending за последний bucket." />
+        </h3>
+        <div className="flex items-center gap-3 text-[10px] font-mono">
+          <span className="text-gray-500">peak <span className="text-gray-300 tabular-nums">{depth.peak}</span></span>
+          <span className="text-gray-500">now <span className="text-gray-300 tabular-nums">{depth.current}</span></span>
+          {depth.drainage_rate_per_min !== 0 && (
+            <span className={clsx(
+              'tabular-nums',
+              depth.drainage_rate_per_min > 0 ? 'text-emerald-400' : 'text-rose-400',
+            )}>
+              {depth.drainage_rate_per_min > 0 ? '↓' : '↑'} {Math.abs(depth.drainage_rate_per_min).toFixed(1)}/мин
+            </span>
+          )}
+          {etaMinutes !== null && etaMinutes < 1440 && (
+            <span className="text-gray-500">
+              ETA пустоты <span className="text-emerald-400 tabular-nums">~{etaMinutes}м</span>
+            </span>
+          )}
+        </div>
+      </header>
+      <div className="p-4">
+        <MetricSpark
+          values={depth.points.map(p => p.depth)}
+          tone={depth.current > 100 ? 'warn' : 'info'}
+          width={900}
+          height={48}
+        />
+      </div>
+    </section>
+  )
+}
+
+// ── §D.2 Reason breakdown — horizontal bars + click re-enqueue ─────────────
+
+const REASON_HINTS: Record<string, string> = {
+  llm_unavailable: 'qwen2.5 был оффлайн — re-enqueue после ollama pull',
+  no_candidates: 'T2 не нашёл похожих — попробовать warmup эмбеддингов',
+  vec_below_threshold: '1 кандидат с score 0.70-0.85 — слабый, не пускали к T3',
+  ml_no_match: 'T3 LLM сказал "нет совпадения"',
+  llm_low_confidence: 'T3 LLM выбрал кандидата, но confidence < 0.75',
+  llm_disabled: 'legacy — было до hardening 2026-05-16',
+  llm_parse_failed: 'LLM вернул невалидный JSON (rare)',
+}
+
+function ReasonBreakdownSection() {
+  const qc = useQueryClient()
+  const skippedQ = useQuery({
+    queryKey: ['matching', 'skipped', [], [], 0],
+    queryFn: () => fetchSkippedQueue({ limit: 1 }),
+    refetchInterval: 15_000,
+  })
+
+  const [confirmReason, setConfirmReason] = useState<string | null>(null)
+
+  const reenqueueByReason = useMutation({
+    mutationFn: (reason: string) => reEnqueueSkipped({ reason: [reason] }),
+    onSuccess: (data, reason) => {
+      toast.success(`Re-enqueued ${data.re_enqueued} офферов с reason=${reason}`)
+      qc.invalidateQueries({ queryKey: ['matching', 'skipped'] })
+      qc.invalidateQueries({ queryKey: ['matching', 'stats-extended'] })
+      setConfirmReason(null)
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const reasons = skippedQ.data?.reasons ?? {}
+  const total = Object.values(reasons).reduce((a, b) => a + b, 0)
+  if (total === 0) return null
+  const sorted = Object.entries(reasons).sort(([, a], [, b]) => b - a).slice(0, 8)
+
+  return (
+    <section className={clsx(
+      'rounded-lg border border-gray-800/80 bg-gray-900/40 overflow-hidden',
+      'shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]',
+    )}>
+      <header className="px-4 py-2.5 border-b border-gray-800/60 bg-black/20 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-300 flex items-center gap-2">
+          breakdown · skipped reasons
+          <InfoTip text="Распределение skipped по reasons. Клик на строку — inline confirm для re-enqueue всех офферов с этим reason." />
+        </h3>
+        <span className="text-[10px] font-mono text-gray-500">total {total}</span>
+      </header>
+      <div className="p-4 space-y-1.5">
+        {sorted.map(([reason, count]) => {
+          const pct = total > 0 ? (count / total) * 100 : 0
+          const hint = REASON_HINTS[reason]
+          return (
+            <div key={reason} className="space-y-1">
+              <button
+                type="button"
+                onClick={() => setConfirmReason(reason)}
+                className="w-full group flex items-center gap-2 text-left hover:bg-gray-800/40 rounded px-1.5 py-1 transition-colors"
+              >
+                <code className="font-mono text-[11px] text-amber-300/90 w-44 truncate shrink-0">
+                  {reason}
+                </code>
+                <div className="flex-1 h-2 bg-gray-800/60 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-amber-500/60 transition-[width] duration-300"
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <span className="font-mono tabular-nums text-xs text-gray-300 w-12 text-right shrink-0">{count}</span>
+                <span className="font-mono tabular-nums text-[10px] text-gray-500 w-10 text-right shrink-0">{pct.toFixed(0)}%</span>
+                <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-violet-300 shrink-0">
+                  re-enqueue →
+                </span>
+              </button>
+              {hint && (
+                <p className="ml-[12.5rem] text-[10px] text-gray-500">{hint}</p>
+              )}
+
+              <ConfirmPanel
+                open={confirmReason === reason}
+                variant="amber"
+                title={`re-enqueue all by reason='${reason}'`}
+                description={`Вернуть в pending все ${count} офферов с этим reason.`}
+                filterSummary={[
+                  { tone: 'amber', label: `reason · ${reason}` },
+                  { tone: 'neutral', label: `count · ${count}` },
+                ]}
+                impact={[
+                  `${count} skipped → pending · attempts=0`,
+                  'воркер обработает в ближайшие тики',
+                  hint || 'смотри handoff §D-skipped reasons',
+                ]}
+                confirmLabel={`re-enqueue ${count}`}
+                loading={reenqueueByReason.isPending}
+                onConfirm={() => reenqueueByReason.mutate(reason)}
+                onCancel={() => setConfirmReason(null)}
+              />
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+// ── §D.3 Auto-recovery rules CRUD ──────────────────────────────────────────
+
+function AutoRecoveryRulesSection() {
+  const qc = useQueryClient()
+  const rulesQ = useQuery({
+    queryKey: ['matching', 'auto-recovery-rules'],
+    queryFn: fetchAutoRecoveryRules,
+    refetchInterval: 30_000,
+    retry: false,
+  })
+
+  const toggleRule = useMutation({
+    mutationFn: ({ id, enabled }: { id: number; enabled: boolean }) =>
+      updateAutoRecoveryRule(id, { enabled }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['matching', 'auto-recovery-rules'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const removeRule = useMutation({
+    mutationFn: (id: number) => deleteAutoRecoveryRule(id),
+    onSuccess: () => {
+      toast.success('Правило удалено')
+      qc.invalidateQueries({ queryKey: ['matching', 'auto-recovery-rules'] })
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  const [showCreate, setShowCreate] = useState(false)
+
+  const rules = rulesQ.data ?? []
+
+  return (
+    <section className={clsx(
+      'rounded-lg border border-gray-800/80 bg-gray-900/40 overflow-hidden',
+      'shadow-[inset_0_1px_0_0_rgba(255,255,255,0.04)]',
+    )}>
+      <header className="px-4 py-2.5 border-b border-gray-800/60 bg-black/20 flex items-center justify-between">
+        <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-300 flex items-center gap-2">
+          auto-recovery rules
+          <InfoTip text="Правила автоматического восстановления. Реагируют на события (модель закрылась после downtime) и выполняют действия (re-enqueue all llm_unavailable). Runner-job выполняет правила раз в минуту." />
+        </h3>
+        <button
+          type="button"
+          onClick={() => setShowCreate(true)}
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono text-violet-300 hover:text-violet-200 hover:bg-violet-950/30"
+        >
+          <Plus size={11} /> add
+        </button>
+      </header>
+
+      <div className="p-3 space-y-1.5">
+        {rulesQ.isLoading && (
+          <div className="text-xs text-gray-500 py-2 text-center">загружаю…</div>
+        )}
+        {!rulesQ.isLoading && rules.length === 0 && !showCreate && (
+          <div className="text-xs text-gray-500 py-3 text-center">
+            нет правил. <button onClick={() => setShowCreate(true)} className="text-violet-300 hover:text-violet-200">создать первое</button>
+          </div>
+        )}
+        {rules.map(rule => (
+          <RuleRow
+            key={rule.id}
+            rule={rule}
+            onToggle={(e) => toggleRule.mutate({ id: rule.id, enabled: e })}
+            onDelete={() => removeRule.mutate(rule.id)}
+          />
+        ))}
+        {showCreate && (
+          <RuleCreateForm
+            onCancel={() => setShowCreate(false)}
+            onCreated={() => {
+              setShowCreate(false)
+              qc.invalidateQueries({ queryKey: ['matching', 'auto-recovery-rules'] })
+            }}
+          />
+        )}
+      </div>
+    </section>
+  )
+}
+
+function RuleRow({
+  rule, onToggle, onDelete,
+}: {
+  rule: AutoRecoveryRule
+  onToggle: (enabled: boolean) => void
+  onDelete: () => void
+}) {
+  return (
+    <div className={clsx(
+      'flex items-center gap-2 px-2 py-1.5 rounded border text-xs',
+      rule.enabled ? 'border-gray-800 bg-gray-900/40' : 'border-gray-800/50 bg-gray-900/20 opacity-60',
+    )}>
+      <button
+        type="button"
+        onClick={() => onToggle(!rule.enabled)}
+        title={rule.enabled ? 'disable' : 'enable'}
+        className={clsx(
+          'shrink-0 inline-flex items-center justify-center w-4 h-4 rounded-full border',
+          rule.enabled
+            ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
+            : 'bg-gray-800 border-gray-700 text-gray-600',
+        )}
+      >
+        <Power size={9} />
+      </button>
+      <code className="font-mono text-violet-300 w-32 truncate shrink-0" title={rule.name}>
+        {rule.name}
+      </code>
+      <span className="font-mono text-[10px] text-gray-500 truncate flex-1" title={JSON.stringify(rule.condition)}>
+        if: {JSON.stringify(rule.condition)}
+      </span>
+      <span className="font-mono text-[10px] text-gray-500 truncate flex-1" title={JSON.stringify(rule.action)}>
+        then: {JSON.stringify(rule.action)}
+      </span>
+      <span className={clsx(
+        'text-[10px] font-mono font-semibold uppercase shrink-0',
+        rule.enabled ? 'text-emerald-400' : 'text-gray-600',
+      )}>
+        {rule.enabled ? '● armed' : '○ off'}
+      </span>
+      <button
+        type="button"
+        onClick={onDelete}
+        className="shrink-0 text-gray-600 hover:text-rose-300 p-0.5"
+        title="удалить"
+      >
+        <Trash2 size={11} />
+      </button>
+    </div>
+  )
+}
+
+function RuleCreateForm({
+  onCancel, onCreated,
+}: { onCancel: () => void; onCreated: () => void }) {
+  const [name, setName] = useState('')
+  const [conditionText, setConditionText] = useState(
+    '{"type":"circuit_state","model":"qwen2.5:7b-instruct","becomes":"closed"}',
+  )
+  const [actionText, setActionText] = useState(
+    '{"type":"re_enqueue_skipped","filters":{"reason":["llm_unavailable"]}}',
+  )
+
+  const create = useMutation({
+    mutationFn: () => {
+      let condition: Record<string, unknown>
+      let action: Record<string, unknown>
+      try {
+        condition = JSON.parse(conditionText)
+        action = JSON.parse(actionText)
+      } catch (e) {
+        throw new Error(`Невалидный JSON: ${(e as Error).message}`)
+      }
+      return createAutoRecoveryRule({ name, condition, action, enabled: true })
+    },
+    onSuccess: () => {
+      toast.success(`Правило ${name} создано`)
+      onCreated()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
+
+  return (
+    <div className="p-3 rounded border border-violet-900/40 bg-violet-950/20 space-y-2 text-xs">
+      <div className="flex items-center gap-2">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-mono w-16">name</span>
+        <input
+          value={name}
+          onChange={e => setName(e.target.value)}
+          placeholder="qwen-recovery"
+          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-800 rounded font-mono text-violet-300"
+        />
+      </div>
+      <div className="flex items-start gap-2">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-mono w-16 mt-1">if</span>
+        <textarea
+          value={conditionText}
+          onChange={e => setConditionText(e.target.value)}
+          rows={2}
+          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-800 rounded font-mono text-xs text-gray-200"
+        />
+      </div>
+      <div className="flex items-start gap-2">
+        <span className="text-[10px] text-gray-500 uppercase tracking-wider font-mono w-16 mt-1">then</span>
+        <textarea
+          value={actionText}
+          onChange={e => setActionText(e.target.value)}
+          rows={2}
+          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-800 rounded font-mono text-xs text-gray-200"
+        />
+      </div>
+      <div className="flex items-center gap-2 pt-1">
+        <button
+          type="button"
+          onClick={() => create.mutate()}
+          disabled={!name.trim() || create.isPending}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white"
+        >
+          {create.isPending && <Loader2 size={11} className="animate-spin" />}
+          создать
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="px-2.5 py-1 text-xs text-gray-500 hover:text-gray-200"
+        >
+          отмена
+        </button>
+        <span className="text-[10px] text-gray-500 ml-auto">
+          <AlertCircle size={9} className="inline mr-0.5" />
+          runner ещё не реализован — правила сохраняются, но пока не выполняются
+        </span>
       </div>
     </div>
   )

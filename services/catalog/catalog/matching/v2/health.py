@@ -18,6 +18,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections import deque
 from datetime import datetime, timezone
 
 import httpx
@@ -43,6 +44,14 @@ class OllamaHealth:
         self._last_check_at: float = 0.0
         self._last_success_at: float = 0.0
         self._lock = asyncio.Lock()
+
+        # ─── Latency / throughput tracking (для UI metrics) ──────────────────
+        # Per-model rolling-buffer последних ~60 успешных вызовов.
+        # Хранит (timestamp, duration_ms). 60 — компромисс между «достаточно
+        # для p95» и «не съест памяти». При rps=1 это окно ~60с.
+        self._latency_samples: dict[str, deque[tuple[float, float]]] = {}
+        # Per-model текст последней ошибки (truncate до 200 char).
+        self._last_error_text: dict[str, str] = {}
 
         # Circuit breaker thresholds.
         # closed → open: после N consecutive failures.
@@ -114,6 +123,14 @@ class OllamaHealth:
                     circuit_state[model] = "half_open"
                 else:
                     circuit_state[model] = "open"
+        # Per-model расширенные метрики (latency / rps / last_error) — для
+        # `/matching/ml-status` дешёво (rolling-buffer in-memory).
+        metrics: dict[str, dict] = {}
+        for model in self._status.keys():
+            m = self.metrics_for(model)
+            err = self._last_error_text.get(model)
+            metrics[model] = {**m, "last_error_text": err}
+
         return {
             "models": dict(self._status),
             "circuit_state": circuit_state,
@@ -126,6 +143,7 @@ class OllamaHealth:
                 if self._last_success_at else None
             ),
             "failures": dict(self._failures),
+            "metrics": metrics,
         }
 
     async def check(self) -> None:
@@ -173,7 +191,7 @@ class OllamaHealth:
         for model in (settings.ml_embed_model, settings.ml_llm_model):
             self._record_failure(model, reason)
 
-    def record_success(self, model: str) -> None:
+    def record_success(self, model: str, duration_ms: float | None = None) -> None:
         """Closed-семантика: успешный реальный вызов модели (embed/llm) сбрасывает
         счётчик провалов и закрывает цепь.
 
@@ -181,6 +199,8 @@ class OllamaHealth:
         успешного HTTP-ответа. Без этого: после half-open probe цепь оставалась
         бы в open до следующего фонового `check()` (до 30 сек), и воркер каждые
         10 сек делал бы новый probe на одну и ту же модель — лишний overhead.
+
+        `duration_ms` — если передан, попадает в rolling-buffer для p50/p95/rps.
         """
         if not self._status.get(model):
             logger.info("OllamaHealth: model %s → closed (probe success)", model)
@@ -188,6 +208,57 @@ class OllamaHealth:
         self._failures[model] = 0
         self._last_failure_at.pop(model, None)
         self._last_success_at = time.time()
+        if duration_ms is not None:
+            self._push_latency_sample(model, duration_ms)
+
+    def record_error(self, model: str, error_text: str) -> None:
+        """Зафиксировать текст последней ошибки модели — для UI tooltip
+        `last_error_text` в карточке модели. Не меняет circuit_state."""
+        self._last_error_text[model] = (error_text or "")[:200]
+
+    def _push_latency_sample(self, model: str, duration_ms: float) -> None:
+        """Append в rolling buffer. Очищаем хвост — окно ~60с при rps=1."""
+        buf = self._latency_samples.get(model)
+        if buf is None:
+            buf = deque(maxlen=60)
+            self._latency_samples[model] = buf
+        buf.append((time.time(), float(duration_ms)))
+
+    def metrics_for(self, model: str) -> dict:
+        """Расчёт p50/p95/rps_1m для одной модели из rolling-buffer.
+
+        Возвращает {p50_ms, p95_ms, rps_1m, samples_count}. Если данных нет —
+        все значения None / 0 (UI деградирует graceful'но).
+        """
+        buf = self._latency_samples.get(model)
+        if not buf:
+            return {"p50_ms": None, "p95_ms": None, "rps_1m": 0.0, "samples_count": 0}
+
+        now = time.time()
+        # Берём только семплы за последние 60с — rps_1m по определению.
+        recent = [(t, d) for (t, d) in buf if now - t <= 60.0]
+        if not recent:
+            return {"p50_ms": None, "p95_ms": None, "rps_1m": 0.0, "samples_count": 0}
+
+        durations = sorted(d for (_, d) in recent)
+        n = len(durations)
+        # percentile через линейную интерполяцию между ближайшими индексами.
+        # 60 семплов — точности достаточно, без numpy.
+        def pct(p: float) -> float:
+            if n == 1:
+                return durations[0]
+            k = p * (n - 1)
+            lo = int(k)
+            hi = min(lo + 1, n - 1)
+            frac = k - lo
+            return durations[lo] + (durations[hi] - durations[lo]) * frac
+
+        return {
+            "p50_ms": round(pct(0.50), 1),
+            "p95_ms": round(pct(0.95), 1),
+            "rps_1m": round(n / 60.0, 2),
+            "samples_count": n,
+        }
 
     def _record_failure(self, model: str, reason: str) -> None:
         self._failures[model] = self._failures.get(model, 0) + 1

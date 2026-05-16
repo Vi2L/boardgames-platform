@@ -207,3 +207,148 @@ export type MatchingStatsExtended = {
 
 export const fetchMatchingStatsExtended = () =>
   fetch(`${BASE}/matching/stats`).then(r => json<MatchingStatsExtended>(r))
+
+// ── UX-improvements §A/§C/§D/§E (handoff v2) ───────────────────────────────
+
+export type QueueDepthPoint = {
+  ts: string
+  depth: number
+}
+
+export type QueueDepthHistory = {
+  points: QueueDepthPoint[]
+  current: number
+  peak: number
+  drainage_rate_per_min: number
+  range_hours: number
+  bucket_minutes: number
+}
+
+export const fetchQueueDepthHistory = (params: { range_hours?: number; bucket_minutes?: number } = {}) => {
+  const sp = new URLSearchParams()
+  sp.set('range_hours', String(params.range_hours ?? 24))
+  sp.set('bucket_minutes', String(params.bucket_minutes ?? 60))
+  return fetch(`${BASE}/matching/queue/depth?${sp}`).then(r => json<QueueDepthHistory>(r))
+}
+
+export type QueueItemLookup = {
+  id: number
+  offer_id: number
+  store_slug: string
+  title_raw: string
+  status: 'pending' | 'processing' | 'done' | 'failed' | 'skipped'
+  priority: number
+  attempts: number
+  error_detail: string | null
+  created_at: string
+  claimed_at: string | null
+  processed_at: string | null
+  next_attempt_at: string | null
+  result_game_id: number | null
+  result_score: number | null
+  result_tier: number | null
+  position_in_pending: number | null
+}
+
+export const fetchQueueItem = (queueId: number) =>
+  fetch(`${BASE}/matching/queue/${queueId}`).then(r => json<QueueItemLookup>(r))
+
+export const cancelQueueItem = (queueId: number) =>
+  fetch(`${BASE}/matching/queue/${queueId}`, { method: 'DELETE' })
+    .then(r => json<{ queue_id: number; result: string }>(r))
+
+export type ModelProbeResult = {
+  model: string
+  probed: boolean
+  circuit_state: 'closed' | 'half_open' | 'open' | 'unknown'
+  last_check_at: string | null
+}
+
+export const forceProbeModel = (modelName: string) =>
+  fetch(`${BASE}/matching/ml-models/${encodeURIComponent(modelName)}/probe`, {
+    method: 'POST',
+  }).then(r => json<ModelProbeResult>(r))
+
+// ── Auto-recovery rules CRUD ───────────────────────────────────────────────
+
+export type AutoRecoveryRule = {
+  id: number
+  name: string
+  condition: Record<string, unknown>
+  action: Record<string, unknown>
+  enabled: boolean
+  last_triggered_at: string | null
+  last_result: string | null
+  created_at: string
+  updated_at: string
+  updated_by: string | null
+}
+
+export const fetchAutoRecoveryRules = () =>
+  fetch(`${BASE}/admin/auto-recovery-rules`).then(r => json<AutoRecoveryRule[]>(r))
+
+export const createAutoRecoveryRule = (payload: {
+  name: string
+  condition: Record<string, unknown>
+  action: Record<string, unknown>
+  enabled?: boolean
+}) =>
+  fetch(`${BASE}/admin/auto-recovery-rules`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  }).then(r => json<AutoRecoveryRule>(r))
+
+export const updateAutoRecoveryRule = (
+  ruleId: number,
+  patch: Partial<{
+    name: string
+    condition: Record<string, unknown>
+    action: Record<string, unknown>
+    enabled: boolean
+  }>,
+) =>
+  fetch(`${BASE}/admin/auto-recovery-rules/${ruleId}`, {
+    method: 'PATCH',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(patch),
+  }).then(r => json<AutoRecoveryRule>(r))
+
+export const deleteAutoRecoveryRule = (ruleId: number) =>
+  fetch(`${BASE}/admin/auto-recovery-rules/${ruleId}`, { method: 'DELETE' })
+    .then(r => {
+      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`)
+    })
+
+// ── Расширение MlStatus типа (latency/rps/error metrics) ────────────────────
+// Не пере-экспортим MlStatus (он в catalog.ts), но даём helper-тип для UI.
+
+export type ModelMetrics = {
+  p50_ms: number | null
+  p95_ms: number | null
+  rps_1m: number
+  samples_count: number
+  last_error_text: string | null
+}
+
+export type MlStatusWithMetrics = {
+  models: Record<string, boolean>
+  circuit_state: Record<string, 'closed' | 'half_open' | 'open' | 'unknown'>
+  last_check_at: string | null
+  last_success_at: string | null
+  failures: Record<string, number>
+  metrics: Record<string, ModelMetrics>
+  queue: Record<string, number>
+}
+
+// ── Расширение SchedulerJob типа (tick_history) ─────────────────────────────
+
+export type SchedulerJobTick = {
+  ts: string
+  duration_ms: number
+  error: boolean
+}
+
+export type SchedulerJobInfoWithHistory = SchedulerJobInfo & {
+  tick_history: SchedulerJobTick[]
+}

@@ -33,6 +33,7 @@ from catalog.schemas import (
 from catalog.scheduler import (
     JOB_METADATA,
     JobAlreadyRunning,
+    get_tick_history,
     reload_job_from_db,
     trigger_scheduled_job,
 )
@@ -68,6 +69,7 @@ def _enrich_with_runtime(
         next_run_at=next_run,
         display_name=meta.get("display_name"),
         description=meta.get("description"),
+        tick_history=get_tick_history(cfg.job_id),
     )
 
 
