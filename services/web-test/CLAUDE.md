@@ -171,14 +171,52 @@ services/web-test/
 - **Страница** в `pages/`, локальные компоненты в `components/<domain>/`.
 - **State**: TanStack Query 5 (server state) + Zustand 4 (UI state поиска).
 - **Cache keys**: `['catalog', ...]` / `['parsers', ...]` / `['parsers-db', ...]`
-  / `['debug', ...]` / `['dlq']` / `['health-all']`. Mutation-callback'и
-  явно `invalidateQueries(...)` по нужным ключам.
+  / `['debug', ...]` / `['dlq']` / `['health-all']` / `['matching', ...]`.
+  Mutation-callback'и явно `invalidateQueries(...)` по нужным ключам.
 - **Таблица + drawer/details** — основной UX. Inline-formы для CRUD
   (см. `AliasEditor`, `GameEditor`).
 - **SSE** — для долгих операций (search, suite-run). Polling — для
   job-based (Import Wizard через `refetchInterval` с авто-стопом).
-- **toast (sonner)** для успехов/ошибок мутаций. `window.confirm` для
-  destructive-операций (delete observation, merge games, replay-all DLQ).
+- **toast (sonner)** для успехов/ошибок мутаций. **`ConfirmPanel`** inline
+  (см. `components/matching/ConfirmPanel.tsx`) для bulk-actions с filter
+  summary + impact preview — заменяет `window.confirm` где нужен deliberate
+  confirm. `window.confirm` только для truly destructive (delete observation,
+  delete game, merge games, replay-all DLQ).
+
+### Design system (`src/components/ui/*` · ветка `feat/admin-panel-redesign`)
+
+В ветке `feat/admin-panel-redesign` создана **новая UI-система** под
+полный редизайн (см. `.scratch/admin-panel-design/` handoff, devlog-запись
+`WT-DESIGN-PR1`). На `main` этого ещё нет, мерж — после PR 2 Matching proof.
+
+В этой системе:
+- **Источник правды для tokens**: `src/lib/design-tokens.ts` — colors
+  (zinc base + indigo-400 accent), typography (Inter / JetBrains Mono,
+  узкая 10-18px шкала), density (compact 32px row default), `statusSystem`
+  (12 ключей → tone → toneClasses).
+- **Tailwind config** extend через `tokens.tailwind` — fontSize шкала
+  переопределена на 10-18px. **Важно для разработчика**: `text-xs` = 11px
+  (раньше 12px), `text-base` = 13px (раньше 16px). Все размеры узнее.
+- **20 ui-примитивов** в `src/components/ui/`: Button, IconButton, Input,
+  Textarea, Select (Radix), Combobox (cmdk+Popover), Badge, StatusDot,
+  Tag, ProgressBar, Skeleton, KBD, EmptyState, Dialog (Radix), Drawer
+  (Radix Dialog modal=false split-view), Tooltip + Provider, Tabs (Radix),
+  Toolbar, DataTable (TanStack Table + virtual ≥500), JobLogPanel,
+  HealthCard, CommandPalette (register-API через `useCommand`).
+- **Layout**: `AppShell` оборачивает все routes (sidebar + topbar +
+  TooltipProvider). `Sidebar` collapse persist в `localStorage`.
+- **Гaлерея**: `/__design` доступна при `import.meta.env.DEV` —
+  16 секций со всеми компонентами в variants × sizes.
+
+**Правила работы с новым ui:**
+- Использовать `<Badge status="auto" />` (не локальные color-словари —
+  источник правды `src/lib/design-tokens.ts:statusSystem`).
+- НЕ подключать UI-библиотеки целиком (Mantine/MUI/shadcn-целиком).
+  Radix-примитивы точечно — да.
+- Cache-keys TanStack Query не трогать при миграции страниц — они
+  стабильные между старым и новым UI.
+- Старые компоненты при миграции — пометить `@deprecated`, не удалять
+  сразу. Удаление через 1-2 итерации.
 
 ### Adding a new parser
 

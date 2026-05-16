@@ -8,6 +8,178 @@
 
 ---
 
+## 2026-05-16 · [WT-MATCH-UX] Matching UX upgrade — §A..§G (handoff 06-matching-v2-improvements)
+
+**Что сделано:** Полный точечный апгрейд `/matching` admin-панели по handoff'у
+`docs/cat-4-matching-v2.md` (artboards `wireframes.html → 08`). Стиль gray/violet
+сохранён — переключение на zinc/indigo это отдельный track в `feat/admin-panel-redesign`.
+
+Ветка: **`feat/admin-panel-redesign`** (коммиты `4d7826e` + `d348395`).
+
+**Backend** (5 новых endpoint'ов в catalog + миграция 0014):
+
+- `GET /matching/queue/depth?range_hours=24` — sparkline по bucket'ам (peak/now/drainage/ETA).
+  Реконструкция по `created_at`/`processed_at` (не точный snapshot).
+- `GET /matching/queue/{id}` — lookup match_queue записи + `position_in_pending`.
+- `DELETE /matching/queue/{id}` — cancel pending (409 если processing).
+- `POST /matching/ml-models/{name}/probe` — force probe для UI Контроль.
+- `/admin/auto-recovery-rules` CRUD (миграция 0014, новая таблица; runner-job TODO).
+- `OllamaHealth` теперь tracks **p50/p95/rps_1m** per-model + `last_error_text`
+  (rolling-buffer 60 точек, `record_success(model, duration_ms)`).
+- `scheduler._TICK_HISTORY` — ring-buffer 30 тиков per interval-job; отдаётся через
+  `SchedulerJobOut.tick_history`.
+- `MatchAction.T2_PROGRESS`/`T3_PROGRESS` — intermediate match_log entries из worker'а
+  для UI live-stages (revert этих action'ов запрещён).
+
+**Frontend** (4 новых компонента + полный апгрейд 3 вкладок):
+
+- `MetricSpark.tsx` — inline-SVG sparkline (без recharts).
+- `ActiveJobsStrip.tsx` — persistent indicator активных ImportJob'ов.
+- `ConfirmPanel.tsx` — inline confirm (filter summary + impact list + Esc/Enter)
+  заменяет `window.confirm` в kill-switch / re-enqueue.
+- `KeyboardCheatsheet.tsx` — overlay по `?`, 4 группы шорткатов.
+- `store/matching-metrics.ts` — Zustand client-buffer 60 snapshot'ов (fallback
+  если backend depth_history degraded).
+
+`MatchingPage` header — **6-section dense strip** (title / models с rps+p50+p95+fail /
+queue stats c delta / depth sparkline 24h / worker countdown 250ms / ActiveJobsStrip).
+Tab strip — live counters (`Очередь · 142` с амбер фоном при >100), alert-dot на
+`Контроле` при CB open/half_open, KBD shortcuts 1-5+`?`.
+
+`ControlTab` — KillSwitch с ConfirmPanel impact preview (X pending останутся,
+Y processing завершат batch); ModelsCard с расширенными метриками + latency sparkline
++ Force-probe button; WorkerCard с tick countdown + 3 mini-метрик (duration / error rate / history).
+
+`QueuePanel` — DepthChartSection (full-width 24h), ReasonBreakdownSection
+(horizontal bars, clickable → ConfirmPanel re-enqueue by reason),
+AutoRecoveryRulesSection (CRUD list + create form).
+
+`SingleMatchTab` — ProgressDrawer теперь polling `/matching/queue/{id}` →
+**3-step position indicator** (enqueued → picked → processing); T2/T3 stages
+из intermediate match_log entries; ETA-countdown на базе qwen.p50; Cancel button
+(Esc) для pending записей.
+
+**SPA fallback fix** (`d348395`): `SPAStaticFiles(StaticFiles)` подкласс — на 404
+от static отдаём `index.html`, чтобы direct URL и refresh не ломались
+(`localhost:8000/matching` → 200 вместо 404).
+
+**Как пользоваться:**
+- `docker compose build catalog web-test && docker compose up -d --force-recreate catalog web-test`
+- Открой `http://localhost:8000/matching` — увидишь полную панель.
+- Шорткаты: `1-5` — вкладки, `?` — cheatsheet, `Esc` — закрыть/cancel.
+- Force-probe модели — Контроль → ML-модели → кнопка появляется при open/half_open.
+- Auto-recovery rules — Очередь → нижняя секция → `[+ add]` → JSON-форма
+  (runner ещё не реализован, правила сохраняются «armed but not executing»).
+
+**Затронутые файлы (29 файлов):**
+
+Backend:
+- `services/catalog/alembic/versions/20260516_0014_auto_recovery_rules.py` (new)
+- `services/catalog/catalog/routers/auto_recovery.py` (new)
+- `services/catalog/catalog/routers/{matching,scheduler}.py`, `api.py`, `models.py`, `schemas.py`
+- `services/catalog/catalog/matching/v2/{queue_repo,health,embedder,llm_arbiter,worker,auditor,domain}.py`
+- `services/catalog/catalog/scheduler.py`
+
+Proxy:
+- `services/web-test/app/{main,catalog_client}.py`, `app/api/catalog.py`
+
+Frontend:
+- `services/web-test/frontend/src/components/matching/{MetricSpark,ActiveJobsStrip,ConfirmPanel,KeyboardCheatsheet}.tsx` (new)
+- `services/web-test/frontend/src/store/matching-metrics.ts` (new)
+- `services/web-test/frontend/src/pages/MatchingPage.tsx`
+- `services/web-test/frontend/src/components/matching/{ControlTab,QueuePanel,SingleMatchTab}.tsx`
+- `services/web-test/frontend/src/lib/matching.ts`
+
+**Известные ограничения:**
+- Auto-recovery rules runner — не реализован. Правила создаются и видны, но
+  не выполняются автоматически (нужен scheduler-job `auto_recovery_runner`).
+- `queue_depth_history` — реконструкция по `created_at`/`processed_at`,
+  не точный snapshot. Для production-grade — нужна snapshot-таблица + cron.
+- Skipped-таблица в Очереди — без `shift-range select` / `hover-actions` /
+  `relative time` (handoff 06 §D.5 — упрощено, оставлено как было).
+
+---
+
+## 2026-05-16 · [WT-DESIGN-PR1] Foundation — design tokens + ui primitives + AppShell
+
+**Что сделано:** PR 1 из handoff-пакета `docs/web-test-redesign-brief.md`
+(см. также `.scratch/admin-panel-design/` — оригинальный handoff). Создаёт
+базу для полного редизайна `web-test` под единый design-system: zinc base +
+indigo-400 accent + Inter / JetBrains Mono. Существующие страницы продолжают
+работать без изменений — они теперь рендерятся внутри `AppShell`.
+
+Ветка: **`feat/admin-panel-redesign`** (коммит `1e3c107`).
+
+**Foundation:**
+- `src/lib/design-tokens.ts` — runtime tokens (colors zinc+indigo, узкая
+  10-18px fontSize шкала, density compact 32px, stores mapping, statusSystem
+  с 12 ключами → tone, toneClasses bundle).
+- `tailwind.config.ts` extend через `tokens.tailwind`.
+- `index.html` — Google Fonts preconnect + Inter + JetBrains Mono.
+- `src/vite-env.d.ts` — типы для `import.meta.env`.
+
+**UI primitives** (`src/components/ui/`, 20 файлов + barrel):
+- Form/action: `Button`, `IconButton`, `Input`, `Textarea`, `Select` (Radix),
+  `Combobox` (cmdk+Popover).
+- Status/display: `Badge`, `StatusDot`, `Tag`, `ProgressBar`, `Skeleton`,
+  `KBD`, `EmptyState`.
+- Overlays: `Dialog`, `Drawer` (Radix Dialog с modal=false split-view),
+  `Tooltip` + `TooltipProvider`.
+- Navigation/containers: `Tabs` (Radix underline), `Toolbar`.
+- Composite: `DataTable` (TanStack Table + virtual ≥500 строк через
+  `@tanstack/react-virtual`), `JobLogPanel`, `HealthCard` (sparkline),
+  `CommandPalette` с register-API через хук `useCommand`.
+
+**Layout** (`src/components/layout/`, 4 файла): `AppShell`, `Sidebar`,
+`Topbar`, `BgJobsIndicator`. Sidebar collapse persist в `localStorage`.
+
+**Design System gallery** — `/__design` доступен при `import.meta.env.DEV`,
+16 секций со всеми примитивами в variants × sizes (smoke-test PR 1
+acceptance).
+
+**Deps**: `@radix-ui/react-{dialog,tooltip,tabs,select,popover,slot}`,
+`@tanstack/react-virtual`, `class-variance-authority`. Никаких UI-библиотек
+целиком — только точечные Radix-примитивы.
+
+**Старая `src/components/shared/CommandPalette.tsx`** помечена `@deprecated`,
+новая в `ui/` смонтирована. Старая будет удалена через 1-2 итерации, когда
+страницы мигрируют.
+
+**Как пользоваться:**
+- В новом коде импортируй из `'@/components/ui'` или
+  `'../../components/ui'` — `import { Button, Badge, Drawer } from '@/components/ui'`.
+- Статусы — через `<Badge status="auto" />`, не локальные color-словари
+  (источник правды — `tokens/status-system.md`).
+- Density `compact` (32px row) — default. `cozy` / `comfortable` — для
+  отдельных страниц через Settings dialog (TODO).
+
+**Acceptance (handoff PR 1 §8):**
+- ✅ `tailwind.config.ts` extend через tokens
+- ✅ 20 примитивов экспортируются из `ui/index.ts`
+- ✅ `/__design` галерея под `import.meta.env.DEV`
+- ✅ TypeScript строгий, нет `any`
+- ✅ `npm run build` чистый, 361KB gzip JS
+- ✅ AppShell обернул все маршруты, collapse persist'ит
+- ✅ Существующие страницы не сломались
+
+**Что НЕ в скоупе PR 1:**
+- Переписывание страниц на новый ui — отдельные PR 2/3+ (Matching proof,
+  Games, Search, BggSync, остальные).
+- Миграция `HealthBadge` в `ui/HealthCard` — отдельный track с правкой /status.
+- `useBgJobs()` агрегатор — заглушка `count=0`, реальная агрегация позже.
+- `breadcrumbs.ts` модуль — пока inline в App.tsx.
+- Settings dialog (density toggle) — отдельная задача.
+
+**Затронутые файлы (36 файлов):**
+- 27 новых: `src/lib/design-tokens.ts`, `src/components/ui/*` × 20 + `index.ts`,
+  `src/components/layout/*` × 4, `src/pages/__design/DesignSystemPage.tsx`,
+  `src/vite-env.d.ts`.
+- 6 изменённых: `App.tsx`, `tailwind.config.ts`, `index.html`,
+  `components/shared/CommandPalette.tsx` (@deprecated), `package.json`,
+  `package-lock.json`.
+
+---
+
 ## 2026-05-16 · [WT-F8] Log поисковых запросов на странице `/` (решено иначе)
 
 **Что сделано:** Цель пункта — быстрый доступ к журналу запросов без перехода

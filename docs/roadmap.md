@@ -15,7 +15,22 @@ PRS (parsers), INFRA (общее).
 
 ## Сейчас в работе
 
-_(пусто)_
+- **`feat/admin-panel-redesign`** — полный редизайн `web-test` под единый
+  design-system (handoff в `.scratch/admin-panel-design/`). Этапы:
+  - [x] **PR 1 · Foundation** — design tokens + `src/components/ui/*` +
+    `AppShell` + `/__design`. Сделано (commit `1e3c107`, см. devlog `WT-DESIGN-PR1`).
+  - [x] **WT-MATCH-UX** — точечный апгрейд `/matching` (header / control /
+    queue / single / keyboard / inline confirms). Параллельный track в gray/violet,
+    не на новых tokens. Сделано (commit `4d7826e` + SPA fix `d348395`).
+  - [ ] **PR 2 · Proof: Matching на zinc/indigo** — переписать `MatchingSection`
+    из `CatalogPage.tsx` на новый ui. Это main proof из ТЗ §7.2. Спека —
+    `.scratch/admin-panel-design/pages/01-matching.md` (three-pane + drawer
+    + keyboard).
+  - [ ] **PR 3+ · Раскатка** — Games (`/catalog`), Search WT-F11 group-by-game,
+    Job UI (`/bgg-sync`), `/sources`, `/debug`, `/testing`, `/dlq`, `/status`,
+    `/parsers`, `/database` — по одному PR на страницу.
+
+  Merge в main — после PR 2 проверки на проде. До этого ветка отдельная.
 
 ## Ближайшее (1–2 недели)
 
@@ -57,6 +72,35 @@ _(пусто)_
   фиксирует поведение «typo больше не auto-T1, идёт в ML/manual»),
   (b) переключить тесты на pre-seeded T0 cache для детерминированности
   (`match_decisions` с готовым `game_id` ловит typo через cache hit).
+- [CAT-4.5] **Auto-recovery rules runner**.
+  **Готово:** таблица `auto_recovery_rules` (миграция 0014), CRUD endpoints
+  (`routers/auto_recovery.py`), UI секция в `/matching → Очередь` с create/toggle/delete.
+  **Осталось:** scheduler-job `auto_recovery_runner` (раз в минуту) который
+  читает `enabled=true` правила, проверяет condition против актуального
+  ml-status/job-status и выполняет action. Сейчас правила сохраняются
+  «armed but not executing». MVP типов condition:
+  `{type: 'circuit_state', model, becomes: 'closed'}`,
+  `{type: 'job_completed', type: 'warmup-embeddings', status: 'done'}`.
+  Actions: `{type: 're_enqueue_skipped', filters: {reason?, store_slug?}}`,
+  `{type: 'trigger_job', job_id: str}`. Дедуп — через `last_triggered_at`
+  + минимальный interval (например 5 минут).
+- [CAT-4.6] **Snapshot-таблица queue_depth для точного `depth_history`**.
+  **Сейчас:** `GET /matching/queue/depth` реконструирует depth по
+  `created_at`/`processed_at` (`queue_repo.depth_history`) — аппроксимация,
+  не точная. **Осталось:** новая таблица `queue_depth_snapshots(ts, pending,
+  processing, skipped, failed)` + cron-job раз в минуту пишет snapshot.
+  Endpoint читает оттуда. Trade-off: ~1.4MB/год (60*24*365 строк × ~40 байт).
+- [CAT-4.7] **Intermediate match_log entries в ingest для T0/T1**.
+  **Сейчас:** worker пишет `t2_progress` / `t3_progress` (`auditor.log_progress`),
+  но ingest при miss T0+T1 не пишет ничего — UI SingleMatchTab показывает
+  T0/T1 как `skipped` для re-run. **Осталось:** при `match_sync` пиcать
+  `t0_progress` (cache miss) / `t1_progress` (best score < auto_threshold)
+  в match_log с короткой meta. Это даст полные live-stages в Штучном.
+- [CAT-4.8] **Skipped-таблица hover-actions + shift-range select**.
+  Handoff `06-matching-v2-improvements.md` §D.5 — в Очереди → таблица skipped:
+  hover-actions (re-enqueue / view in journal / run v2), shift+click range
+  select, relative time для `processed_at` (живо обновляемое). Сейчас оставлено
+  как в предыдущей версии — только checkbox-выделение.
 
 ### Catalog (BGG enrichment)
 
