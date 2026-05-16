@@ -9,7 +9,11 @@ import { fetchFavorites } from '../../lib/api'
 import { useSearchStore } from '../../store/search'
 
 /**
- * Command-K палитра. Глобальный hotkey Cmd/Ctrl+K — в App.tsx.
+ * @deprecated Use `src/components/ui/CommandPalette.tsx` instead.
+ *
+ * Старая Command-K палитра с hard-coded командами. Заменена новой версией
+ * в `src/components/ui/CommandPalette.tsx` с register-API (`useCommand`).
+ * Удалить после миграции всех страниц на новый UI (см. handoff PR 3+).
  *
  * Команды:
  *   - Навигация: Поиск, Парсеры, БД, Тесты

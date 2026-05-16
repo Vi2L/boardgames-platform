@@ -1,9 +1,21 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Parser Debug Portal</title>
+    <title>Parser Cockpit</title>
+    <!--
+      Inter (UI) + JetBrains Mono (numbers/IDs/code) — Google Fonts.
+      preconnect ускоряет первый fetch; display=swap не блокирует render.
+      Если приложение должно работать offline в проде — заменить на
+      @fontsource/inter + @fontsource/jetbrains-mono локально.
+    -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+    />
   </head>
   <body>
     <div id="root"></div>
