@@ -138,6 +138,89 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
 
 **Поиск**
+- [WT-F11] **Группировка результатов по игре** — сейчас `ResultsTable`
+  (`frontend/src/components/search/ResultsTable.tsx`) рисует плоский
+  список `ProductOut[]`: один и тот же «Каркассон» из 6 магазинов = 6
+  строк с разными названиями (HG: «Каркассон. Базовый набор»,
+  WB: «Carcassonne настольная игра CGA1001», Avito: «Каркассон новый
+  в плёнке»). Нужна одна строка с агрегатами + раскрытие со списком
+  магазинов/цен.
+
+  *Цель UX*:
+  - Одна строка на «игру» с колонками: title (каноничный), **min/max
+    цены среди магазинов**, **кол-во магазинов в наличии**, sparkline
+    разброса (опционально).
+  - Клик/тап → раскрытие inline-блока (или drawer) с текущей таблицей
+    как «sub-rows»: магазин / цена / sale-бейдж / loyalty / link.
+  - Кнопка-переключатель в `SearchForm`: «Группировать по игре / Плоский
+    список» — плоский остаётся для дебаг-сценариев (это же debug-портал).
+  - Несгруппированные «осиротевшие» офферы (catalog не смог сматчить) —
+    отдельная секция внизу «Не сматчено (N)», тоже раскрываемая.
+
+  *Архитектурная развилка — как определять «одинаковая игра»*:
+
+  - **Вариант A (frontend-only fuzzy)**: использовать существующий
+    `lib/similarity.ts` (Jaccard по токенам) + порог. Дёшево (0 backend
+    изменений), но путает «Каркассон» с «Каркассон: Замки и крепости» —
+    expansion'ы склеит с base. Подходит как **MVP / fallback**, когда
+    catalog недоступен.
+  - **Вариант B (catalog batch-lookup)**: новый endpoint
+    `POST /catalog/matching/lookup` (catalog) — принимает
+    `[{store_slug, title, url, price_rub}]`, возвращает массив
+    `[{idx, game_id, game_title_ru, match_score, match_tier}]` либо
+    `null` для не-сматченных. Внутри переиспользует `MatchEngine`
+    (`services/catalog/catalog/matching/engine.py`) — T0 cache hit
+    через `match_cache` для уже виденных пар (store, title), T1/T2 для
+    новых. Этот же путь уже работает в `/ingest/offers`, просто без
+    записи в `offers` (read-only режим). **Это правильное направление.**
+  - **Вариант C (parsers возвращает game_id)**: parsers сам зовёт catalog
+    при отдаче результата. Нарушает изоляцию parsers ↔ catalog, добавляет
+    catalog в hot-path SSE-поиска (повышает latency). **Не делать.**
+
+  *План реализации (рекомендуется B + A fallback)*:
+  1. **Backend (catalog)**: `POST /matching/lookup` (admin? или public —
+     решить по auth). Принимает батч, возвращает резолв через
+     `MatchEngine.match_offer(...)` в режиме `dry_run=True` (не пишет
+     в `match_cache`, либо пишет с TTL). Лимит батча 100. Кеш в Redis
+     по `(store_slug, normalized_title)` на 1 час — поиск часто повторяет
+     те же офферы.
+  2. **Backend (web-test)**: `app/api/search.py` после получения всех
+     результатов SSE — финальный батч-вызов в `catalog_client.lookup(...)`,
+     отдаёт фронту дополнительное SSE-событие `event: matches` с массивом
+     `{product_id, game_id, game_title_ru}`. Не блокирует основной поток —
+     эмитим события `results` сразу, `matches` приходит «дозаливкой».
+  3. **Frontend**:
+     - Расширить `ProductOut` опциональным `match?: {game_id, game_title_ru,
+       tier}` (типы в `types/api.ts`).
+     - В `SearchPage` собрать `Map<game_id, ProductOut[]>` + bucket
+       `unmatched` для `match=null`.
+     - Новый компонент `GroupedResultsTable` (рядом с `ResultsTable`):
+       строки игр + `expandedGameIds: Set<number>` в локальном state,
+       раскрытие через `<details>` или ручной toggle. Sub-rows — те же
+       `<ResultRow>` что в плоском режиме (вынести как компонент из
+       `ResultsTable`).
+     - Тоггл «Группировать / Плоский» в `SearchForm`, persist в
+       `useSearchStore` (Zustand v2 persist).
+     - Fallback на frontend-fuzzy (вариант A через `similarity.ts`),
+       если catalog ответил ошибкой или timeout > 3 сек — показать
+       «приблизительная группировка» с warning-бейджем.
+
+  *Метрика успеха*:
+  - На типичном запросе («каркассон», 6 магазинов, ~30 офферов) кол-во
+    «строк верхнего уровня» падает с 30 до ~3-5.
+  - `lookup` p95 < 500 мс для батча 30 (cache hit ratio ≥ 70% после
+    разогрева).
+
+  *Не входит*:
+  - **Inline-merge нескольких разных игр** (юзер сам говорит «это всё
+    Каркассон») — это уже manual matching, есть в `/catalog` (LinkPicker).
+  - **Sparkline разброса цен** среди магазинов — nice-to-have, после
+    landing'а базовой группировки.
+
+  *Зависимости*: CAT-4 (matching v2) — должен быть стабилен в проде,
+  иначе lookup даст много false positives. Сейчас CAT-4 в devlog
+  (2026-05) — можно начинать.
+
 - [WT-F8] **Log поисковых запросов на странице `/`** — сейчас журнал
   запросов лежит на `/database` → вкладка «Журнал» (`DatabasePage.tsx:55`,
   компонент `SearchesTab`, endpoint `/api/db/searches`). На самой странице
@@ -297,6 +380,50 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [PRS-4] **Удаление `services/parsers/DEPRECATED/chrome-extension/`** —
   целевая дата **2026-05-28** (две недели стабильной работы L0). Снять
   блокер: 14 дней `parser_log` по avito с `success=1 ratio ≥ 95%`.
+- [PRS-6] **WB парсер — устойчивость к 429** — текущая реализация
+  `search_async` в `services/parsers/parsers/stores/wildberries.py:151-165`
+  делает всего **1 retry через фиксированные 2 сек** и падает с
+  `RuntimeError("HTTP 429 (rate-limited даже после retry)")`. В проде
+  WB стабильно режет DC-IP — пользователь часто видит эту ошибку.
+
+  *Симптом*: `Wildberries: HTTP 429 (rate-limited даже после retry)` в
+  UI поиска / Live Test.
+
+  *Гипотезы причин*:
+  - 2 сек backoff слишком короткий — Angie дросселирует на 10-30 сек.
+  - curl-cffi с `chrome124` устарел (Chrome ушёл вперёд → JA3 не матчит
+    реальный браузер); попробовать `chrome131` / `chrome133`.
+  - DC-IP домашнего датацентра в чёрном списке WB — нужен residential
+    прокси или fallback через browser-service.
+
+  *План реализации (от дешёвого к дорогому)*:
+  1. **Exponential backoff с jitter** вместо фиксированных 2 сек:
+     `delay = base * 2**attempt + random(0, jitter)`, 3-4 попытки,
+     base=1.5, max ~30 сек. Использовать существующий `_get_with_backoff`
+     паттерн из других парсеров (если он там устаканен), либо новый
+     helper в `parsers/utils/backoff.py`.
+  2. **Обновить `impersonate`**: попробовать `chrome131`/`safari17` через
+     `WB_BACKEND` env-флаг, замерить rate 429 на staging. Сейчас зашит
+     `chrome124` (`wildberries.py:183`).
+  3. **L2-fallback через browser-service** (по аналогии с Ozon
+     `feat(parsers): [PRS-OZ]` и avito PRS-3) — при стабильном 429 на L0
+     перебрасывать на camoufox с persistent profile, который копит cookies
+     и проходит через JS-challenge Angie. Browser-service уже поднят как
+     отдельный контейнер (`services/browser-service/`) — переиспользовать
+     ту же ручку, что у Ozon.
+  4. **Circuit breaker per-store**: если за последние N запросов rate
+     ошибок > 50% — открывать breaker на 5 мин и сразу возвращать
+     `ParserError("WB temporarily disabled")` вместо тыка в забор.
+     Уменьшит шум в UI и логах. Структура breaker'а уже есть в catalog
+     (`CAT-4` half-open) — переиспользовать паттерн.
+
+  *Метрика успеха*: rate ошибок 429 в `parser_log` (table в parsers-БД)
+  падает ниже 5% за неделю. Без замера — не катить в прод; добавить
+  метрику до начала работ.
+
+  *Зависимости*: WT-F10 пункт «Headless rate-limit tester» — удобно
+  иметь UI-инструмент для калибровки backoff'а до выкатки.
+
 - [PRS-5] **WB enrichment через `card.wb.ru/cards/v{N}/detail`** — search
   даёт только цену/название/бренд/рейтинг. Через `card.wb.ru` доступны
   characteristics (players, age, playtime, description). Сейчас не делаем
