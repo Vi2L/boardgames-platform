@@ -21,6 +21,7 @@ from .stores.crowdgames import CrowdGamesParser
 from .stores.gaga import GagaParser
 from .stores.hobbygames import HobbyGamesParser
 from .stores.lavkaigr import LavkaIgrParser
+from .stores.ozon import OzonParser, warmup_interval_seconds, warmup_once
 from .stores.wildberries import WildberriesParser
 
 # ---------------------------------------------------------------------------
@@ -32,11 +33,39 @@ _service: PriceService
 _catalog_publisher: CatalogPublisher
 _browser_client: BrowserClient | None = None
 _avito_qrator: AvitoQratorClient | None = None
+_ozon_warmup_task: asyncio.Task | None = None
+
+
+async def _ozon_warmup_loop(browser_client: BrowserClient) -> None:
+    """Фоновая задача: периодически держит persistent profile `ozon` тёплым.
+
+    После initial-challenge cookies остаются в `/data/profiles/ozon`, но если
+    долго не использовать — Ozon может ротировать `abt_data`/токены и
+    следующий запрос упадёт в Antibot Challenge. Периодический warmup
+    решает это, перенося cost'ы прохода challenge'а в фон.
+
+    Интервал — через env OZON_WARMUP_INTERVAL_MINUTES (default 60).
+    Cancel-safe: при shutdown task отменяется, asyncio.CancelledError
+    пропускается без логирования.
+    """
+    import logging
+    log = logging.getLogger(__name__)
+    interval = warmup_interval_seconds()
+    log.info("[Ozon] warmup loop started, interval=%ds", interval)
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            ok = await warmup_once(browser_client)
+            log.info("[Ozon] warmup tick: %s", "ok" if ok else "failed")
+    except asyncio.CancelledError:
+        log.info("[Ozon] warmup loop cancelled")
+        raise
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db, _service, _catalog_publisher, _browser_client, _avito_qrator
+    global _ozon_warmup_task
 
     db_path = os.getenv("DB_PATH", "data/prices.sqlite")
     ttl = float(os.getenv("CACHE_TTL_HOURS", "4"))
@@ -79,6 +108,11 @@ async def lifespan(app: FastAPI):
         # WB backend выбирается из env WB_BACKEND (default curl-cffi).
         # Override на лету — через /api/debug/parse?wb_backend=httpx.
         WildberriesParser(),
+        # Ozon работает только через browser-service (Antibot Challenge Page).
+        # При выключенном browser-service search() поднимет RuntimeError, и
+        # PriceService запишет ошибку в SearchResult.errors — остальные
+        # парсеры продолжат работать.
+        OzonParser(browser_client=_browser_client),
     ]
 
     # Регистрируем магазины в БД и подмешиваем _db для SnapshotRecorder.
@@ -93,7 +127,19 @@ async def lifespan(app: FastAPI):
     )
     stats_set_db(_db)
 
+    # Ozon warmup loop: только если есть browser-service. Без него парсер всё
+    # равно не работает, и keep-alive бессмысленен.
+    if _browser_client is not None:
+        _ozon_warmup_task = asyncio.create_task(_ozon_warmup_loop(_browser_client))
+
     yield  # приложение работает
+
+    if _ozon_warmup_task is not None:
+        _ozon_warmup_task.cancel()
+        try:
+            await _ozon_warmup_task
+        except asyncio.CancelledError:
+            pass
 
     await _catalog_publisher.close()
     if _browser_client is not None:

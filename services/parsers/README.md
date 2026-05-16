@@ -14,6 +14,7 @@
 | [Crowd Games](https://www.crowdgames.ru) | `crowdgames` | цена, фото, наличие; весь каталог издателя (~167 игр) |
 | [Авито](https://www.avito.ru) | `avito` | цена, фото, описание, локация, категория (C2C-объявления) |
 | [Wildberries](https://www.wildberries.ru) | `wildberries` | цена, бренд, рейтинг, отзывы (search-only, без обогащения со страницы товара) |
+| [Ozon](https://www.ozon.ru) | `ozon` | цена с Ozon-картой, цена без скидки, бренд, фото (через browser-service: Antibot Challenge Page требует JS) |
 
 ## Быстрый старт
 

@@ -117,10 +117,14 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
            ├─ AvitoParser       (stores/avito.py)       — C2C-объявления;
            │                     L0-обход Qrator через curl-cffi + публичный
            │                     JSON /web/1/js/items (см. stores/avito_qrator.py)
-           └─ WildberriesParser (stores/wildberries.py) — публичный JSON
-                                 search.wb.ru/.../v5/search; pluggable backend
-                                 (httpx | curl-cffi); локальный фильтр
-                                 subjectId=120 = «Настольные игры»
+           ├─ WildberriesParser (stores/wildberries.py) — публичный JSON
+           │                     search.wb.ru/.../v5/search; pluggable backend
+           │                     (httpx | curl-cffi); локальный фильтр
+           │                     subjectId=120 = «Настольные игры»
+           └─ OzonParser        (stores/ozon.py) — через browser-service
+                                 (Antibot Challenge Page требует JS-runtime);
+                                 persistent profile `ozon`; SSR HTML парсинг;
+                                 warmup loop в lifespan
 ```
 
 **Ключевые модули:**
@@ -194,6 +198,7 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
 - **HobbyGames**: работает с любого IP. URL поиска — `/catalog/search?keyword=`, данные в JSON-LD `ItemList` (не HTML). `players`/`age_min`/`playtime` недоступны в структурированном виде.
 - **CrowdGames**: издатель (не магазин). Весь каталог `/collection/igry-crowd-games` (~167 игр, 8+ страниц). Поиск локальный: обходим все страницы через `data-collection-infinity`, фильтруем по запросу в памяти. Кеш TTL спасает от повторных обходов. `players`/`age_min`/`playtime` недоступны. `enrich_ms` в метриках = None (этапа нет).
 - **Avito (L0-стратегия, 2026-05-14)**: парсер работает **только через `curl-cffi`** с TLS-impersonation Chrome 124 — никакого браузера/Playwright/Camoufox. Запрос идёт прямо в публичный JSON `/web/1/js/items` (тот же, что дёргает фронт avito.ru после CSR-загрузки). Низкоуровневый клиент — `stores/avito_qrator.py:AvitoQratorClient`: держит один `AsyncSession` на процесс, авто-ротация `_avisc` (Max-Age=60s, refresh ≥50s), retry-with-fresh-session при 429/403. Cold-start ~2.0–2.5s, hot ~500–700ms. **Без хост-зависимостей** — chrome-extension перенесён в `DEPRECATED/` (удалить после 2026-05-28), `POST /api/avito/cookies` отдаёт 410 Gone. Если когда-нибудь endpoint сломается — повторить `bin/probe_avito_l0_xhr.py` для diagnostics.
+- **Ozon (2026-05-16)**: парсер работает **только через browser-service** (Camoufox persistent profile `ozon`). Прямой HTTP (включая `curl-cffi` chrome124) ловит **Antibot Challenge Page** (FunCaptcha-like JS challenge, проверяет TLS+behavioural+cookies в комплексе). Probe 2026-05-15 показал: даже с cookies, выгребенными Camoufox'ом, прямой запрос на `composer-api.bx` → 403 + incidentId. Поэтому весь search идёт через `BrowserClient.fetch(profile_id="ozon", wait_for_selector="[data-widget=searchResultsV2]")`, парсится **SSR HTML** (regex по карточкам `<a href="/product/<slug>-<id>/">`). Persistent profile хранит cookies в `/data/profiles/ozon` между запросами — second-trip warm. **Warmup loop** в `lifespan` (background `asyncio.Task`) каждые `OZON_WARMUP_INTERVAL_MINUTES` (default 60) делает «холостой» fetch на главную, чтобы профиль не остыл. Latency cold ~10-12с, warm ~3-5с — медленнее WB (~500мс), но это плата за обход antibot. `OzonParser` зависит от `_browser_client` — если browser-service выключен, `search()` поднимает `RuntimeError` (PriceService пишет в `SearchResult.errors`, остальные парсеры работают). **Цена с Ozon-картой** идёт в `price` (выделенная Headline-цена в карточке), обычная — в `raw.original_price`. См. SSR-парсинг в `stores/ozon.py:_parse_cards()`.
 - **Wildberries (2026-05-14)**: парсер через публичный JSON `search.wb.ru/exactmatch/ru/common/v5/search` — тот же, что дёргает фронт WB. Один HTTP-запрос → 100 items (без pagination). **Pluggable backend** через env `WB_BACKEND=httpx|curl-cffi` (default `curl-cffi` — Angie/WB агрессивно rate-limit'ит DC-IP, TLS-impersonation проходит чаще). Override на лету — query-параметр `?wb_backend=...` в `/api/debug/parse`. WB endpoint v8+ требует preset-routing через `catalog.wb.ru` (тот всегда 403 из Docker) — поэтому используем legacy v5 без preset-redirect. **Soft twin-search**: локальный фильтр `subjectId=120` («Настольные игры»), при недоборе до `limit` — добиваем общей выдачей. Retry-once при HTTP 429 (через 2s). Если сломается — `bin/probe_wb4.py` для диагностики. См. roadmap [PRS-5] про enrichment через `card.wb.ru/cards/v{N}/detail`.
 - **cp1251 (GaGa)**: gaga.ru возвращает тело в cp1251. httpx декодирует автоматически по `Content-Type`. Поисковый запрос нужно кодировать в cp1251 перед percent-encoding: `quote(query.encode('cp1251'))`. В `parser_snapshot` body хранится как BLOB и декодируется по сохранённому `encoding` при выдаче.
 - **SQLite `lower()`**: не поддерживает Unicode → используем `normalized_title` (Python `.lower()`).
