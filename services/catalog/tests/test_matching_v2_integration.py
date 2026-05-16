@@ -541,6 +541,202 @@ class TestMatchQueue:
             await session.commit()
 
 
+# ── /matching admin panel endpoints (UI WT-F11) ───────────────────────────
+
+
+class TestAdminPanelEndpoints:
+    """Тесты на 5 новых endpoint'ов для UI /matching."""
+
+    async def test_skipped_list_with_filters_and_breakdown(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        """GET /matching/queue/skipped: фильтры + breakdown stores/reasons."""
+        # seed: 3 skipped в разных store с разными reason'ами.
+        # Используем сырые INSERT, обходим воркер.
+        await _seed_game(session)
+        for i, (store, reason) in enumerate([
+            ("hg", "llm_unavailable: connect refused"),
+            ("lavkaigr", "no_candidates"),
+            ("hg", "vec_below_threshold"),
+        ]):
+            offer = Offer(
+                store_slug=store, external_id=f"sk{i}", url=f"http://x/{i}",
+                title_raw=f"X{i}", match_status="unmatched",
+            )
+            session.add(offer)
+            await session.commit()
+            await session.refresh(offer)
+            await session.execute(text(
+                "INSERT INTO match_queue (offer_id, store_slug, title_raw, title_norm, "
+                "status, error_detail, attempts, created_at, processed_at) "
+                "VALUES (:oid, :store, :title, lower(:title), 'skipped', :reason, 0, "
+                "now() - interval '1 hour', now() - interval '1 hour')"
+            ).bindparams(oid=offer.id, store=store, title=f"X{i}", reason=reason))
+        await session.commit()
+
+        # без фильтра
+        r = await client.get("/matching/queue/skipped")
+        assert r.status_code == 200
+        data = r.json()
+        assert data["total"] >= 3
+        assert "stores" in data
+        assert "reasons" in data
+        assert data["stores"].get("hg", 0) >= 2
+        assert data["reasons"].get("llm_unavailable", 0) >= 1
+        # бакетизация: 'llm_unavailable: connect refused' → 'llm_unavailable'
+        assert data["reasons"].get("no_candidates", 0) >= 1
+
+        # фильтр по store
+        r2 = await client.get("/matching/queue/skipped?store_slug=hg")
+        items_hg = r2.json()["items"]
+        assert all(item["store_slug"] == "hg" for item in items_hg)
+
+        # фильтр по reason (prefix match)
+        r3 = await client.get("/matching/queue/skipped?reason=llm_unavailable")
+        items_llm = r3.json()["items"]
+        # prefix-match — 'llm_unavailable: ...' попадает под фильтр
+        assert all(item["error_detail"].startswith("llm_unavailable")
+                   for item in items_llm)
+
+    async def test_re_enqueue_skipped_by_offer_ids(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        """POST /matching/queue/re-enqueue-skipped: точечный по offer_ids
+        сбрасывает status='pending', attempts=0, claimed_at=NULL."""
+        await _seed_game(session)
+        offer = Offer(
+            store_slug="t", external_id="ren1", url="http://x",
+            title_raw="ReEnq", match_status="unmatched",
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+        await session.execute(text(
+            "INSERT INTO match_queue (offer_id, store_slug, title_raw, title_norm, "
+            "status, error_detail, attempts, claimed_at, processed_at, created_at) "
+            "VALUES (:oid, 't', 'ReEnq', 'reenq', 'skipped', 'no_candidates', 2, "
+            "now() - interval '1 day', now() - interval '1 day', now())"
+        ).bindparams(oid=offer.id))
+        await session.commit()
+
+        r = await client.post(
+            "/matching/queue/re-enqueue-skipped",
+            json={"offer_ids": [offer.id]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["requested"] == 1
+        assert body["re_enqueued"] == 1
+
+        # Проверяем что реально сбросилось.
+        row = (await session.execute(
+            select(MatchQueue).where(MatchQueue.offer_id == offer.id)
+        )).scalar_one()
+        assert row.status == "pending"
+        assert row.attempts == 0
+        assert row.claimed_at is None
+        assert row.error_detail is None
+        assert row.processed_at is None
+
+    async def test_re_enqueue_skipped_by_reason_filter(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        """Re-enqueue только по reason — не трогает другие skipped."""
+        await _seed_game(session)
+        # 2 skipped с разными reasons
+        for i, reason in enumerate(["llm_unavailable: x", "no_candidates"]):
+            offer = Offer(
+                store_slug="t", external_id=f"reasrn{i}", url="http://x",
+                title_raw=f"R{i}", match_status="unmatched",
+            )
+            session.add(offer)
+            await session.commit()
+            await session.refresh(offer)
+            await session.execute(text(
+                "INSERT INTO match_queue (offer_id, store_slug, title_raw, title_norm, "
+                "status, error_detail, attempts, processed_at, created_at) "
+                "VALUES (:oid, 't', :t, :tn, 'skipped', :r, 0, now(), now())"
+            ).bindparams(oid=offer.id, t=f"R{i}", tn=f"r{i}", r=reason))
+        await session.commit()
+
+        r = await client.post(
+            "/matching/queue/re-enqueue-skipped",
+            json={"reason": ["llm_unavailable"]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        # ровно 1 — только llm_unavailable, no_candidates остался skipped
+        assert body["re_enqueued"] == 1
+
+    async def test_run_v2_on_offer_enqueues_with_priority(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        """POST /matching/{id}/run-v2 → match_queue с priority=10."""
+        await _seed_game(session)
+        offer = Offer(
+            store_slug="t", external_id="rv1", url="http://x",
+            title_raw="RunV2 Game", match_status="unmatched",
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+
+        r = await client.post(f"/matching/{offer.id}/run-v2")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["queued"] is True
+        assert body["priority"] == 10
+        assert body["offer_id"] == offer.id
+
+        row = (await session.execute(
+            select(MatchQueue).where(MatchQueue.offer_id == offer.id)
+        )).scalar_one()
+        assert row.priority == 10
+        assert row.status == "pending"
+
+    async def test_run_v2_on_missing_offer_returns_404(self, client: AsyncClient):
+        r = await client.post("/matching/9999999/run-v2")
+        assert r.status_code == 404
+
+    async def test_lookup_offer_returns_match_fields(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        offer = Offer(
+            store_slug="t", external_id="lk1", url="http://x",
+            title_raw="Lookup Me", match_status="unmatched",
+            match_score=0.72, match_tier=2, match_reason="vec_below_threshold",
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+
+        r = await client.get(f"/matching/offers/{offer.id}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == offer.id
+        assert body["title_raw"] == "Lookup Me"
+        assert body["match_score"] == pytest.approx(0.72)
+        assert body["match_tier"] == 2
+
+    async def test_offers_search_returns_substring_matches(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        """`/matching/offers/search` декларирован ДО `/offers/{offer_id}`,
+        иначе FastAPI попытается распарсить 'search' как int."""
+        for i, title in enumerate(["Unique Title XYZ", "Other Q"]):
+            offer = Offer(
+                store_slug="t", external_id=f"sr{i}", url="http://x",
+                title_raw=title, match_status="unmatched",
+            )
+            session.add(offer)
+        await session.commit()
+
+        r = await client.get("/matching/offers/search?q=XYZ&limit=5")
+        assert r.status_code == 200
+        items = r.json()["items"]
+        assert any("XYZ" in it["title_raw"] for it in items)
+
+
 # ── End-to-end /ingest/offers через ASGI ──────────────────────────────────
 
 

@@ -216,6 +216,16 @@ def _resolve_handler(job_id: str, params: dict[str, Any]):
         )
         return (lambda jid: _run_bgg_batch_job(jid, req)), "bgg-mini-batch"
 
+    # Interval-jobs (ml_health_check, match_worker) — поддерживаются через
+    # trigger_scheduled_job для UI «Запустить сейчас». Wrapper'у нужна
+    # сигнатура `(import_job_id) -> awaitable` — оборачиваем простой runner
+    # без аргументов в lambda. ImportJob создаётся как обычно (для consistency
+    # UI: `/import/jobs?type=interval-<job_id>`), но runner его не использует —
+    # interval-tick короткий и пишет own state через `match_queue` / `OllamaHealth`.
+    if job_id in _INTERVAL_JOBS:
+        runner = _interval_runner(job_id)  # raises ValueError если неизвестен
+        return (lambda _jid: runner()), f"interval-{job_id}"
+
     raise ValueError(f"Unknown scheduler job_id: {job_id}")
 
 

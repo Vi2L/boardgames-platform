@@ -12,9 +12,11 @@ from __future__ import annotations
 
 from uuid import UUID
 
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import desc, func, or_, select
+from sqlalchemy import case, desc, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,7 +41,10 @@ from catalog.matching.v2.decisions import (
 )
 from catalog.matching.v2.domain import MatchAction
 from catalog.matching.v2.health import OllamaHealth
-from catalog.matching.v2.queue_repo import count_by_status as v2_count_by_status
+from catalog.matching.v2.queue_repo import (
+    count_by_status as v2_count_by_status,
+    enqueue as v2_enqueue,
+)
 from catalog.models import Game, GameAlias, MatchLog, Offer
 from catalog.schemas import MatchingQueueOut, MatchLinkRequest, OfferOut
 
@@ -747,3 +752,359 @@ async def warmup_embeddings(
 
     asyncio.create_task(_runner(), name=f"warmup-embeddings-{job_id}")
     return {"job_id": job_id, "status": "running"}
+
+
+# ─── Matcher v2: queue management (re-enqueue + штучный) + offer lookup ──────
+
+
+class SkippedQueueItemOut(BaseModel):
+    id: int
+    offer_id: int
+    store_slug: str
+    title_raw: str
+    error_detail: str | None = None
+    result_score: float | None = None
+    attempts: int
+    created_at: str
+    processed_at: str | None = None
+
+
+class SkippedQueuePageOut(BaseModel):
+    items: list[SkippedQueueItemOut]
+    total: int
+    limit: int
+    offset: int
+    # breakdowns по ВСЕМ skipped (без активных фильтров) — оператор видит что
+    # ещё есть в очереди по другим store/reason без переключения фильтра.
+    stores: dict[str, int]
+    reasons: dict[str, int]
+
+
+# Известные prefix'ы reason'ов из worker'а. Используем для bucket'ования в
+# breakdown и валидации фильтра. См. worker.py / embeddings.py / llm_arbiter.py.
+KNOWN_SKIP_REASONS = (
+    "llm_unavailable",
+    "llm_disabled",          # legacy — до hardening 2026-05-16; оставляем для старых записей
+    "llm_no_match",          # T3 LLM сказал "нет совпадения" (с двумя 'l' — префикс из llm_arbiter)
+    "llm_low_confidence",
+    "llm_parse_failed",
+    "no_candidates",
+    "vec_no_candidates",
+    "vec_below_threshold",
+    "vec_ambiguous",
+    "raced_manual",
+    "raced_rejected",
+    "offer_disappeared",
+)
+
+
+def _reason_bucket_case_sql() -> str:
+    """CASE-выражение, нормализующее error_detail в один из known reason-prefix'ов.
+
+    error_detail может содержать ПОЛНЫЙ контекст (`llm_unavailable: connect refused`),
+    но для UI группировки нам нужен только верхушка дерева. Делаем prefix-match.
+    """
+    branches = "\n".join(
+        f"            WHEN error_detail LIKE '{r}%' THEN '{r}'"
+        for r in KNOWN_SKIP_REASONS
+    )
+    return f"""
+        CASE
+{branches}
+            ELSE COALESCE(error_detail, 'unknown')
+        END
+    """
+
+
+@router.get(
+    "/queue/skipped",
+    response_model=SkippedQueuePageOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def list_skipped_queue(
+    store_slug: list[str] = Query(default_factory=list),
+    reason: list[str] = Query(default_factory=list),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    session: AsyncSession = Depends(get_session),
+) -> SkippedQueuePageOut:
+    """match_queue WHERE status='skipped' с фильтрами + breakdown.
+
+    Фильтры — multi-value (FastAPI собирает `?store_slug=a&store_slug=b` в list).
+    Reason match — prefix через `error_detail LIKE 'reason%'`: воркер пишет
+    detail c контекстом, например `'llm_unavailable: connect refused'`, а
+    оператор фильтрует по `'llm_unavailable'`.
+
+    Breakdown `stores` / `reasons` всегда считается по ВСЕМ skipped (без
+    активных фильтров) — оператор видит общую картину, не «обрезанную»
+    своими же фильтрами.
+    """
+    where: list[str] = ["status = 'skipped'"]
+    params: dict[str, Any] = {}
+
+    if store_slug:
+        where.append("store_slug = ANY(:stores)")
+        params["stores"] = store_slug
+
+    if reason:
+        # array containment: хотя бы один reason должен быть prefix у error_detail
+        where.append(
+            "EXISTS (SELECT 1 FROM unnest(CAST(:reasons AS text[])) r "
+            "WHERE error_detail LIKE r || '%')"
+        )
+        params["reasons"] = reason
+
+    where_sql = " AND ".join(where)
+
+    # total + items в одной session
+    total = (await session.execute(
+        text(f"SELECT COUNT(*) FROM match_queue WHERE {where_sql}").bindparams(**params)
+    )).scalar_one()
+
+    items_rows = (await session.execute(
+        text(
+            f"""
+            SELECT id, offer_id, store_slug, title_raw, error_detail,
+                   result_score, attempts,
+                   created_at::text  AS created_at,
+                   processed_at::text AS processed_at
+            FROM match_queue
+            WHERE {where_sql}
+            ORDER BY processed_at DESC NULLS LAST, id DESC
+            LIMIT :limit OFFSET :offset
+            """
+        ).bindparams(**params, limit=limit, offset=offset)
+    )).mappings().all()
+
+    # Breakdown по всем skipped — без активных фильтров. Один SELECT для
+    # stores, другой для reasons. Это дешёво (≤сотни строк в среднем).
+    stores_rows = (await session.execute(
+        text("SELECT store_slug, COUNT(*) AS n FROM match_queue WHERE status = 'skipped' GROUP BY store_slug")
+    )).mappings().all()
+    stores_map = {r["store_slug"]: int(r["n"]) for r in stores_rows}
+
+    reasons_sql = f"""
+        SELECT {_reason_bucket_case_sql()} AS r, COUNT(*) AS n
+        FROM match_queue
+        WHERE status = 'skipped'
+        GROUP BY r
+        ORDER BY n DESC
+    """
+    reasons_rows = (await session.execute(text(reasons_sql))).mappings().all()
+    reasons_map = {r["r"]: int(r["n"]) for r in reasons_rows}
+
+    return SkippedQueuePageOut(
+        items=[SkippedQueueItemOut(**dict(r)) for r in items_rows],
+        total=int(total),
+        limit=limit,
+        offset=offset,
+        stores=stores_map,
+        reasons=reasons_map,
+    )
+
+
+class ReEnqueueRequest(BaseModel):
+    """POST /matching/queue/re-enqueue-skipped.
+
+    Если `offer_ids` передан — re-enqueue ровно эти id (точечная операция).
+    Иначе — фильтры store_slug/reason применяются ко всем skipped. Если оба
+    набора пустые — re-enqueue ВСЕ skipped (требует подтверждения на UI).
+    """
+    offer_ids: list[int] | None = None
+    store_slug: list[str] | None = None
+    reason: list[str] | None = None
+
+
+class ReEnqueueResultOut(BaseModel):
+    requested: int
+    re_enqueued: int
+
+
+@router.post(
+    "/queue/re-enqueue-skipped",
+    response_model=ReEnqueueResultOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def re_enqueue_skipped(
+    payload: ReEnqueueRequest,
+    session: AsyncSession = Depends(get_session),
+) -> ReEnqueueResultOut:
+    """Возвращает skipped → pending. Воркер обработает в ближайшем тике.
+
+    Семантика идентична `enqueue` ON CONFLICT DO UPDATE из queue_repo: сбрасываем
+    attempts, next_attempt_at, error_detail и result_*. claimed_at тоже сбрасываем
+    (был установлен старым claim'ом, иначе recover_stuck может ошибиться).
+    """
+    where: list[str] = ["status = 'skipped'"]
+    params: dict[str, Any] = {}
+
+    if payload.offer_ids:
+        # точечный re-enqueue — игнорирует фильтры store/reason
+        where.append("offer_id = ANY(:ids)")
+        params["ids"] = payload.offer_ids
+    else:
+        if payload.store_slug:
+            where.append("store_slug = ANY(:stores)")
+            params["stores"] = payload.store_slug
+        if payload.reason:
+            where.append(
+                "EXISTS (SELECT 1 FROM unnest(CAST(:reasons AS text[])) r "
+                "WHERE error_detail LIKE r || '%')"
+            )
+            params["reasons"] = payload.reason
+
+    where_sql = " AND ".join(where)
+
+    # count перед update — для отчёта оператору сколько имеем перед операцией
+    requested = (await session.execute(
+        text(f"SELECT COUNT(*) FROM match_queue WHERE {where_sql}").bindparams(**params)
+    )).scalar_one()
+
+    result = await session.execute(
+        text(
+            f"""
+            UPDATE match_queue
+            SET status = 'pending',
+                attempts = 0,
+                next_attempt_at = NULL,
+                error_detail = NULL,
+                processed_at = NULL,
+                claimed_at = NULL,
+                result_game_id = NULL,
+                result_score = NULL,
+                result_tier = NULL
+            WHERE {where_sql}
+            """
+        ).bindparams(**params)
+    )
+    await session.commit()
+    return ReEnqueueResultOut(requested=int(requested), re_enqueued=result.rowcount or 0)
+
+
+class RunV2ResponseOut(BaseModel):
+    offer_id: int
+    queued: bool
+    priority: int
+    queue_id: int | None = None
+
+
+@router.post(
+    "/{offer_id}/run-v2",
+    response_model=RunV2ResponseOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def run_v2_on_offer(
+    offer_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> RunV2ResponseOut:
+    """Прогон одного offer через v2 pipeline (T2/T3 в воркере).
+
+    Технически — enqueue в `match_queue` с `priority=10` (поднимает запись в
+    начало очереди при следующем тике). Не sync с inline-результатом — Ollama
+    может отвечать 10-30 сек, держать HTTP-request это много (timeout риск).
+
+    Если offer уже в очереди (UNIQUE offer_id) — ON CONFLICT сбрасывает в
+    pending с priority=10. Безопасно вызывать повторно.
+    """
+    offer = await session.get(Offer, offer_id)
+    if offer is None:
+        raise HTTPException(status_code=404, detail=f"offer {offer_id} not found")
+
+    queue_id = await v2_enqueue(
+        session,
+        offer_id=offer_id,
+        store_slug=offer.store_slug,
+        title_raw=offer.title_raw,
+        title_norm=normalize_title(offer.title_raw),
+        priority=10,
+    )
+    await session.commit()
+    return RunV2ResponseOut(
+        offer_id=offer_id,
+        queued=True,
+        priority=10,
+        queue_id=queue_id,
+    )
+
+
+class OfferLookupOut(BaseModel):
+    id: int
+    store_slug: str
+    external_id: str
+    title_raw: str
+    url: str | None = None
+    image_url: str | None = None
+    last_price: int | None = None
+    game_id: int | None = None
+    match_status: str
+    match_score: float | None = None
+    match_tier: int | None = None
+    match_reason: str | None = None
+
+
+def _offer_to_lookup(o: Offer) -> OfferLookupOut:
+    return OfferLookupOut(
+        id=o.id, store_slug=o.store_slug, external_id=o.external_id,
+        title_raw=o.title_raw, url=o.url, image_url=o.image_url,
+        last_price=o.last_price, game_id=o.game_id,
+        match_status=o.match_status, match_score=o.match_score,
+        match_tier=o.match_tier, match_reason=o.match_reason,
+    )
+
+
+class OffersSearchOut(BaseModel):
+    items: list[OfferLookupOut]
+
+
+# ВАЖНО: `/offers/search` декларируется ДО `/offers/{offer_id}` — иначе FastAPI
+# попытается парсить строку "search" как int и вернёт 422. Path order имеет
+# значение, и здесь это explicit assumption.
+@router.get(
+    "/offers/search",
+    response_model=OffersSearchOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def search_offers(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    session: AsyncSession = Depends(get_session),
+) -> OffersSearchOut:
+    """Fuzzy lookup по подстроке title (для UI «найти offer по title»).
+
+    ILIKE без trgm — для UI типа этого хватает (мало результатов, не индекс).
+    Сортировка: сначала unmatched (оператор скорее всего ищет проблемный),
+    потом по id DESC (свежие). Trgm score-сортировка пока не делаем — UI
+    не показывает score в этом списке.
+    """
+    rows = (await session.execute(
+        select(Offer)
+        .where(Offer.title_raw.ilike(f"%{q}%"))
+        .order_by(
+            # unmatched / rejected подняты вверх — обычно их ищут.
+            case(
+                (Offer.match_status == "unmatched", 0),
+                (Offer.match_status == "rejected", 1),
+                else_=2,
+            ),
+            Offer.id.desc(),
+        )
+        .limit(limit)
+    )).scalars().all()
+    return OffersSearchOut(items=[_offer_to_lookup(o) for o in rows])
+
+
+@router.get(
+    "/offers/{offer_id}",
+    response_model=OfferLookupOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def lookup_offer(
+    offer_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> OfferLookupOut:
+    """Lookup одного offer с диагностическими полями матчинга — для штучного
+    панель в /matching → Штучный."""
+    o = await session.get(Offer, offer_id)
+    if o is None:
+        raise HTTPException(status_code=404, detail=f"offer {offer_id} not found")
+    return _offer_to_lookup(o)
