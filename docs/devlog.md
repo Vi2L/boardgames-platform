@@ -8,6 +8,112 @@
 
 ---
 
+## 2026-05-16 · [CAT-4] Matching v2 — ML-powered tiered pipeline + hardening
+
+**Что сделано:** многоуровневый матчер catalog → game с auto-resolution через
+ML-стек, plus полная обвязка для боя (recovery, kill-switch, audit, revert).
+Реализован 2026-05-10..11, hardened после code review 2026-05-15..16.
+
+Pipeline:
+- **T0** — cache (`match_decisions`, TTL per source: manual=∞, t1=30д, t2=14д, t3=7д).
+- **T1** — `pg_trgm` ≥ 0.92 на title/title_ru/aliases, sync в ingest.
+- **T2** — bge-m3 cosine через pgvector top-K, async через `match_worker` (10с).
+- **T3** — qwen2.5:7b-instruct LLM-арбитр (format='json', confidence ≥ 0.75)
+  при `vec_ambiguous` (≥2 кандидата ≥ 0.70). Single confident below auto_threshold
+  (`vec_below_threshold`) идёт в T4 без LLM-вызова — экономит ресурс.
+- **T4** — manual queue (UI).
+
+Production-обвязка:
+- `OllamaHealth` Circuit Breaker per-model с **half-open**: после `_recovery_timeout`
+  (60с) первый запрос — probe; `embedder.record_success`/`llm_arbiter.record_success`
+  закрывают цепь немедленно. APScheduler-job `ml_health_check` (30с) поллит `/api/tags`.
+- `match_queue` outbox с `FOR UPDATE SKIP LOCKED`, exponential backoff 30→120→600→1800с,
+  `claimed_at` денормализация для корректного `recover_stuck` (был баг — использовался
+  `created_at`, при горячем рестарте запись могла обработаться повторно).
+- `runtime_flags.ml_enabled` kill-switch с in-memory TTL-кэшем 5с — выключение ML
+  без рестарта через `PATCH /admin/runtime-flags/ml_enabled`. Settings.ml_enabled
+  оставлен как fallback.
+- `match_log` audit с bulk-revert через `batch_id` UUID. `revert_one` снимает
+  `title_norm` snapshot до UPDATE — корректно очищает T0 даже если оффер удалён.
+- BGG enrichment всех 162K игр (169 744 эмбеддинга, HNSW vector(1024), m=16,
+  ef_construction=128) и `title_ru` first-class колонка.
+- LLM JSON-парсер через `JSONDecoder.raw_decode` — обрабатывает вложенные объекты
+  (старый regex `\{.*?\}` ломался на nested JSON).
+
+UI (web-test):
+- `MlStatusBadge` в HealthBadge показывает circuit_state per-model.
+- Новая вкладка «Журнал матчинга» с bulk-revert чекбоксами, `TierBadge`.
+- `GET /matching/stats` теперь возвращает `queue.{pending,processing,skipped,
+  failed,done}` — оператор видит сколько ушло в T4.
+
+**Как пользоваться:**
+- ML kill-switch: `curl -X PATCH http://localhost:8002/admin/runtime-flags/ml_enabled
+  -H 'content-type: application/json' -d '{"value":false}'` — выключает T2/T3 (worker
+  пропускает циклы, ingest пишет `unmatched` с reason='ml_disabled').
+- Прогресс воркера: `curl http://localhost:8002/matching/stats | jq .queue` —
+  pending/processing видно сразу, skipped = офферы в manual T4.
+- ML-статус: `curl http://localhost:8002/matching/ml-status` — `models` + `circuit_state`
+  (closed/open/half_open) per-model.
+- Revert: `curl -X POST http://localhost:8002/matching/log/batch/<uuid>/revert` —
+  откат всех изменений одного batch'а (например, неудачного reassess-all).
+
+**Затронутые файлы:**
+- Миграции: `0011_matching_v2.py` (pgvector + game_embeddings + match_decisions/log/queue),
+  `0013_matching_v2_hardening.py` (claimed_at + runtime_flags).
+- Ядро: `services/catalog/catalog/matching/v2/{engine,tiers,embeddings,llm_arbiter,
+  health,worker,queue_repo,decisions,auditor,embedder,domain}.py`.
+- Runtime flags: `catalog/runtime_flags.py`, `catalog/routers/runtime_flags.py`.
+- Scheduler: `catalog/scheduler.py` (`_register_interval_job`, `reload_job_from_db`
+  для interval-jobs).
+- Интеграция: `catalog/routers/{ingest,matching}.py`.
+- Тесты: `tests/test_matching_v2_{unit,integration}.py` (80 тестов).
+- UI: `services/web-test/frontend/src/components/{shared/HealthBadge.tsx,
+  catalog/MatchLog.tsx,catalog/TierBadge.tsx}`.
+
+**Известные ограничения** (вынесено в roadmap follow-up'ом):
+- Pre-existing `test_ingest_typo_*` падают на T1@0.92 vs старый 0.6 — переписать
+  под новые пороги.
+- MatchProfile per-store override — схема в БД готова (`match_profiles`), реализация
+  `MatchProfileLoader` не подключена.
+- Structured embedding text вместо конкатенации title+title_ru+aliases — после
+  анализа miss-rate.
+
+## 2026-05-16 · [PRS-OZ] Ozon-парсер через browser-service (Camoufox persistent profile)
+
+**Что сделано:** Шестой источник цен — Ozon. Парсит SSR HTML страницы `/search/?text=<q>`,
+поднятой через `services/browser` (Camoufox + Firefox). Прямой HTTP закрыт **Antibot
+Challenge Page** (FunCaptcha-like JS challenge на TLS+behavioural+cookies): probe
+показал, что даже с cookies от Camoufox, прямой запрос на `composer-api.bx` отдаёт 403.
+Поэтому **все запросы идут через browser-service** с `profile_id="ozon"` (persistent
+profile в `/data/profiles/ozon` — cookies/localStorage накапливаются между запросами,
+warm-trip быстрее cold-trip). В `lifespan` запущен **warmup loop** (asyncio.Task,
+интервал `OZON_WARMUP_INTERVAL_MINUTES`, default 60м) — делает «холостой» fetch на
+главную, чтобы первый user-запрос был тёплым. Парсинг карточек — regex по якорю
+`<a href="/product/<slug>-<id>/">` с fallback на восстановление title из slug.
+
+**Как пользоваться:**
+- Запустить browser-service: `docker compose --profile browser up -d browser` (или весь
+  стек: `--profile full --profile browser`). Без него `OzonParser.search()` падает с
+  `RuntimeError`, остальные парсеры работают.
+- Поиск: `curl "http://127.0.0.1:8001/search?q=Каркассон&stores=ozon&limit=5"`.
+- Live Test: `curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=ozon&limit=5"` —
+  мимо кеша, видны цены/brand/original_price/image_url.
+- Dashboard `/dashboard` → таб «Парсеры» — latency Ozon в среднем 3-12с vs WB ~500мс,
+  это нормально (плата за обход antibot).
+- Цены: `price` = с Ozon-картой (Headline-цена в карточке), `raw.original_price` =
+  без скидки. В catalog `price` пишется как основная.
+
+**Затронутые файлы:**
+- `services/parsers/parsers/stores/ozon.py` (новый) — `OzonParser`, `_parse_cards`,
+  `_parse_price_kopecks`, `_title_from_slug`, `warmup_once`, `warmup_interval_seconds`.
+- `services/parsers/parsers/stores/__init__.py` — экспорт `OzonParser`.
+- `services/parsers/parsers/api.py` — регистрация в `lifespan()`, `_ozon_warmup_loop()`.
+- `services/parsers/tests/test_ozon_parser.py` (новый) — 24 теста: helpers, парсинг
+  карточек, search() protocol, error pathways (challenge HTML, empty html, no browser).
+- `services/parsers/CLAUDE.md`, `services/parsers/README.md` — обновили таблицу и
+  подводные камни.
+- `.env.example` — добавлен `OZON_WARMUP_INTERVAL_MINUTES`.
+
 ## 2026-05-14 · [PRS-WB] Wildberries-парсер (search-only через публичный JSON)
 
 **Что сделано:**

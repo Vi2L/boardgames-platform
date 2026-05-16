@@ -15,82 +15,41 @@ PRS (parsers), INFRA (общее).
 
 ## Сейчас в работе
 
-- [CAT-4] **Matching v2: ML-powered tiered pipeline**
-  (закрывает [CAT-1] частично — авто-эвристики теперь делает T3 LLM-арбитр)
-
-  **Сделано (код, 2026-05-10..11):**
-  - Миграция 0011: pgvector + `game_embeddings` (HNSW vector(1024)),
-    `match_decisions` (T0 cache c TTL per source), `match_log`
-    (audit + bulk-revert через batch_id UUID), `match_queue` (outbox).
-  - Tiered pipeline `services/catalog/catalog/matching/v2/`:
-    - T0 — cache hit по `match_decisions` (sync)
-    - T1 — pg_trgm ≥ 0.92 на title/title_ru/aliases (sync)
-    - T2 — bge-m3 cosine через pgvector top-K (async, worker)
-    - T3 — qwen2.5:7b-instruct LLM-арбитр с JSON-режимом (async)
-    - T4 — manual queue (UI)
-  - `OllamaHealth` polling 30 сек + Circuit Breaker per-model;
-    `ml_enabled` kill-switch без рестарта.
-  - APScheduler-jobs: `ml_health_check` (30s), `match_worker` (10s).
-  - Замена `find_best_match` → `match_sync` в `routers/ingest.py`,
-    запись в `match_log` на каждое изменение `offers.game_id`.
-  - Web-test UI: `MlStatusBadge` в HealthBadge, новая вкладка
-    «Журнал матчинга» с bulk-revert чекбоксами, `TierBadge`.
-  - CLI/admin: `warmup_embeddings.py` (фоном через ImportJob),
-    `backfill_title_ru.py`.
-  - `Game.title_ru` — first-class колонка денормализованного ru-имени.
-
-  **Deploy — сделано 2026-05-11:**
-  - [x] `docker pull pgvector/pgvector:pg16` (Docker Hub был недоступен)
-  - [x] `docker compose up -d --force-recreate postgres` (volume сохранился)
-  - [x] `alembic upgrade head` на prod + catalog_test
-    (fix: `now()` в partial-index predicate — убран, PG требует IMMUTABLE)
-  - [x] `backfill_title_ru` — заполнено 985 игр из ru-aliases
-  - [x] Rebuild + restart `bg-catalog` и `bg-web-test`
-  - [x] Smoke-test sync-pipeline: ingest «Каркассон» → T1 auto-match (score=1.0,
-    `trgm_alias_ru`); повтор → T0 cache hit (`cache_hit_auto_t1`); «Каркасон»
-    с опечаткой → unmatched + push в `match_queue`; revert log #1 → offer
-    обнулён, match_decisions очищен, создана `revert`-запись в audit log.
-  - [x] Pytest-покрытие: 38 unit (`test_matching_v2_unit.py`) +
-    19 integration (`test_matching_v2_integration.py`) — все зелёные.
-
-  **Сделано 2026-05-11 (вторая итерация):**
-  - [x] `sudo networksetup -setv6off Wi-Fi` (требовалось из-за IPv6 →
-    Cloudflare broken-pipe; Ollama-CLI hardcoded Happy-Eyeballs не работал)
-  - [x] `ollama pull bge-m3` (1.2 GB) — установлено, health-check поднимает
-    в `available=true` (failures=0)
-  - [x] Warmup эмбеддингов: 2 прогонa (limit=1000, limit=5000) → 6000 строк
-    в `game_embeddings` (HNSW индекс активен)
-  - [x] Smoke-test T2 косвенно через ingest: 63 unmatched от parsers'ов
-    обработаны воркером, попали в `skipped` (single candidate < 0.85,
-    или ambiguous без LLM-арбитра). Это **правильное** поведение
-    Circuit Breaker'а — без LLM неоднозначные офферы идут в manual queue.
-
-  **Осталось пользователю:**
-  - [ ] `ollama pull qwen2.5:7b-instruct` — повисло на Cloudflare R2 download
-    (~30 мин partial-blobs без прогресса). Pull убит, partials очищены.
-    Повторить вручную в новом терминале: `ollama pull qwen2.5:7b-instruct`.
-    Без неё T3 LLM-арбитр недоступен → неоднозначные T2-кейсы (2+ кандидата
-    score>=0.70) уходят в manual queue вместо auto-resolution.
-  - [ ] Полный warmup эмбеддингов на все 162K игр (под `nohup`, ~1.5–4 ч).
-    Сейчас покрытие 6000 записей — для top-ранкированных игр, не базы целиком.
-  - [ ] Smoke-test T2 single-confident: ingest «Каркасон» с опечаткой,
-    проверить что воркер ловит её через T2 cosine >=0.85 (после полного warmup).
-  - [ ] Smoke-test T3 (после `ollama pull qwen2.5`): ingest нескольких
-    похожих кандидатов, проверить что LLM арбитр выбирает один из них.
-
-  **Технический долг (после боя):**
-  - Per-store `MatchProfile` override (схема в БД готова, реализация —
-    `MatchProfileLoader` в `engine.py`).
-  - Structured embedding text вместо простой конкатенации
-    (после анализа miss-rate реальных запросов).
-  - Отдельный `kind_classifier` для pre-T2 фильтрации
-    (сейчас kind определяется внутри T3 prompt'а).
+_(пусто)_
 
 ## Ближайшее (1–2 недели)
 
 _(пусто)_
 
 ## Бэклог (без даты)
+
+### Catalog (matching v2 — follow-ups после CAT-4)
+
+- [CAT-4.1] **MatchProfile per-store override** — схема в БД готова
+  (`match_profiles`), реализация `MatchProfileLoader` в `engine.py` не
+  подключена. Точка инжекта: `MatchEngine.__init__(session, profile=None)`,
+  загружать профиль по `store_slug` из `match_sync(store_slug=...)`. Профиль
+  переопределяет `match_t1_auto_threshold` / `match_t2_auto_threshold` /
+  `t2_confidence_margin` (зашит как 0.05 в `embeddings.py:153`). Полезно
+  для магазинов с шумным title (Wildberries добавляет SKU/серию — нужен
+  более низкий T1 порог) vs HobbyGames (чистые title — можно поднять T2).
+- [CAT-4.2] **Structured embedding text** — `embedder.build_text` сейчас
+  просто конкатенирует `title_ru + title + aliases[:5]`. Лучше bge-m3
+  понимает структурированный текст: `"GAME: {title_ru} ALSO: {title}
+  SYNONYMS: {aliases}"`. Делать после анализа miss-rate реальных T2-запросов
+  в проде — может оказаться, что текущий простой подход уже даёт ≥85%
+  precision и улучшение не стоит реиндексации 162K эмбеддингов.
+- [CAT-4.3] **kind_classifier pre-T2** — сейчас тип товара (base/expansion/
+  accessory) определяется внутри T3 prompt'а. Можно классифицировать раньше
+  (rule-based по словам «дополнение»/«expansion»/«big box» в title) и
+  передавать как `kind_filter` в `vec_search_top_k` — отсекает не-релевантных
+  кандидатов до T2, экономит embed-вызовы. Точка вставки: `engine.py:103`
+  перед `tier_2_vector`.
+- [CAT-4.4] **Legacy ingest-тесты под matcher v2 пороги** — `test_ingest_typo_*`
+  в `tests/test_ingest_and_matching.py` падают: писаны под старый порог 0.6,
+  сейчас T1=0.92. Варианты: (a) переписать ожидания под `match_status='unmatched'`
+  + проверку push в `match_queue`, (b) переключить тесты на pre-seeded T0 cache
+  для детерминированности.
 
 ### Catalog (BGG enrichment)
 
