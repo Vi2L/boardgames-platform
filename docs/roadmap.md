@@ -25,31 +25,38 @@ _(пусто)_
 
 ### Catalog (matching v2 — follow-ups после CAT-4)
 
-- [CAT-4.1] **MatchProfile per-store override** — схема в БД готова
-  (`match_profiles`), реализация `MatchProfileLoader` в `engine.py` не
-  подключена. Точка инжекта: `MatchEngine.__init__(session, profile=None)`,
-  загружать профиль по `store_slug` из `match_sync(store_slug=...)`. Профиль
-  переопределяет `match_t1_auto_threshold` / `match_t2_auto_threshold` /
-  `t2_confidence_margin` (зашит как 0.05 в `embeddings.py:153`). Полезно
-  для магазинов с шумным title (Wildberries добавляет SKU/серию — нужен
-  более низкий T1 порог) vs HobbyGames (чистые title — можно поднять T2).
+- [CAT-4.1] **MatchProfile per-store override**.
+  **Готово:** таблица `match_profiles` (миграция 0006) + endpoint
+  `GET /matching/profiles` (`routers/sources.py:243`).
+  **Осталось:** `MatchProfileLoader` в `engine.py` (`MatchEngine.__init__(session,
+  profile=None)`), пробрасывать профиль через `match_sync(store_slug=...)`,
+  переопределять `match_t1_auto_threshold` / `match_t2_auto_threshold` /
+  `t2_confidence_margin` (зашит как 0.05 в `embeddings.py:153`).
+  **Зачем:** для магазинов с шумным title (Wildberries добавляет SKU/серию —
+  нужен более низкий T1 порог) vs HobbyGames (чистые title — можно поднять T2).
 - [CAT-4.2] **Structured embedding text** — `embedder.build_text` сейчас
   просто конкатенирует `title_ru + title + aliases[:5]`. Лучше bge-m3
   понимает структурированный текст: `"GAME: {title_ru} ALSO: {title}
   SYNONYMS: {aliases}"`. Делать после анализа miss-rate реальных T2-запросов
   в проде — может оказаться, что текущий простой подход уже даёт ≥85%
   precision и улучшение не стоит реиндексации 162K эмбеддингов.
-- [CAT-4.3] **kind_classifier pre-T2** — сейчас тип товара (base/expansion/
-  accessory) определяется внутри T3 prompt'а. Можно классифицировать раньше
-  (rule-based по словам «дополнение»/«expansion»/«big box» в title) и
-  передавать как `kind_filter` в `vec_search_top_k` — отсекает не-релевантных
-  кандидатов до T2, экономит embed-вызовы. Точка вставки: `engine.py:103`
-  перед `tier_2_vector`.
-- [CAT-4.4] **Legacy ingest-тесты под matcher v2 пороги** — `test_ingest_typo_*`
-  в `tests/test_ingest_and_matching.py` падают: писаны под старый порог 0.6,
-  сейчас T1=0.92. Варианты: (a) переписать ожидания под `match_status='unmatched'`
-  + проверку push в `match_queue`, (b) переключить тесты на pre-seeded T0 cache
-  для детерминированности.
+- [CAT-4.3] **kind_classifier pre-T2**.
+  **Готово:** `kind_filter` в `vec_search_top_k` (`embeddings.py:31-100`) +
+  `predicted_kind` в `ctx` — но это **post-T2 path** для T3 re-loop'а
+  (когда LLM назвал `kind` и нужен повторный vector-search с фильтром).
+  **Осталось:** **pre-T2** rule-based классификатор по словам «дополнение»/
+  «expansion»/«big box» в title; передавать `kind_filter` в `vec_search_top_k`
+  ещё до первого embed-вызова. Точка вставки: `engine.py:103` перед
+  `tier_2_vector`. Сэкономит embed-вызовы на офферах, где kind виден из title.
+- [CAT-4.4] **Legacy ingest-тесты под matcher v2 пороги**.
+  **Статус:** `test_ingest_typo_still_matches` (`tests/test_ingest_and_matching.py:69-91`)
+  **падает** — комментарий ожидает «trgm ~0.73 > порог 0.6», реальный
+  порог сейчас 0.92.
+  **Варианты исправления:** (a) переписать ожидания под
+  `match_status='unmatched'` + проверку push в `match_queue` (тогда тест
+  фиксирует поведение «typo больше не auto-T1, идёт в ML/manual»),
+  (b) переключить тесты на pre-seeded T0 cache для детерминированности
+  (`match_decisions` с готовым `game_id` ловит typo через cache hit).
 
 ### Catalog (BGG enrichment)
 
@@ -99,9 +106,14 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   Хранить в новой таблице `bgg_versions (game_id, bgg_id, version_id,
   language, year, publisher, productcode, dimensions, ...)`.
 
-- [CAT-10] **Yearly releases sync — новинки текущего года** — BGG XML API не
-  даёт фильтр по году публикации и сортировку по `numvoters`/`numplays`, оба
-  необходимы для отбора «новых заметных игр». Решение — HTML-скрейп страницы
+- [CAT-10] **Yearly releases sync — новинки текущего года**.
+  ⚠ **Уже сделана узкая часть** (коммит `0b70825` — `year_in` селектор для
+  ручного batch-enrich). Осталась автоматическая часть: HTML-скрейп +
+  scheduler-job для регулярного импорта новинок без участия оператора.
+
+  BGG XML API не даёт фильтр по году публикации и сортировку по
+  `numvoters`/`numplays`, оба необходимы для отбора «новых заметных игр».
+  Решение — HTML-скрейп страницы
   `https://boardgamegeek.com/browse/boardgame?sort=numvoters&yearpublished=YYYY`
   (10 страниц × 100 игр = топ-1000 новинок года).
 
@@ -129,6 +141,30 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   благодаря registry-паттерну. Лог обогащения — в существующей вкладке
   «История» с фильтром `type=bgg-yearly`.
 
+### Catalog (audit log + cache hygiene)
+
+- [CAT-11] **Audit log retention.** `match_log` растёт неограниченно: один
+  `reassess-all` пишет тысячи строк, повторных пересчётов в неделю — десятки.
+  Завести eviction: APScheduler-job `match_log_retention` (раз в сутки)
+  удаляет строки **старше 90 дней** по `created_at`, **кроме** ещё не
+  реверченных (`reverted_at IS NULL AND action != 'revert'` сохраняем —
+  потенциально нужны для отката). ENV: `MATCH_LOG_RETENTION_DAYS=90`.
+  Точка реализации: `catalog/scheduler.py` + новый репозиторий-метод
+  `auditor.evict_older_than(days=90)`. Перед удалением — `COUNT(*)` в
+  лог для аудита. Связано с CAT-12 (negative cache тоже стоит чистить).
+
+- [CAT-12] **Negative cache invalidation API.** Сейчас `match_decisions`
+  с `game_id IS NULL` (negative cache, источник `manual` от `reject`)
+  живёт **бессрочно** (`ttl_days = NULL`) — оператор может пересмотреть
+  решение только руками через SQL `DELETE`. См. ограничение в
+  `docs/cat-4-matching-v2.md` §10.
+  - `DELETE /matching/decisions/{title_norm}` — точечная инвалидация.
+  - `POST /matching/decisions/invalidate` body
+    `{store: "...", title_contains: "...", only_negative: true}` —
+    bulk-вариант для случая «оператор переслушал политику reject'ов».
+  - UI: в `MatchLog` рядом со строкой `reject` — кнопка «Invalidate decision».
+  Audit: каждая инвалидация → запись в `match_log` с `action='invalidate_decision'`.
+
 ### web-test
 
 **Catalog / matching UI**
@@ -138,7 +174,15 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
 
 **Поиск**
-- [WT-F11] **Группировка результатов по игре** — сейчас `ResultsTable`
+- [WT-F11] **Группировка результатов по игре**.
+  ⚠ **Семантический дрейф:** коммиты `de24cce`/`c9dd058`/`1de0edf` от
+  2026-05-16 имеют label `[WT-F11]`, но содержательно относятся к
+  редизайну админ-панели матчинга (см. `docs/web-test-redesign-brief.md`),
+  а **не** к группировке результатов поиска. Сама эта задача
+  (`GroupedResultsTable` в SearchPage) ещё не начата. В будущих коммитах
+  под admin-panel-редизайн использовать другой label, чтобы не путать.
+
+  Сейчас `ResultsTable`
   (`frontend/src/components/search/ResultsTable.tsx`) рисует плоский
   список `ProductOut[]`: один и тот же «Каркассон» из 6 магазинов = 6
   строк с разными названиями (HG: «Каркассон. Базовый набор»,
@@ -165,7 +209,10 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
     expansion'ы склеит с base. Подходит как **MVP / fallback**, когда
     catalog недоступен.
   - **Вариант B (catalog batch-lookup)**: новый endpoint
-    `POST /catalog/matching/lookup` (catalog) — принимает
+    `POST /catalog/matching/lookup-batch` (catalog) — **не путать с уже
+    реализованным `/matching/offers/search`**, это fuzzy-lookup offer'ов
+    по title для admin-UI, а нужен **батч-резолв game_id для списка
+    title'ов из поиска**. Принимает
     `[{store_slug, title, url, price_rub}]`, возвращает массив
     `[{idx, game_id, game_title_ru, match_score, match_tier}]` либо
     `null` для не-сматченных. Внутри переиспользует `MatchEngine`
@@ -221,41 +268,13 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   иначе lookup даст много false positives. Сейчас CAT-4 в devlog
   (2026-05) — можно начинать.
 
-- [WT-F8] **Log поисковых запросов на странице `/`** — сейчас журнал
-  запросов лежит на `/database` → вкладка «Журнал» (`DatabasePage.tsx:55`,
-  компонент `SearchesTab`, endpoint `/api/db/searches`). На самой странице
-  поиска видны только последние 10 запросов в dropdown'е `SuggestInput`
-  (localStorage через `lib/searchHistory.ts`) — это не журнал, а typeahead.
-
-  *Цель*: открываемая панель/drawer прямо с `/`, чтобы быстро посмотреть
-  свои последние N запросов с метаданными — когда искал, сколько товаров
-  пришло, какие магазины, потраченное время. Это перекрывает потребность
-  «помню что неделю назад искал X и что-то странное приходило, нужно
-  повторить».
-
-  *Объём (minimal)*:
-  - Кнопка «Журнал» рядом с `SearchForm` (icon `History`) → открывает
-    `<SearchLogDrawer>` (по аналогии с `ProductDrawer`).
-  - В drawer: таблица последних 50 поисков из `/api/db/searches` —
-    колонки `query` / `когда` / `results_count` / `duration_ms`
-    (если есть в schema; иначе добавить в `db_local.local_searches`).
-  - Клик по строке → пре-заполняет `SearchForm` тем же query и
-    запускает поиск (через Zustand `useSearchStore.setQuery + submit`).
-  - Поиск по тексту запросов (debounced, через query-param `?query=`
-    в `/api/db/searches` — уже поддерживается, см. `db.py:101`).
-
-  *Объём (nice-to-have, по согласованию)*:
-  - Группировка по дню («Сегодня», «Вчера», «На этой неделе»).
-  - Фильтр по магазину (если в `local_searches` появится колонка
-    `stores_json` или `result_stores`).
-  - Inline-метрика «retry рейт»: процент запросов где какой-то стор
-    вернул ошибку (полезно для дебага парсеров).
-
-  *Что НЕ делать*:
-  - Не дублировать `/database` → `SearchesTab` полностью. Drawer — это
-    «быстрый доступ», полная таблица с пагинацией остаётся там.
-  - Не убирать dropdown typeahead с localStorage — он работает мгновенно
-    без сетевого запроса и нужен на фокусе input'а.
+- [WT-F8.1] **Persistent search history (опционально).** Изначальный WT-F8
+  («drawer с журналом запросов на `/`») закрыт как «решено иначе» —
+  таб `api-log` в SearchPage уже даёт API-логи текущей сессии (см. devlog
+  2026-05-16). Этот узкий follow-up заводим **только если** возникнет
+  потребность в **архивном** журнале (между сессиями, поиск по тексту,
+  фильтр по магазину) — данные уже есть в `/api/db/searches`. До явной
+  потребности — не делать.
 
 **Парсеры / Debug**
 - [WT-F9] **Убрать пункт «Парсеры» из сайдбара** — `/parsers` сейчас
@@ -362,6 +381,16 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   + description + default + simple required-flag. Cross-field
   валидация — на бэке в момент `rescheduleJob`.
 
+**Кросс-страничные UX-паттерны**
+- [WT-F12] **Bulk-actions sticky toolbar pattern.** Базовый примитив
+  `components/ui/Toolbar.tsx` уже есть, но применён точечно. Привести
+  к единому виду на 3 страницах с множественным выбором: matching queue
+  (link/reject N), DLQ (re-enqueue N), snapshots (compare/delete N).
+  Логика: checkbox-колонка → sticky-снизу toolbar
+  `Selected: N · [Action 1] [Action 2] · Clear` → **один confirm** на
+  весь batch (не N модалок). Связать с keyboard-shortcuts: Shift+click
+  для range-select, Cmd+A для select-all-visible, Esc для clear-selection.
+
 **Технический долг**
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка
   invalidate для cache-keys одного домена вместо ручного
@@ -431,6 +460,18 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   (2) для MVP цены без характеристик хватает. Завести если возникнет
   потребность в WB-данных для matching v2 (T2 embeddings).
 
+- [PRS-7] **Общий per-store Circuit Breaker.** WB-проблема (PRS-6 пункт 4)
+  и Ozon timeouts показали, что breaker нужен не одному парсеру, а как
+  cross-cutting pattern. Вынести в `services/parsers/parsers/utils/breaker.py`:
+  `CircuitBreaker(store, failure_threshold=0.5, window=60s, open_for=300s,
+  half_open_probes=1)`. Half-open паттерн — как у catalog'а
+  (`docs/cat-4-matching-v2.md` §5). Использовать декоратором над `search()`
+  в `wildberries.py`, `ozon.py`, `avito_qrator.py`. После реализации
+  PRS-6 пункт 4 становится частным случаем — wildberries-circuit
+  превращается в `@circuit_breaker(store='wildberries')`. Состояние
+  держать **per-process** (не в БД) — breaker'у не нужна персистентность,
+  цель — погасить шум на 5 минут, а не координировать инстансы.
+
 ### Инфра
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал
   (Next.js / Vite + React).
@@ -441,6 +482,15 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   и `apps/mobile`.
 - [INFRA-4] **`.github/workflows/`** — CI с change detection
   (пересобирать только то, что менялось).
+
+- [INFRA-6] **Процессный аудит `.claude/settings.json`.** Файл накапливает
+  Bash-разрешения и pre-commit-хуки от старых страниц и команд web-test.
+  Раз в квартал (или после крупного merge типа admin-panel редизайна) —
+  пройтись и удалить устаревшее: команды, которых больше нет в скриптах;
+  hooks, ссылающиеся на удалённые файлы. Это **процессная** задача, не
+  одноразовая — заведена сюда как напоминание не забыть после
+  ландинга крупных рефакторов. Скрипт-помощник: `grep -hoE 'allow.*Bash'
+  .claude/settings*.json` сверить с `bin/*` и `package.json:scripts`.
 
 ### Известные ограничения (не баги, а константы)
 - **Парсеры — 6 источников** (hobbygames, lavkaigr, gaga,

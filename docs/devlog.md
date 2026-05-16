@@ -8,6 +8,35 @@
 
 ---
 
+## 2026-05-16 · [WT-F8] Log поисковых запросов на странице `/` (решено иначе)
+
+**Что сделано:** Цель пункта — быстрый доступ к журналу запросов без перехода
+в `/database`. По факту решена через таб `api-log` в `SearchPage.tsx`
+(`type Tab = 'results' | 'api-log'`, переключатель в шапке секции результатов).
+Zustand-store `useSearchStore` (`store/search.ts`) пишет `apiLogs: ApiLog[]`
+по ходу SSE-стрима поиска — виден список запросов с тайминами и raw-фреймами
+для каждого магазина.
+
+**Почему не как в roadmap'е:** изначально планировался persistent `<SearchLogDrawer>`
+поверх endpoint'а `/api/db/searches`. В процессе WT-F5.x обнаружилось, что
+api-log таб закрывает 90% повседневного сценария «помню что искал утром,
+повтори/посмотри что вернулось». Persistent журнал из БД с фильтром по
+магазину/тексту остаётся в бэклоге как `[WT-F8.1]` — заводим только если
+возникнет конкретный кейс «недельный архив с поиском по тексту».
+
+**Как пользоваться:**
+- На `/` после запуска поиска переключи таб с «Результаты» на «API log» —
+  увидишь все SSE-события текущей сессии.
+- Полный персистентный журнал (между сессиями) — по-прежнему на `/database`
+  → вкладка «Журнал» (endpoint `/api/db/searches`), сценарий «архив».
+
+**Затронутые файлы:**
+- `services/web-test/frontend/src/pages/SearchPage.tsx` — таб `api-log`.
+- `services/web-test/frontend/src/store/search.ts` — `apiLogs` в Zustand store.
+- `services/web-test/frontend/src/types/api.ts` — тип `ApiLog`.
+
+---
+
 ## 2026-05-16 · [CAT-4] Matching v2 — ML-powered tiered pipeline + hardening
 
 **Что сделано:** многоуровневый матчер catalog → game с auto-resolution через
