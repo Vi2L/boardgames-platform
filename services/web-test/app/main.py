@@ -79,4 +79,19 @@ app.include_router(status_router_module.router, prefix="/api")
 
 _FRONTEND_DIST = Path(__file__).parent.parent / "frontend" / "dist"
 if _FRONTEND_DIST.exists():
-    app.mount("/", StaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
+    # SPA-fallback: на 404 от StaticFiles отдаём index.html, чтобы React Router
+    # обработал путь на клиенте. Без этого `localhost:8000/matching` (direct URL
+    # или refresh браузера) возвращает 404 — клик из sidebar работает, потому что
+    # route обрабатывается клиентским history router'ом без HTTP-запроса.
+    from starlette.exceptions import HTTPException as StarletteHTTPException
+
+    class SPAStaticFiles(StaticFiles):
+        async def get_response(self, path: str, scope):  # type: ignore[override]
+            try:
+                return await super().get_response(path, scope)
+            except StarletteHTTPException as exc:
+                if exc.status_code == 404:
+                    return await super().get_response("index.html", scope)
+                raise
+
+    app.mount("/", SPAStaticFiles(directory=str(_FRONTEND_DIST), html=True), name="frontend")
