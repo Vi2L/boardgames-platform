@@ -498,6 +498,116 @@ class CatalogClient:
         resp = await self._client.post("/matching/warmup-embeddings", json=payload)
         return _ok_or_raise(resp)
 
+    # ── Matcher v2: admin panel `/matching` (UI WT-F11) ─────────────────────
+
+    async def get_runtime_flag(self, key: str) -> dict[str, Any]:
+        """GET /admin/runtime-flags/{key} — текущее состояние bool-флага."""
+        resp = await self._client.get(f"/admin/runtime-flags/{key}")
+        return _ok_or_raise(resp)
+
+    async def set_runtime_flag(self, key: str, value: bool) -> dict[str, Any]:
+        """PATCH /admin/runtime-flags/{key} — обновить bool-флаг. Без рестарта."""
+        resp = await self._client.patch(
+            f"/admin/runtime-flags/{key}", json={"value": value},
+        )
+        return _ok_or_raise(resp)
+
+    async def list_skipped_queue(
+        self, *,
+        store_slug: list[str] | None = None,
+        reason: list[str] | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """GET /matching/queue/skipped — skipped с фильтрами + breakdown.
+
+        httpx сам сериализует list-параметры как multi-value, например
+        `?store_slug=hg&store_slug=lavka` — что соответствует FastAPI
+        `list[str] = Query(default_factory=list)`.
+        """
+        params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset)]
+        for s in store_slug or []:
+            params.append(("store_slug", s))
+        for r in reason or []:
+            params.append(("reason", r))
+        resp = await self._client.get("/matching/queue/skipped", params=params)
+        return _ok_or_raise(resp)
+
+    async def re_enqueue_skipped(
+        self, *,
+        offer_ids: list[int] | None = None,
+        store_slug: list[str] | None = None,
+        reason: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """POST /matching/queue/re-enqueue-skipped — массовый возврат skipped."""
+        payload: dict[str, Any] = {}
+        if offer_ids is not None:
+            payload["offer_ids"] = offer_ids
+        if store_slug is not None:
+            payload["store_slug"] = store_slug
+        if reason is not None:
+            payload["reason"] = reason
+        resp = await self._client.post(
+            "/matching/queue/re-enqueue-skipped", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def run_v2_on_offer(self, offer_id: int) -> dict[str, Any]:
+        """POST /matching/{id}/run-v2 — точечный enqueue с priority=10."""
+        resp = await self._client.post(f"/matching/{offer_id}/run-v2")
+        return _ok_or_raise(resp)
+
+    async def lookup_offer(self, offer_id: int) -> dict[str, Any]:
+        """GET /matching/offers/{id} — lookup offer с match-полями."""
+        resp = await self._client.get(f"/matching/offers/{offer_id}")
+        return _ok_or_raise(resp)
+
+    async def search_offers(self, q: str, limit: int = 10) -> dict[str, Any]:
+        """GET /matching/offers/search?q= — fuzzy lookup по подстроке title."""
+        resp = await self._client.get(
+            "/matching/offers/search", params={"q": q, "limit": limit},
+        )
+        return _ok_or_raise(resp)
+
+    async def trigger_scheduler_job(self, job_id: str) -> dict[str, Any]:
+        """POST /scheduler/jobs/{job_id}/trigger — ручной trigger любого job'а.
+
+        Для interval-jobs (`match_worker`, `ml_health_check`) тоже работает —
+        после фикса в `_resolve_handler` (поддержка _INTERVAL_JOBS).
+        """
+        resp = await self._client.post(f"/scheduler/jobs/{job_id}/trigger")
+        return _ok_or_raise(resp)
+
+    async def reschedule_job(
+        self, job_id: str, *,
+        cron_expr: str | None = None,
+        enabled: bool | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """PATCH /scheduler/jobs/{job_id} — hot-reload расписания / params."""
+        payload: dict[str, Any] = {}
+        if cron_expr is not None:
+            payload["cron_expr"] = cron_expr
+        if enabled is not None:
+            payload["enabled"] = enabled
+        if params is not None:
+            payload["params"] = params
+        resp = await self._client.patch(
+            f"/scheduler/jobs/{job_id}", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def list_scheduler_jobs(self) -> list[dict[str, Any]]:
+        """GET /scheduler/jobs — все scheduler-job'ы (cron + interval)."""
+        resp = await self._client.get("/scheduler/jobs")
+        if resp.is_error:
+            try:
+                detail = resp.json().get("detail", "")
+            except ValueError:
+                detail = resp.text[:500]
+            raise CatalogServiceError(resp.status_code, detail or f"HTTP {resp.status_code}")
+        return resp.json()
+
     # ── Sources: detection runs ────────────────────────────────────────────
 
     async def start_source_run(

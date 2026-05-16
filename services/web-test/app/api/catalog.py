@@ -569,3 +569,150 @@ async def warmup_embeddings(
         )
     except CatalogServiceError as e:
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ─── /matching admin panel (UI WT-F11) ───────────────────────────────────────
+
+@router.get("/admin/runtime-flags/{key}")
+async def get_runtime_flag(
+    key: str,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Текущее состояние bool-флага (kill-switch ml_enabled и т.д.)."""
+    try:
+        return await client.get_runtime_flag(key)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.patch("/admin/runtime-flags/{key}")
+async def set_runtime_flag(
+    key: str,
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Обновить bool-флаг. Body: {"value": bool}. Без рестарта (TTL ≤ 5с)."""
+    value = body.get("value")
+    if not isinstance(value, bool):
+        raise HTTPException(status_code=400, detail="body.value должно быть bool")
+    try:
+        return await client.set_runtime_flag(key, value)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/queue/skipped")
+async def list_skipped_queue(
+    store_slug: list[str] = Query(default_factory=list),
+    reason: list[str] = Query(default_factory=list),
+    limit: int = Query(100, ge=1, le=500),
+    offset: int = Query(0, ge=0),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Список skipped match_queue с фильтрами и breakdown по store/reason."""
+    try:
+        return await client.list_skipped_queue(
+            store_slug=store_slug or None,
+            reason=reason or None,
+            limit=limit, offset=offset,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/queue/re-enqueue-skipped")
+async def re_enqueue_skipped(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Возвращает skipped → pending. Body: {offer_ids?, store_slug?, reason?}."""
+    try:
+        return await client.re_enqueue_skipped(
+            offer_ids=body.get("offer_ids"),
+            store_slug=body.get("store_slug"),
+            reason=body.get("reason"),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/{offer_id}/run-v2")
+async def run_v2_on_offer(
+    offer_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Точечный enqueue в очередь с priority=10. Воркер обработает следующим тиком."""
+    try:
+        return await client.run_v2_on_offer(offer_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ВАЖНО: `/matching/offers/search` декларируется ДО `/matching/offers/{offer_id}` —
+# иначе FastAPI попытается парсить строку "search" как int.
+@router.get("/matching/offers/search")
+async def search_offers(
+    q: str = Query(..., min_length=1),
+    limit: int = Query(10, ge=1, le=50),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Fuzzy lookup offers по подстроке title (для UI поиска)."""
+    try:
+        return await client.search_offers(q, limit=limit)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/offers/{offer_id}")
+async def lookup_offer(
+    offer_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Lookup одного offer с match-полями (для штучного матчинга)."""
+    try:
+        return await client.lookup_offer(offer_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ─── Scheduler proxy (для UI /matching → Контроль → match_worker) ────────────
+
+@router.get("/scheduler/jobs")
+async def list_scheduler_jobs(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> list[dict]:
+    """Все scheduler-job'ы (для UI карточки match_worker)."""
+    try:
+        return await client.list_scheduler_jobs()
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/scheduler/jobs/{job_id}/trigger")
+async def trigger_scheduler_job(
+    job_id: str,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Ручной trigger job'а. Работает для cron- и interval-job'ов (после фикса 2026-05-16)."""
+    try:
+        return await client.trigger_scheduler_job(job_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.patch("/scheduler/jobs/{job_id}")
+async def reschedule_job(
+    job_id: str,
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Hot-reload расписания. Body: {cron_expr?, enabled?, params?}."""
+    try:
+        return await client.reschedule_job(
+            job_id,
+            cron_expr=body.get("cron_expr"),
+            enabled=body.get("enabled"),
+            params=body.get("params"),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
