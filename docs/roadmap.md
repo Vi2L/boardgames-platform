@@ -42,9 +42,11 @@ PRS (parsers), INFRA (общее).
     группировка через `titleSimilarity` clustering + UnmatchedSection.
     Toggle group/flat в `useSearchStore`. Backend group-by-game endpoint
     — не блокирующая зависимость. Сделано (commit `a481da2`).
-  - [ ] **WT-F11-DRAWER** — `<GameGroupDrawer>` с табами Офферы/История/
-    Матчинг/Raw для grouped-режима. Сейчас drawer reuses `ProductDrawer`
-    (открывает min-offer группы) — UX-приемлемо, но не полный спек §05.
+  - [x] **WT-F11-DRAWER** — полный `<GameGroupDrawer>` с 4 табами
+    (Офферы/История/Матчинг/Raw), split-view через ui/Drawer, Cmd+↑/↓
+    навигация, frontend-fallback для Матчинга через fetchMatchCandidates.
+    Сделано (commit `55febcc`, devlog `WT-F11-DRAWER`). Backend var. A
+    (linked offers + unlink) ждёт `/search/grouped` endpoint.
   - [ ] **WT-DESIGN-SUITERUN** — `suiteRunToJobLike()` adapter +
     использование `<JobView>` в `components/testing/SuiteRunner`. Сейчас
     SuiteRunner с собственной inline-вёрсткой.
