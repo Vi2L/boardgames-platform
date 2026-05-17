@@ -224,6 +224,69 @@ def test_resolve_backend_default_is_curl_cffi(monkeypatch):
     assert _resolve_backend() == "curl-cffi"
 
 
+@pytest.mark.asyncio
+async def test_retry_429_uses_exponential_backoff(monkeypatch):
+    """При 429 парсер делает несколько retry с возрастающей задержкой,
+    а не один retry × фиксированные 2 сек. Это PRS-6."""
+    from parsers.stores import wildberries as wb_mod
+
+    parser = WildberriesParser()
+    parser.backend = "httpx"
+
+    call_count = 0
+    sleeps: list[float] = []
+
+    async def _fake_fetch_once(url, headers):
+        nonlocal call_count
+        call_count += 1
+        raise wb_mod._RateLimited()
+
+    async def _fake_sleep(secs):
+        sleeps.append(secs)
+
+    monkeypatch.setattr(parser, "_fetch_once", _fake_fetch_once)
+    monkeypatch.setattr(wb_mod.asyncio, "sleep", _fake_sleep)
+
+    with pytest.raises(RuntimeError, match="rate-limited после"):
+        await parser._fetch_json("http://x", {})
+
+    # 4 попытки = 3 retry (после 1-й, 2-й, 3-й 429)
+    assert call_count == wb_mod._WB_RETRY_MAX_ATTEMPTS
+    assert len(sleeps) == wb_mod._WB_RETRY_MAX_ATTEMPTS - 1
+    # Задержки растут экспоненциально: каждая ≥ предыдущей base * 2.
+    for i in range(1, len(sleeps)):
+        # base * 2**i ≤ delay ≤ base * 2**i + jitter
+        prev_max = wb_mod._WB_RETRY_BASE_SEC * (2 ** (i - 1)) + wb_mod._WB_RETRY_JITTER_SEC
+        assert sleeps[i] > prev_max, f"delay {sleeps[i]} не выросла относительно {sleeps[i-1]}"
+
+
+@pytest.mark.asyncio
+async def test_retry_429_recovers_after_one_failure(monkeypatch):
+    """Если 429 случился раз, а второй запрос успешен — возвращаем payload."""
+    from parsers.stores import wildberries as wb_mod
+
+    parser = WildberriesParser()
+    parser.backend = "httpx"
+
+    state = {"calls": 0}
+
+    async def _fake_fetch_once(url, headers):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise wb_mod._RateLimited()
+        return {"products": [{"id": 1, "name": "OK", "subjectId": 120, "salePriceU": 1000}]}
+
+    async def _fake_sleep(_secs):
+        pass
+
+    monkeypatch.setattr(parser, "_fetch_once", _fake_fetch_once)
+    monkeypatch.setattr(wb_mod.asyncio, "sleep", _fake_sleep)
+
+    result = await parser._fetch_json("http://x", {})
+    assert result["products"][0]["id"] == 1
+    assert state["calls"] == 2
+
+
 def test_resolve_backend_env_override(monkeypatch):
     monkeypatch.setenv("WB_BACKEND", "httpx")
     assert _resolve_backend() == "httpx"

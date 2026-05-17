@@ -29,6 +29,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import random
 import time
 from typing import Literal
 from urllib.parse import quote_plus, urlencode
@@ -49,6 +50,20 @@ _BOARDGAMES_SUBJECT_ID = 120
 # без preset-routing (v8+ редиректят через preset, что требует второго
 # запроса к catalog.wb.ru — а тот блокирует DC-IP сильнее).
 _DEFAULT_VERSION = "v5"
+
+# TLS-impersonation profile для curl-cffi. Default chrome131 (2026-05) —
+# Angie у WB чаще пропускает свежие JA3-отпечатки. Override через env
+# WB_IMPERSONATE на случай, если chrome131 выпадет из таблицы curl-cffi.
+_DEFAULT_IMPERSONATE = "chrome131"
+
+# Retry стратегия при HTTP 429 (rate-limited).
+# `delay = base * 2**attempt + random(0, jitter)` — экспонента с jitter,
+# чтобы N параллельных запросов не били в WB пачкой после одинакового
+# фиксированного sleep'а. Max delay в районе 12с — Angie дросселирует
+# обычно 5-15с, дольше ждать бессмысленно (юзер уже видит spinner).
+_WB_RETRY_MAX_ATTEMPTS = 4         # 1 первичный + 3 retry
+_WB_RETRY_BASE_SEC = 1.5
+_WB_RETRY_JITTER_SEC = 0.5
 
 # Базовые параметры запроса (общие для всех вызовов).
 # `dest=-1257786` — геокод доставки (МСК); это обязательный параметр, без
@@ -72,12 +87,14 @@ _HEADERS_BASE = {
     "Accept": "*/*",
     "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8",
     "Origin": _BASE,
+    # UA и Sec-Ch-Ua синхронны с _DEFAULT_IMPERSONATE — если JA3 говорит
+    # «Chrome 131», а UA «Chrome 124», Angie ловит расхождение и режет.
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
+        "Chrome/131.0.0.0 Safari/537.36"
     ),
-    "Sec-Ch-Ua": '"Chromium";v="124", "Google Chrome";v="124", "Not-A.Brand";v="99"',
+    "Sec-Ch-Ua": '"Google Chrome";v="131", "Chromium";v="131", "Not_A Brand";v="24"',
     "Sec-Ch-Ua-Mobile": "?0",
     "Sec-Ch-Ua-Platform": '"macOS"',
     "Sec-Fetch-Dest": "empty",
@@ -148,22 +165,35 @@ class WildberriesParser(StoreParser):
         return f"{_SEARCH_HOST}/exactmatch/ru/common/{self.api_version}/search?" + urlencode(params)
 
     async def _fetch_json(self, url: str, headers: dict) -> dict:
-        """Дёргает search-API. При 429 один раз ретраит через 2 сек.
+        """Дёргает search-API. При 429 — exp-backoff с jitter (до 4 попыток).
 
         Angie у WB периодически возвращает 429 на холодные TLS-handshake'и
-        из DC-IP. Один retry обычно достаточен — WB не банит permanent'но,
-        только дросселирует burst. Если и retry не помог — поднимаем выше
-        как RuntimeError, его поймает PriceService и запишет в parser_log.
+        из DC-IP. Раньше делали 1 retry × фиксированные 2 сек — пользователь
+        часто видел `HTTP 429` даже когда WB готов был ответить через 5с.
+        Теперь exponential backoff: 1.5/3.0/6.0с + jitter [0, 0.5]. Это даёт
+        Angie время сбросить burst-counter, и параллельные запросы не
+        синхронизируются (jitter рассеивает пачку retry'ев).
         """
-        for attempt in range(2):
+        last_exc: _RateLimited | None = None
+        for attempt in range(_WB_RETRY_MAX_ATTEMPTS):
             try:
                 return await self._fetch_once(url, headers)
-            except _RateLimited:
-                if attempt == 1:
-                    raise RuntimeError("HTTP 429 (rate-limited даже после retry)")
-                logger.info("[WB] HTTP 429 — retry через 2 сек")
-                await asyncio.sleep(2)
-        raise RuntimeError("unreachable")  # для mypy
+            except _RateLimited as exc:
+                last_exc = exc
+                if attempt == _WB_RETRY_MAX_ATTEMPTS - 1:
+                    break
+                delay = _WB_RETRY_BASE_SEC * (2 ** attempt) + random.uniform(
+                    0, _WB_RETRY_JITTER_SEC,
+                )
+                logger.info(
+                    "[WB] HTTP 429 (attempt %d/%d) — retry через %.2fс",
+                    attempt + 1, _WB_RETRY_MAX_ATTEMPTS, delay,
+                )
+                await asyncio.sleep(delay)
+        # Все попытки исчерпаны.
+        raise RuntimeError(
+            f"HTTP 429 (rate-limited после {_WB_RETRY_MAX_ATTEMPTS} попыток)"
+        ) from last_exc
 
     async def _fetch_once(self, url: str, headers: dict) -> dict:
         if self.backend == "httpx":
@@ -177,10 +207,14 @@ class WildberriesParser(StoreParser):
                     raise RuntimeError(f"HTTP {resp.status_code}")
                 return resp.json()
 
-        # curl-cffi: AsyncSession с TLS-impersonation Chrome 124.
+        # curl-cffi: AsyncSession с TLS-impersonation.
+        # Default chrome131 (свежий профиль 2026-05 — JA3 ближе к реальному
+        # десктоп-Chrome, Angie у WB пропускает чаще). Override через
+        # `WB_IMPERSONATE` env на случай нестабильности нового профиля.
         from curl_cffi.requests import AsyncSession
 
-        async with AsyncSession(impersonate="chrome124") as s:
+        impersonate = os.getenv("WB_IMPERSONATE") or _DEFAULT_IMPERSONATE
+        async with AsyncSession(impersonate=impersonate) as s:
             resp = await s.get(url, headers=headers, timeout=20)
             if resp.status_code == 429:
                 raise _RateLimited()
