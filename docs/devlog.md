@@ -8,6 +8,62 @@
 
 ---
 
+## 2026-05-17 · [WT-F11-DRAWER] GameGroupDrawer с табами Офферы/История/Матчинг/Raw
+
+**Что сделано:** Полный split-view drawer для канонической группы из
+master-таблицы (`/` страница, group mode). Заменяет proxy-решение из
+PR5 (клик по группе открывал `ProductDrawer` с min-offer'ом).
+
+Ветка `feat/wt-f11-drawer`, коммит `55febcc`. Реализует
+`pages/05-search.md` § Drawer полностью.
+
+**Архитектура:** Один файл `components/search/GameGroupDrawer.tsx`
+(~480 строк) — hybrid (как `BggImportPanel`/`CatalogPage`). Inner-функции
+на каждый таб + extracted hook `useGroupHistory()` для нетривиальной
+агрегации `fetchHistory(id)` параллельно по offers через `useQueries`.
+
+**4 таба:**
+- **Офферы** — Hero (cover + price range + stores in-stock) + sorted offers
+  list (in-stock first, asc по цене), min-price emerald, sale-tag +
+  line-through original_price если on_sale.
+- **История цен** — Sparkline 90д для main-серии (min без Avito) +
+  ОТДЕЛЬНЫЙ sparkline для Avito (б/у-рынок, clarify Q2). Last 10 changes
+  (date / store / from→to / Δ%) по всем offers группы.
+- **Матчинг** — `fetchMatchCandidates(canonicalTitle, 5)` через catalog API
+  → best-effort кандидаты с Badge (auto/manual/pending по thresholds).
+  Frontend-fallback: нет `game_id` в ProductOut, поэтому не «linked
+  offers», а «вероятные кандидаты» с link на /catalog (clarify Q1 var. B).
+- **Raw** — pretty-print `ProductGroup + offers[]` JSON.
+
+**UX:**
+- Split-view через `ui/Drawer` (Radix Dialog modal=false) — таблица за
+  drawer'ом остаётся кликабельной.
+- Cmd+↑/↓ — prev/next group (clarify Q5).
+- Esc — close (Radix).
+- Footer: «Открыть карточку игры» → `/catalog?tab=games&q={title}`
+  (clarify Q3 — нет game_id для direct id deep-link).
+- Один drawer на screen (clarify Q6) — invariant в SearchPage:
+  `selectedGroup` ИЛИ `selectedProduct`, не оба одновременно.
+
+**Как пользоваться:**
+1. `/` → введи запрос (group-mode по умолчанию).
+2. Клик на строку группы → GameGroupDrawer с табом «Офферы».
+3. Cmd+↑/↓ — пройдись по соседним группам без закрытия drawer'а.
+4. Таб «История цен» — для группы со ≥2 магазинами + накопленной историей.
+5. Таб «Матчинг» — top-5 catalog candidates для ручной привязки в /matching.
+
+**Затронутые файлы:**
+- `services/web-test/frontend/src/components/search/GameGroupDrawer.tsx` — новый (~480 строк).
+- `services/web-test/frontend/src/pages/SearchPage.tsx` — state `selectedGroup`,
+  invariant «один drawer на screen», `handleSelectProduct/Group` helpers.
+
+**Не сделано (отложено):**
+- Backend `/search/grouped` с `game_id` — после этого таб «Матчинг»
+  заменится на «linked offers + кнопка отвязать» (handoff var. A).
+- URL-state для активного tab (`?tab=history`) — пока локальный.
+
+---
+
 ## 2026-05-17 · [WT-DESIGN-PR4/PR5] Job UI shared + Search WT-F11 grouping
 
 **Что сделано:** Финальные коммиты ветки `feat/wt-redesign-rollout` —

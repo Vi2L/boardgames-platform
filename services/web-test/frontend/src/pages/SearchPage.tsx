@@ -20,6 +20,7 @@ import { ResultsTable } from '../components/search/ResultsTable'
 import { ResultsTableGrouped } from '../components/search/ResultsTableGrouped'
 import { UnmatchedSection } from '../components/search/UnmatchedSection'
 import { ProductDrawer } from '../components/search/ProductDrawer'
+import { GameGroupDrawer } from '../components/search/GameGroupDrawer'
 import type { PriceDeltaOut, PriceStatsOut, ProductOut } from '../types/api'
 import { Tabs, Button, Tag, Badge } from '../components/ui'
 import { groupProducts, type ProductGroup } from '../lib/searchGrouping'
@@ -45,11 +46,10 @@ export function SearchPage() {
     startSearch, stopSearch, handleSSEEvent, isSearching,
   } = useSearchStore()
 
-  // Group-mode: выбранная группа для drawer'а (пока показываем первый
-  // оффер группы через существующий ProductDrawer; полноценный
-  // `<GameGroupDrawer>` с табами Офферы/История/Матчинг/Raw — отдельная
-  // задача, см. roadmap WT-F11-DRAWER).
-  const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null)
+  // Group-mode: выбранная группа для GameGroupDrawer. Invariant — один из
+  // двух (selectedGroup / selectedProduct) всегда null (handoff §05 Q6
+  // «один drawer на screen»).
+  const [selectedGroup, setSelectedGroup] = useState<ProductGroup | null>(null)
 
   // ── URL sync (deep-link) ──────────────────────────────────────────────
   const [searchParams, setSearchParams] = useSearchParams()
@@ -142,14 +142,17 @@ export function SearchPage() {
     [groupMode, visibleResults],
   )
 
+  // Выбор группы → GameGroupDrawer; закрываем product-drawer если был.
+  // Invariant из Q6: один drawer на screen.
   const handleSelectGroup = (g: ProductGroup) => {
-    setSelectedGroupKey(g.canonicalTitle)
-    // Минимальный UX: открываем drawer с min-price offer'ом группы.
-    const minOffer = g.offers.reduce((best, o) =>
-      best == null || o.price_rub < best.price_rub ? o : best,
-      null as ProductOut | null,
-    )
-    if (minOffer) setSelectedProduct(minOffer)
+    setSelectedGroup(g)
+    setSelectedProduct(null)
+  }
+
+  // Orphan / похожий товар → ProductDrawer; группу закрываем.
+  const handleSelectProduct = (p: ProductOut | null) => {
+    setSelectedProduct(p)
+    if (p) setSelectedGroup(null)
   }
 
   const buildPayload = () => ({
@@ -457,12 +460,12 @@ export function SearchPage() {
                   <>
                     <ResultsTableGrouped
                       data={grouped}
-                      selectedId={selectedGroupKey}
+                      selectedId={selectedGroup?.canonicalTitle ?? null}
                       onSelectGroup={handleSelectGroup}
                     />
                     <UnmatchedSection
                       orphans={grouped.orphans}
-                      onSelectOrphan={setSelectedProduct}
+                      onSelectOrphan={handleSelectProduct}
                     />
                   </>
                 ) : (
@@ -472,7 +475,7 @@ export function SearchPage() {
                     adjusted={adjusted}
                     priceStats={priceStats}
                     showOutOfStock={showOutOfStock}
-                    onSelect={setSelectedProduct}
+                    onSelect={handleSelectProduct}
                   />
                 )}
               </Tabs.Content>
@@ -545,12 +548,23 @@ export function SearchPage() {
         </div>
       )}
 
-      <ProductDrawer
-        product={selectedProduct}
-        pool={visibleResults}
-        onClose={() => setSelectedProduct(null)}
-        onSelect={setSelectedProduct}
-      />
+      {/* Один drawer на screen — invariant из Q6.
+          Group-drawer имеет приоритет (визуально шире, табы внутри). */}
+      {selectedGroup ? (
+        <GameGroupDrawer
+          group={selectedGroup}
+          groups={grouped?.groups ?? []}
+          onClose={() => setSelectedGroup(null)}
+          onSelectGroup={setSelectedGroup}
+        />
+      ) : (
+        <ProductDrawer
+          product={selectedProduct}
+          pool={visibleResults}
+          onClose={() => setSelectedProduct(null)}
+          onSelect={handleSelectProduct}
+        />
+      )}
     </div>
   )
 }
