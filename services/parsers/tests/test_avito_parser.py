@@ -14,9 +14,11 @@ import pytest
 
 from parsers.stores.avito import (
     AvitoParser,
+    _BOARDGAMES_MICRO_IDS,
+    _build_products,
+    _extract_items,
     _parse_price_kopecks,
     _pick_image,
-    _extract_items,
 )
 
 
@@ -33,6 +35,8 @@ class _FakeQratorClient:
 
 
 # Минимальный JSON, имитирующий ответ `/web/1/js/items` — взято из probe.
+# Все items имеют microCategoryId из whitelist'а «настольные игры»
+# (2026-05-18 strict-фильтр в _build_products).
 _PAYLOAD = {
     "count": 2,
     "catalog": {
@@ -49,6 +53,7 @@ _PAYLOAD = {
                 }],
                 "location": {"id": 637640, "name": "Москва, Площадь революции"},
                 "category": {"id": 39, "name": "Спорт и отдых", "slug": "sport_i_otdyh"},
+                "microCategoryId": 2301999,
             },
             {
                 "id": 8049321629,
@@ -59,6 +64,7 @@ _PAYLOAD = {
                 "priceDetailed": {"string": "500 ₽", "value": 0},
                 "images": [],
                 "location": {"name": "Великий Новгород"},
+                "microCategoryId": 2301997,
             },
         ],
     },
@@ -81,6 +87,7 @@ async def test_avito_parser_maps_json_to_products():
     assert p1.image_url and "678" in p1.image_url  # выбрана картинка с макс. шириной
     assert p1.raw["location"] == "Москва, Площадь революции"
     assert p1.raw["category"] == "Спорт и отдых"
+    assert p1.raw["micro_category_id"] == 2301999
     assert p1.raw["in_stock"] is True
 
     # Второй item: value=0 → цена парсится из string «500 ₽».
@@ -136,6 +143,49 @@ def test_pick_image_chooses_largest():
 def test_pick_image_empty():
     assert _pick_image({"images": []}) is None
     assert _pick_image({}) is None
+
+
+def test_build_products_drops_non_boardgame_microcategory():
+    """Strict category filter: items с microCategoryId вне whitelist'а
+    отбрасываются. Книги, велосипеды, посуда — не наша категория."""
+    items = [
+        # boardgame — должна остаться
+        {
+            "id": 111, "title": "Каркассон", "urlPath": "/moskva/sport/karkasson_111",
+            "priceDetailed": {"value": 1000}, "microCategoryId": 2301999,
+        },
+        # книга — micro не в whitelist'е, отбросить
+        {
+            "id": 222, "title": "Книга Каркассон в романе",
+            "urlPath": "/moskva/knigi/kniga_222",
+            "priceDetailed": {"value": 300}, "microCategoryId": 2301188,
+        },
+        # пазл — тоже в категории sport_i_otdyh, но НЕ настолка
+        {
+            "id": 333, "title": "Пазл 1000 шт", "urlPath": "/moskva/sport/pazl_333",
+            "priceDetailed": {"value": 500}, "microCategoryId": 2301993,
+        },
+    ]
+    products = _build_products(items, limit=10)
+    assert [p.external_id for p in products] == ["111"]
+
+
+def test_build_products_skips_item_without_micro_category():
+    """Если у item нет microCategoryId — strict-фильтр отбрасывает.
+    Лучше пропустить редкий случай, чем пропустить мусор."""
+    items = [{
+        "id": 555, "title": "Без категории",
+        "urlPath": "/x/y_555", "priceDetailed": {"value": 100},
+        # microCategoryId отсутствует
+    }]
+    assert _build_products(items, limit=5) == []
+
+
+def test_boardgames_micro_whitelist_is_frozenset():
+    """Sanity: whitelist должен быть неизменяемым, чтобы случайно
+    не мутировать из тестов или другого кода."""
+    assert isinstance(_BOARDGAMES_MICRO_IDS, frozenset)
+    assert 2301999 in _BOARDGAMES_MICRO_IDS
 
 
 def test_extract_items_supports_both_schemas():

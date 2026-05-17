@@ -22,6 +22,12 @@ class IngestOfferIn(BaseModel):
     появились в миграции catalog 0006. Все они опциональны: старый клиент
     может не отправлять их — поведение остаётся прежним (catalog умеет
     извлекать их из `extra` как fallback).
+
+    Поле `category` (2026-05-18) — категорийный whitelist парсера:
+    парсер заявляет, к какой широкой категории относится товар.
+    Catalog отсекает офферы вне whitelist'а ещё до матчинга. `None`
+    оставлен для обратной совместимости со старыми клиентами —
+    в этом случае catalog доверяет источнику.
     """
 
     external_id: str = Field(min_length=1)
@@ -33,6 +39,10 @@ class IngestOfferIn(BaseModel):
     in_stock: bool | None = None
     original_price: int | None = None  # копейки до скидки
     is_preorder: bool | None = None
+    # "boardgames" | "expansion" | "accessory" | None
+    # Конкретный enum не делаем — caller'ы могут эволюционировать раньше,
+    # whitelist валидируется на стороне catalog'а.
+    category: str | None = None
     extra: dict[str, Any] | None = None
 
 

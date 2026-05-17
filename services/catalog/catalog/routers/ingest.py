@@ -42,6 +42,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/ingest", tags=["ingest"])
 
+# Категории, которые принимаем в catalog (whitelist defence-in-depth).
+# Парсеры обязаны заявлять `category` начиная с 2026-05-18 — но `None`
+# принимается для обратной совместимости (старый publisher без поля).
+# Если payload приходит с категорией вне whitelist'а — оффер дропается,
+# в БД не пишется, матчинг не запускается. Это защита от ситуации
+# «парсер сломался и начал слать книги».
+_ALLOWED_CATEGORIES: frozenset[str | None] = frozenset({
+    "boardgames",
+    "expansion",
+    "accessory",
+    None,  # legacy clients
+})
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -84,8 +97,24 @@ async def ingest_offers(
     items: list[IngestResultItem] = []
     auto_count = 0
     unmatched_count = 0
+    skipped_category_count = 0
 
     for product in payload.products:
+        # Категорийный whitelist — отсекаем «не настолки» ДО любого
+        # обращения к БД и матчеру. Парсеры маркетплейсов (avito/ozon/
+        # wb/onlinetrade) фильтруют на источнике; этот слой ловит баги
+        # парсеров и старые DLQ-payload'ы. См. _ALLOWED_CATEGORIES.
+        if product.category not in _ALLOWED_CATEGORIES:
+            skipped_category_count += 1
+            logger.info(
+                "ingest skip non-board category: store=%s external_id=%s category=%r title=%r",
+                payload.store_slug,
+                product.external_id,
+                product.category,
+                product.title[:60],
+            )
+            continue
+
         # Нормализованные поля: берём из явного поля payload, иначе пытаемся
         # вытащить из extra (для обратной совместимости со старыми клиентами,
         # которые ещё не обновлены под новый контракт). Парсеры magasинов
@@ -306,5 +335,6 @@ async def ingest_offers(
         accepted=len(items),
         auto_matched=auto_count,
         unmatched=unmatched_count,
+        skipped_category=skipped_category_count,
         items=items,
     )

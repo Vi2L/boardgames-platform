@@ -29,6 +29,16 @@ _SYSTEM_PROMPT = (
     "какой кандидат соответствует товару, или укажи что совпадения нет.\n"
     "Также классифицируй тип товара: 'base' (базовая игра), 'expansion' "
     "(дополнение к базе), 'accessory' (аксессуары: органайзер, чехлы, токены).\n"
+    "\n"
+    "ВАЖНО — отказ для не-настолок. Если товар очевидно НЕ настольная игра "
+    "и не её компонент (книга, художественный роман, видеоигра, одежда, "
+    "посуда, канцелярия, постер, коллекционная фигурка БЕЗ игровой механики, "
+    "детская мягкая игрушка, велосипед, бытовая техника, продукты) — верни "
+    '{\"game_id\": null, \"kind\": null, \"confidence\": 0.99, '
+    '\"reason\": \"not_a_boardgame: <короткое объяснение>\"}. '
+    "Высокая confidence сигнализирует движку, что это финальный reject, "
+    "а не «не уверен» — оффер сразу попадёт в rejected, а не в manual.\n"
+    "\n"
     "Отвечай ТОЛЬКО валидным JSON, без markdown, без пояснений вне JSON."
 )
 
@@ -194,9 +204,25 @@ async def tier_3_llm(
         )
 
     if parsed["game_id"] is None:
+        llm_reason = str(parsed.get("reason", ""))
+        # Финальный отказ от LLM: товар не является настольной игрой.
+        # System-prompt просит LLM начинать `reason` с `not_a_boardgame:`
+        # и confidence ≥ некоего порога — это сигнал «оффер сразу в
+        # rejected, не дёргать оператора в manual queue».
+        is_explicit_reject = (
+            llm_reason.lower().startswith("not_a_boardgame")
+            and parsed["confidence"] >= confidence_threshold
+        )
+        if is_explicit_reject:
+            return MatchResult(
+                game_id=None, tier=3, action=MatchAction.REJECT,
+                reason=f"llm_reject: {llm_reason}"[:200],
+                candidates=candidates,
+                predicted_kind=None,
+            )
         return MatchResult(
             game_id=None, tier=3, action=None,
-            reason=f"llm_no_match: {parsed.get('reason', '')}"[:200],
+            reason=f"llm_no_match: {llm_reason}"[:200],
             candidates=candidates,
             predicted_kind=parsed.get("kind"),
         )

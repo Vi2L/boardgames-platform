@@ -4,7 +4,7 @@
 Цель — поймать регрессии в:
   - _extract_products (root.products vs data.products)
   - _parse_price_kopecks (sizes[].price vs salePriceU)
-  - soft twin-search (subjectId=120 → fallback)
+  - strict-фильтр subjectId=120 (без fallback, 2026-05-18)
   - resolve backend через env
 """
 from __future__ import annotations
@@ -99,16 +99,29 @@ async def test_returns_only_boardgames_when_enough():
 
 
 @pytest.mark.asyncio
-async def test_soft_twin_search_falls_back_to_all_when_not_enough_boardgames():
-    """Только 4 настолки + 2 мусора, limit=5 → добираем мусором, но настолки первыми."""
+async def test_strict_subject_filter_no_fallback():
+    """Strict-фильтр (2026-05-18): при недоборе limit'а не добираем мусором,
+    возвращаем сколько есть. Раньше — soft twin-search добивал."""
     parser = _FakeWildberriesParser(_PAYLOAD)
     products = await parser.search("Каркассон", limit=5)
 
-    assert len(products) == 5
-    # 4 настолки — в начале (в исходном порядке выдачи)
-    assert [p.raw["subject_id"] for p in products[:4]] == [120, 120, 120, 120]
-    # пятый — fallback (subj != 120)
-    assert products[4].raw["subject_id"] != 120
+    # 4 настолки в payload — ровно 4 в выдаче (мусор НЕ попал, fallback убран)
+    assert len(products) == 4
+    assert all(p.raw["subject_id"] == 120 for p in products)
+
+
+@pytest.mark.asyncio
+async def test_returns_empty_when_no_boardgames_in_response():
+    """Если в выдаче WB вообще нет subjectId=120 — возвращаем пусто."""
+    payload = {
+        "products": [
+            {"id": 1, "name": "Кроссовки", "subjectId": 105, "salePriceU": 50000},
+            {"id": 2, "name": "Постер", "subjectId": 4234, "salePriceU": 30000},
+        ],
+    }
+    parser = _FakeWildberriesParser(payload)
+    products = await parser.search("Каркассон", limit=10)
+    assert products == []
 
 
 @pytest.mark.asyncio

@@ -135,6 +135,13 @@ class CatalogPublisher:
             in_stock=in_stock,
             original_price=original_price,
             is_preorder=None,
+            # Все наши парсеры (HobbyGames/Gaga/LavkaIgr/CrowdGames —
+            # специализированные магазины настолок; WB/Avito/Ozon/
+            # OnlineTrade — отфильтрованы по категории на источнике)
+            # выдают исключительно настольные игры. Помечаем явно, чтобы
+            # catalog мог отбросить случайно проскользнувший мусор.
+            # См. ingest whitelist в services/catalog/catalog/routers/ingest.py.
+            category="boardgames",
             extra=raw,
         )
 

@@ -65,6 +65,9 @@ async def test_publishes_batch_in_correct_format():
     assert p["title"] == "Каркассон"
     assert p["price"] == 169500
     assert p["extra"] == {"foo": "bar"}
+    # category="boardgames" — все парсеры теперь возвращают только настолки,
+    # publisher маркирует это для catalog ingest whitelist'а.
+    assert p["category"] == "boardgames"
 
     await pub.close()
 

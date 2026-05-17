@@ -276,6 +276,64 @@ async def test_ingest_writes_normalized_offer_fields(client: AsyncClient):
     assert items["2"]["original_price"] == 270000
 
 
+async def test_ingest_skips_non_boardgame_category(client: AsyncClient):
+    """Defence-in-depth (2026-05-18): если парсер случайно прислал товар с
+    категорией не из whitelist'а — catalog должен дропнуть его до матчинга,
+    не создавая offer в БД и не запуская pg_trgm.
+    """
+    await _seed_carcassonne(client)
+    r = await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "avito",
+            "products": [
+                # Должен пройти — категория из whitelist'а.
+                {
+                    "external_id": "ok-1",
+                    "title": "Каркассон новый запечатанный",
+                    "url": "https://avito/ok-1",
+                    "category": "boardgames",
+                },
+                # Должен быть отброшен — книга, не настольная игра.
+                {
+                    "external_id": "skip-1",
+                    "title": "Каркассон. Жан-Жак Руссо. Биография",
+                    "url": "https://avito/skip-1",
+                    "category": "books",
+                },
+            ],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["accepted"] == 1            # только ok-1
+    assert body["skipped_category"] == 1    # книга дропнута
+    assert len(body["items"]) == 1
+    assert body["items"][0]["external_id"] == "ok-1"
+
+
+async def test_ingest_accepts_legacy_clients_without_category(client: AsyncClient):
+    """Обратная совместимость: payload без поля `category` (старый publisher)
+    принимается так же, как раньше — None в whitelist'е."""
+    await _seed_carcassonne(client)
+    r = await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "hobbygames",
+            "products": [{
+                "external_id": "legacy-1",
+                "title": "Каркассон",
+                "url": "https://hobbygames.ru/x",
+                "price": 169500,
+            }],
+        },
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["accepted"] == 1
+    assert body["skipped_category"] == 0
+
+
 async def test_reject_offer(client: AsyncClient):
     await client.post(
         "/ingest/offers",

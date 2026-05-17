@@ -10,11 +10,26 @@ avito.ru — CSR-приложение: первая HTML-страница не �
 `avito_qrator.AvitoQratorClient`. Этот файл — только маппинг JSON-ответа
 в `ParsedProduct` и метрики.
 
+**Фильтр по категории (2026-05-18).** Поиск `/web/1/js/items?q=...` —
+глобальный по всему Авито: легко прилетает книга, велосипед, одежда,
+если они содержат query-слова. Параметр `categoryId` в URL endpoint
+игнорирует (probe 2026-05-18). Поэтому фильтруем **локально по
+`microCategoryId`** — Авито в каждом item возвращает microcategory из
+дерева Хобби/Спорт. Whitelist `_BOARDGAMES_MICRO_IDS` подтверждён
+probe'ом (`bin/probe_avito_microcategory.py`):
+
+  2301999 — основная микрокатегория «Настольные игры» (карkасон, монополия)
+  2301997, 2301995 — родственные subset'ы (Игры для дома и др.)
+
+Если ни один item не прошёл фильтр — возвращаем **пустой список**
+(без fallback'а к общей выдаче): задача «лучше пусто, чем мусор».
+
 Поля `ParsedProduct.raw`:
-  location   — город/регион продавца (из `location.name`)
-  posted_at  — нет в JSON, отсутствует
-  in_stock   — True (факт наличия объявления)
-  category   — `category.name` («Спорт и отдых», «Хобби и отдых», …)
+  location           — город/регион продавца (из `location.name`)
+  posted_at          — нет в JSON, отсутствует
+  in_stock           — True (факт наличия объявления)
+  category           — `category.name` (родительская: «Спорт и отдых» и т.п.)
+  micro_category_id  — микрокатегория для аудита/диагностики
 """
 from __future__ import annotations
 
@@ -29,6 +44,11 @@ from .avito_qrator import AvitoQratorClient, AvitoQratorError
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://www.avito.ru"
+
+# Whitelist микрокатегорий «настольные игры» (подмножество category.id=39
+# «Спорт и отдых»). Подтверждено probe'ом bin/probe_avito_microcategory.py.
+# Если Avito введёт новые micro-id для настолок — добавить сюда.
+_BOARDGAMES_MICRO_IDS: frozenset[int] = frozenset({2301995, 2301997, 2301999})
 
 # Пытаемся вытащить число из строки цены вида "1 490 ₽".
 #   (NBSP) и   (NNBSP) avito вставляет как разделитель тысяч.
@@ -144,6 +164,13 @@ def _pick_image(item: dict) -> str | None:
 
 
 def _build_products(items: list[dict], limit: int) -> list[ParsedProduct]:
+    """Сборка списка ParsedProduct из items JSON-ответа.
+
+    Strict-фильтр по `microCategoryId`: оставляем только те объявления,
+    которые лежат в whitelist'е настольных игр. Книги, велосипеды, посуда —
+    отсекаются на этапе сборки, чтобы не попали ни в /search, ни в catalog
+    через publisher.
+    """
     products: list[ParsedProduct] = []
     seen: set[str] = set()
     for it in items:
@@ -151,6 +178,11 @@ def _build_products(items: list[dict], limit: int) -> list[ParsedProduct]:
             break
         if not isinstance(it, dict):
             continue
+        # Категорийный фильтр — самый дешёвый, делаем его первым.
+        micro_id = it.get("microCategoryId")
+        if not isinstance(micro_id, int) or micro_id not in _BOARDGAMES_MICRO_IDS:
+            continue
+
         item_id = str(it.get("id") or "")
         if not item_id or item_id in seen:
             continue
@@ -169,7 +201,7 @@ def _build_products(items: list[dict], limit: int) -> list[ParsedProduct]:
         image_url = _pick_image(it)
         description = (it.get("description") or "").strip() or None
 
-        raw: dict = {"in_stock": True}
+        raw: dict = {"in_stock": True, "micro_category_id": micro_id}
         loc = it.get("location")
         if isinstance(loc, dict) and loc.get("name"):
             raw["location"] = loc["name"]

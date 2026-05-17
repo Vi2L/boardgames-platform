@@ -231,19 +231,26 @@ def _parse_price_kopecks(item: dict) -> int:
 
 
 def _build_products(items: list[dict], *, limit: int) -> list[ParsedProduct]:
-    """Soft twin-search: сначала с фильтром subjectId=120, при недоборе — все.
+    """Strict-фильтр: оставляем ТОЛЬКО товары с `subjectId=120` (Настольные игры).
 
-    Идея: WB сам ранжирует релевантное выше, и при запросе «Каркассон» все
-    100 первых items приходят с subjectId=120. Но при общих запросах
-    (например «дочка играет») верх выдачи — детская одежда. Локальный
-    фильтр спасает в обоих случаях без второго HTTP-запроса.
+    Раньше работал «soft twin-search»: при недоборе по subjectId=120 добивали
+    общей выдачей. Но это запускало мусор (детскую одежду, посуду) в матчинг
+    catalog'а — LLM проставлял auto-match на похожие заголовки. Согласно
+    задаче от 2026-05-18 фильтр сделан строгим: лучше вернуть пусто, чем
+    запутать matching.
+
+    WB сам ранжирует релевантное выше, поэтому top-100 общей выдачи на
+    запрос «Каркассон» = почти всё subjectId=120. На общих запросах
+    («дочка играет», «подарок мужу») вернётся 0 — это корректно для
+    источника настолок.
     """
-    boardgames: list[ParsedProduct] = []
-    fallback: list[ParsedProduct] = []
+    products: list[ParsedProduct] = []
     seen: set[str] = set()
 
     for raw in items:
         if not isinstance(raw, dict):
+            continue
+        if raw.get("subjectId") != _BOARDGAMES_SUBJECT_ID:
             continue
         item_id = str(raw.get("id") or "")
         if not item_id or item_id in seen:
@@ -256,7 +263,7 @@ def _build_products(items: list[dict], *, limit: int) -> list[ParsedProduct]:
             continue
 
         seen.add(item_id)
-        product = ParsedProduct(
+        products.append(ParsedProduct(
             store_slug="wildberries",
             external_id=item_id,
             title=title,
@@ -264,17 +271,11 @@ def _build_products(items: list[dict], *, limit: int) -> list[ParsedProduct]:
             url=f"{_BASE}/catalog/{item_id}/detail.aspx",
             image_url=None,  # умышленно — пользователь не запросил, экономим bandwidth
             raw=_build_raw(raw),
-        )
-        if raw.get("subjectId") == _BOARDGAMES_SUBJECT_ID:
-            boardgames.append(product)
-        else:
-            fallback.append(product)
+        ))
+        if len(products) >= limit:
+            break
 
-    if len(boardgames) >= limit:
-        return boardgames[:limit]
-    # Добиваем результат до limit товарами из других категорий — порядок
-    # сохраняется, board-games идут первыми.
-    return (boardgames + fallback)[:limit]
+    return products
 
 
 def _build_raw(item: dict) -> dict:

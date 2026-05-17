@@ -29,9 +29,13 @@ Probe-эксперимент 2026-05-16 показал:
    URL вида ``/<category>/.../<numeric-id>.html``, цена в рублях
    (``₽`` или «руб.»), title — длинный кириллический text-node.
 
-**Стратегия search-only**, без enrich. URL поиска:
-``https://www.onlinetrade.ru/search.html?search=<query>`` — сквозной
-поиск по сайту, без категорийной фильтрации (как WB).
+**Стратегия search-only**, без enrich. URL поиска (2026-05-18):
+``https://www.onlinetrade.ru/catalogue/board_games/?search=<query>`` —
+поиск **внутри раздела «Настольные игры»**, чтобы не приходили книги/
+электроника/посуда. Раньше использовался глобальный
+``/search.html?search=`` — он давал мусор в catalog/matching.
+Если onlinetrade сменит URL раздела, проверить probe'ом
+через browser-service.
 
 **Важно для будущей сессии:** на момент написания (2026-05-16) browser-service
 был временно сломан (Camoufox ``new_context()`` в ARM64 docker —
@@ -94,7 +98,14 @@ class OnlineTradeParser(StoreParser):
                 "Запусти `docker compose --profile browser up -d browser`."
             )
 
-        url = f"{_BASE}/search.html?search={quote_plus(query)}"
+        # Поиск внутри раздела «Настольные игры», чтобы не приходили
+        # книги/электроника/посуда (как у других маркетплейсов). Если
+        # OnlineTrade сменит URL раздела — проверить probe'ом через
+        # browser-service на `/catalogue/board_games/`.
+        url = (
+            f"{_BASE}/catalogue/board_games/"
+            f"?search={quote_plus(query)}"
+        )
 
         t0 = time.monotonic()
         try:

@@ -30,9 +30,17 @@ Probe-эксперимент 2026-05-15 показал:
 ``description``/``players`` — отдельный proxy через browser-service на
 ``/product/<slug>/``.
 
-**Soft twin-search не используется**: Ozon делает category prediction сам
-(query «Каркассон» → редирект на категорию «Настольные и карточные игры»),
-дополнительный фильтр не нужен.
+**Фильтр по категории (2026-05-18)**. Раньше использовался `/search/?text=`
+с расчётом на Ozon category-prediction — но он срабатывает только для
+«узких» query («Каркассон»). На общих query («книга», «подарок») Ozon
+возвращает разнородный мусор (probe 2026-05-18 на «книга» отдал 5/5 книг).
+Этот мусор шёл в `catalog`, LLM-арбитр иногда матчил по схожести с
+названиями игр. Чтобы исключить это, поиск идёт **внутри категории
+«Настольные и карточные игры» (id=13506)**:
+
+    https://www.ozon.ru/category/nastolnye-i-kartochnye-igry-13506/?text=<q>
+
+Если query не имеет настолок — Ozon вернёт пустую выдачу. Это корректно.
 """
 from __future__ import annotations
 
@@ -50,6 +58,9 @@ logger = logging.getLogger(__name__)
 
 _BASE = "https://www.ozon.ru"
 _PROFILE_ID = "ozon"
+# Slug+id категории «Настольные и карточные игры». Сам Ozon формирует URL вида
+# `/category/<slug>-<id>/?text=...` — стабильный паттерн уже годы.
+_BOARDGAMES_CATEGORY_PATH = "category/nastolnye-i-kartochnye-igry-13506"
 
 # Селектор появления реального контента после прохождения challenge.
 # `tileGridDesktop` — стандартный widget грид-карточек на /search и /category страницах.
@@ -83,7 +94,10 @@ class OzonParser(StoreParser):
                 "Запусти `docker compose --profile browser up -d browser`."
             )
 
-        url = f"{_BASE}/search/?text={quote_plus(query)}&from_global=true"
+        # Поиск внутри категории «Настольные и карточные игры» (вместо
+        # глобального /search/?text=) — отсекает книги/одежду/посуду
+        # с похожими словами в названии. См. docstring модуля.
+        url = f"{_BASE}/{_BOARDGAMES_CATEGORY_PATH}/?text={quote_plus(query)}&from_global=true"
 
         t0 = time.monotonic()
         try:

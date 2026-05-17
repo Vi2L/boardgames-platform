@@ -257,13 +257,17 @@ async def test_search_uses_persistent_profile():
 
 @pytest.mark.asyncio
 async def test_search_builds_correct_url():
-    """URL поиска должен быть `/search.html?search=<query>`."""
+    """С 2026-05-18 URL поиска — `/catalogue/board_games/?search=<q>`
+    вместо глобального `/search.html`. Раздел сужает выдачу до настолок."""
     fake = _FakeBrowserClient()
     parser = OnlineTradeParser(browser_client=fake)
     await parser.search("Каркассон", limit=5)
     called_url = fake.calls[0]["url"]
-    assert "/search.html?search=" in called_url
+    assert "/catalogue/board_games/" in called_url
+    assert "?search=" in called_url
     assert "onlinetrade.ru" in called_url
+    # старый глобальный URL не должен дёргаться
+    assert "/search.html" not in called_url
 
 
 @pytest.mark.asyncio

@@ -217,6 +217,21 @@ async def test_search_uses_persistent_profile():
 
 
 @pytest.mark.asyncio
+async def test_search_targets_boardgames_category_url():
+    """С 2026-05-18 поиск идёт внутри категории «Настольные и карточные
+    игры» (id=13506), а не глобальный `/search/?text=`. Это исключает
+    книги/одежду из выдачи на общих запросах."""
+    fake = _FakeBrowserClient()
+    parser = OzonParser(browser_client=fake)
+    await parser.search("книга", limit=5)
+    url = fake.calls[0]["url"]
+    assert "/category/nastolnye-i-kartochnye-igry-13506/" in url
+    assert "?text=" in url
+    # старый sсh-URL не должен дёргаться
+    assert "/search/?text=" not in url
+
+
+@pytest.mark.asyncio
 async def test_search_metrics_recorded():
     parser = OzonParser(browser_client=_FakeBrowserClient())
     await parser.search("Каркассон", limit=5)

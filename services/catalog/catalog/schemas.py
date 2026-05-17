@@ -435,6 +435,10 @@ class IngestResult(BaseModel):
     accepted: int
     auto_matched: int
     unmatched: int
+    # Сколько офферов отброшено категорийным whitelist'ом (не настолки).
+    # Старые publisher'ы без поля `category` не вызывают rejection — это
+    # счётчик намеренного отказа, не сетевая ошибка. См. ingest router.
+    skipped_category: int = 0
     items: list[IngestResultItem]
 
 

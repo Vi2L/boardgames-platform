@@ -219,6 +219,12 @@ async def _process_one(q, settings, SessionFactory) -> None:
         # Финализация
         if result.matched:
             await _finalize_match(session, q, result, settings)
+        elif result.action == MatchAction.REJECT:
+            # LLM явно отказал: "not_a_boardgame". Сразу выставляем
+            # match_status='rejected', чтобы оффер не висел в manual queue
+            # оператора. Запись в negative cache T0 — следующий ingest
+            # того же title попадёт сразу в reject без T2/T3.
+            await _finalize_reject(session, q, result, settings)
         else:
             # T3 dunno или low confidence
             await finalize_skipped(
@@ -289,6 +295,64 @@ async def _finalize_match(session, q, result, settings) -> None:
         game_id=result.game_id,
         score=result.score or 0.0,
         tier=result.tier or 0,
+    )
+
+
+async def _finalize_reject(session, q, result, settings) -> None:
+    """LLM явно отказал ('not_a_boardgame'): помечаем оффер `rejected`,
+    пишем negative cache в decisions, делаем audit-запись и завершаем
+    queue-item успехом (это финальное состояние, не ошибка).
+    """
+    offer = await session.get(Offer, q.offer_id)
+    if offer is None:
+        await finalize_skipped(session, q.id, reason="offer_disappeared")
+        return
+
+    prev_game_id = offer.game_id
+    prev_status = offer.match_status
+    if prev_status in ("manual", "rejected"):
+        # operator уже сказал своё слово — не перетираем
+        await finalize_skipped(session, q.id, reason=f"raced_{prev_status}")
+        return
+
+    offer.game_id = None
+    offer.match_status = "rejected"
+    offer.match_score = result.score
+    offer.match_tier = result.tier
+    offer.match_reason = result.reason
+
+    # Negative cache: следующий ingest того же title_norm попадёт в T0
+    # cached_reject без обращения к LLM (см. tier_0_cache).
+    await save_decision(
+        session,
+        title_norm=q.title_norm,
+        game_id=None,
+        source="auto_t3",
+        tier=result.tier,
+        score=result.score,
+    )
+
+    await log_change(
+        session,
+        offer_id=q.offer_id,
+        action=MatchAction.REJECT,
+        prev_game_id=prev_game_id,
+        new_game_id=None,
+        prev_status=prev_status,
+        new_status="rejected",
+        tier=result.tier,
+        score=result.score,
+        reason=result.reason,
+        performed_by="worker",
+    )
+
+    # status='skipped' в очереди — корректное финальное состояние
+    # «worker отработал, дальше не идём». `finalize_success` требует
+    # int game_id и семантически означает «нашли матч» — не наш случай.
+    await finalize_skipped(
+        session, q.id,
+        reason=result.reason or "llm_rejected",
+        score=result.score,
     )
 
 
