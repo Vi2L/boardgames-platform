@@ -8,6 +8,34 @@
 
 ---
 
+## 2026-05-17 · [WT-HELP] Раздел «Помощь» с интерактивной HTML-инструкцией
+
+**Что сделано:** Self-contained HTML-страница `frontend/public/help.html` (~79 КБ)
+с инструкцией администратора по всем 12 разделам портала — sticky TOC слева
+с активной подсветкой через `IntersectionObserver`, полнотекстовый AND-поиск
+по содержимому + `data-keywords` (синонимы), сворачиваемые секции, табы внутри
+секций, hotkey <kbd>/</kbd> для фокуса на поиске, 8 готовых workflow-рецептов,
+блок troubleshooting. `NavItem` в Sidebar получил флаг `external?: boolean` —
+такие пункты рендерятся как `<a target="_blank">` минуя React Router; то же
+поле добавлено в `NavCommandItem` для CommandPalette (open через `window.open`).
+В прод-сборку html попадает автоматически из `public/` через Vite.
+
+**Как пользоваться:** В сайдбаре снизу появился пункт **Помощь** (иконка 📖
+BookOpen) — клик открывает <http://localhost:8000/help.html> в новой вкладке.
+Также доступно через Cmd+K → «Помощь». Внутри: <kbd>/</kbd> — поиск,
+<kbd>Esc</kbd> — снять фокус, клик по заголовку секции — свернуть/развернуть.
+Печать (Cmd+P) даёт чистый print-friendly документ без сайдбара.
+
+**Затронутые файлы:**
+- `services/web-test/frontend/public/help.html` — новый (1364 строки HTML+CSS+JS).
+- `services/web-test/frontend/src/components/layout/Sidebar.tsx` — `NavItem.external`,
+  ветка рендера для `<a target="_blank">`.
+- `services/web-test/frontend/src/App.tsx` — пункт «Помощь» в NAV.
+- `services/web-test/frontend/src/components/ui/CommandPalette.tsx` —
+  `NavCommandItem.external` + open через `window.open`.
+
+---
+
 ## 2026-05-16 · [WT-MATCH-UX] Matching UX upgrade — §A..§G (handoff 06-matching-v2-improvements)
 
 **Что сделано:** Полный точечный апгрейд `/matching` admin-панели по handoff'у
