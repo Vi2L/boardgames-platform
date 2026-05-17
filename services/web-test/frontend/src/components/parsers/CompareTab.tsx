@@ -51,14 +51,14 @@ export function CompareTab() {
             onChange={e => setQ(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submit() }}
             placeholder="Запрос для сравнения cache vs live…"
-            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-violet-500"
+            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
             disabled={mutation.isPending}
           />
           <button
             type="button"
             onClick={submit}
             disabled={!q.trim() || mutation.isPending}
-            className="px-4 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+            className="px-4 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
           >
             {mutation.isPending
               ? <><Loader2 size={13} className="animate-spin" /> Сравниваем…</>
@@ -74,7 +74,7 @@ export function CompareTab() {
                 type="checkbox"
                 checked={selectedStores.includes(p.slug)}
                 onChange={() => toggleStore(p.slug)}
-                className="accent-violet-500"
+                className="accent-indigo-500"
               />
               <span className={clsx(
                 'px-1.5 py-0.5 rounded',
@@ -94,7 +94,7 @@ export function CompareTab() {
                 className={clsx(
                   'px-2 py-0.5 rounded',
                   limit === n
-                    ? 'bg-violet-900/60 text-violet-200'
+                    ? 'bg-indigo-900/60 text-indigo-200'
                     : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800',
                 )}
               >
@@ -215,7 +215,7 @@ function CompareStoreBlock({ slug, result }: { slug: string; result: CompareStor
                 {diff.changed.map((c, i) => (
                   <li key={i} className="bg-gray-900 rounded p-2 space-y-1">
                     <a href={c.url} target="_blank" rel="noreferrer"
-                       className="block text-xs text-violet-300 hover:underline truncate">
+                       className="block text-xs text-indigo-300 hover:underline truncate">
                       {c.url}
                     </a>
                     <div className="grid grid-cols-2 gap-2 text-xs">
@@ -268,7 +268,7 @@ function CountBadge({
     gray: muted ? 'text-gray-500' : 'text-gray-300',
     emerald: 'text-emerald-400',
     amber: 'text-amber-400',
-    violet: 'text-violet-300',
+    violet: 'text-indigo-300',
   }
   return (
     <span className={clsx('flex items-center gap-1', colorMap[color])} title={label}>
@@ -285,7 +285,7 @@ function Section({ title, color, children }: {
   const headerColor: Record<string, string> = {
     emerald: 'text-emerald-400',
     amber: 'text-amber-400',
-    violet: 'text-violet-300',
+    violet: 'text-indigo-300',
   }
   return (
     <div>
@@ -299,7 +299,7 @@ function UrlRow({ url }: { url: string }) {
   return (
     <li>
       <a href={url} target="_blank" rel="noreferrer"
-         className="block text-xs text-gray-400 hover:text-violet-300 hover:underline truncate font-mono">
+         className="block text-xs text-gray-400 hover:text-indigo-300 hover:underline truncate font-mono">
         {url}
       </a>
     </li>

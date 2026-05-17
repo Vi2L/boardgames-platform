@@ -22,13 +22,13 @@ export function LoyaltyPanel() {
         className="w-full flex items-center gap-2 px-3 py-2 text-xs text-gray-300 hover:bg-gray-900/40 rounded-t-lg"
       >
         <Caret size={13} className="text-gray-500" />
-        <Sparkles size={12} className="text-violet-400" />
+        <Sparkles size={12} className="text-indigo-400" />
         <label className="flex items-center cursor-pointer select-none" onClick={e => e.stopPropagation()}>
           <input
             type="checkbox"
             checked={enabled}
             onChange={e => setEnabled(e.target.checked)}
-            className="accent-violet-500 w-5 h-5"
+            className="accent-indigo-500 w-5 h-5"
           />
         </label>
         <span className="font-medium">Учитывать личные скидки</span>
@@ -44,7 +44,7 @@ export function LoyaltyPanel() {
                 checked={hobbygames.enabled}
                 disabled={!enabled}
                 onChange={e => setHobby({ enabled: e.target.checked })}
-                className="accent-violet-500 w-3.5 h-3.5"
+                className="accent-indigo-500 w-3.5 h-3.5"
               />
               <span className="text-xs text-gray-300">HobbyGames бонусы</span>
             </label>
@@ -79,7 +79,7 @@ export function LoyaltyPanel() {
                 checked={lavkaigr.enabled}
                 disabled={!enabled}
                 onChange={e => setLavka({ enabled: e.target.checked })}
-                className="accent-violet-500 w-3.5 h-3.5"
+                className="accent-indigo-500 w-3.5 h-3.5"
               />
               <span className="text-xs text-gray-300">Лавка игр</span>
             </label>
@@ -102,7 +102,7 @@ export function LoyaltyPanel() {
                 checked={lavkaigr.vkDon}
                 disabled={!enabled || !lavkaigr.enabled}
                 onChange={e => setLavka({ vkDon: e.target.checked })}
-                className="accent-violet-500 w-3.5 h-3.5"
+                className="accent-indigo-500 w-3.5 h-3.5"
               />
               <span className="text-xs text-gray-300">+5 % для донов VK</span>
             </label>

@@ -59,7 +59,7 @@ export function MlStatusBadge() {
         {(pending > 0 || processing > 0 || failed > 0) && (
           <div className="text-xs text-gray-500 mt-1 pt-1 border-t border-gray-800">
             очередь:{' '}
-            {pending > 0 && <span className="text-violet-400 font-mono">{pending} pend</span>}
+            {pending > 0 && <span className="text-indigo-400 font-mono">{pending} pend</span>}
             {processing > 0 && (
               <span className="text-blue-400 font-mono ml-1.5">{processing} proc</span>
             )}

@@ -189,7 +189,7 @@ export function GameEditor(props: Props) {
             type="button"
             onClick={submit}
             disabled={isPending || !title.trim() || (props.mode === 'create' && (!slug.trim() || slugInvalid))}
-            className="px-4 py-1.5 text-xs flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
+            className="px-4 py-1.5 text-xs flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded"
           >
             {isPending
               ? <><Loader2 size={11} className="animate-spin" /> Сохраняем…</>

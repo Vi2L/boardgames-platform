@@ -116,13 +116,13 @@ export function SingleMatchTab() {
                   onChange={e => setOfferId(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && handleIdSubmit()}
                   placeholder="например: 1247"
-                  className="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-200 font-mono focus:outline-none focus:border-violet-500"
+                  className="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-200 font-mono focus:outline-none focus:border-indigo-500"
                 />
                 <button
                   type="button"
                   onClick={handleIdSubmit}
                   disabled={!offerId || offerByIdQuery.isFetching}
-                  className="px-3 py-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs rounded inline-flex items-center gap-1"
+                  className="px-3 py-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-xs rounded inline-flex items-center gap-1"
                 >
                   {offerByIdQuery.isFetching && <Loader2 size={11} className="animate-spin" />}
                   Найти
@@ -135,7 +135,7 @@ export function SingleMatchTab() {
                 value={titleQuery}
                 onChange={e => setTitleQuery(e.target.value)}
                 placeholder="Каркассон, Wingspan, …"
-                className="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-200 focus:outline-none focus:border-violet-500"
+                className="flex-1 px-3 py-1.5 bg-gray-900 border border-gray-800 rounded text-sm text-gray-200 focus:outline-none focus:border-indigo-500"
                 autoFocus
               />
             )}
@@ -152,7 +152,7 @@ export function SingleMatchTab() {
                   className={clsx(
                     'w-full text-left px-3 py-2 hover:bg-gray-800/40 transition-colors',
                     'flex items-center gap-3',
-                    selectedOffer?.id === item.id && 'bg-violet-950/30',
+                    selectedOffer?.id === item.id && 'bg-indigo-950/30',
                   )}
                 >
                   <code className="font-mono text-[11px] text-gray-500 w-12 flex-shrink-0">#{item.id}</code>
@@ -205,7 +205,7 @@ function ModeToggle({ mode, onChange }: {
           className={clsx(
             'px-3 py-1.5 text-[11px] font-mono uppercase tracking-wider',
             mode === m
-              ? 'bg-violet-700/80 text-white'
+              ? 'bg-indigo-700/80 text-white'
               : 'text-gray-500 hover:bg-gray-800 hover:text-gray-200',
           )}
         >
@@ -259,7 +259,7 @@ function OfferCard({ offer, onRunV2, running }: {
                   href={offer.url}
                   target="_blank"
                   rel="noreferrer"
-                  className="inline-flex items-center gap-0.5 text-gray-400 hover:text-violet-300"
+                  className="inline-flex items-center gap-0.5 text-gray-400 hover:text-indigo-300"
                 >
                   открыть <ExternalLink size={9} />
                 </a>
@@ -284,7 +284,7 @@ function OfferCard({ offer, onRunV2, running }: {
         {/* Action */}
         <div className="flex items-center justify-end gap-3 pt-3 border-t border-gray-800/60">
           <p className="flex-1 text-[11px] text-gray-500">
-            Добавит в <code className="text-violet-300">match_queue</code> с priority=10. Воркер обработает в следующем тике (10с).
+            Добавит в <code className="text-indigo-300">match_queue</code> с priority=10. Воркер обработает в следующем тике (10с).
           </p>
           <button
             type="button"
@@ -292,7 +292,7 @@ function OfferCard({ offer, onRunV2, running }: {
             disabled={running}
             className={clsx(
               'inline-flex items-center gap-1.5 px-3 py-1.5 rounded',
-              'bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white text-xs font-medium',
+              'bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white text-xs font-medium',
               'shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15)]',
             )}
           >
@@ -494,7 +494,7 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt, queueId }: {
       <header className="flex items-center justify-between px-5 py-3 border-b border-gray-800 bg-black/40">
         <h3 className="text-[11px] uppercase tracking-wider font-semibold text-gray-200 flex items-center gap-2">
           <Crosshair size={11} /> Прогон через v2
-          {!finished && <Loader2 size={11} className="animate-spin text-violet-400" />}
+          {!finished && <Loader2 size={11} className="animate-spin text-indigo-400" />}
         </h3>
         <button
           type="button"
@@ -519,7 +519,7 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt, queueId }: {
           <span>queue:</span>
           <span className="text-amber-300">{queuePending} pending</span>
           <span className="text-gray-700">·</span>
-          <span className="text-violet-300">{queueProcessing} processing</span>
+          <span className="text-indigo-300">{queueProcessing} processing</span>
         </div>
 
         {/* Queue position 3-step indicator + Cancel button */}
@@ -545,7 +545,7 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt, queueId }: {
               <CheckCircle2 size={12} /> Готово
             </div>
             <div className="text-gray-400">
-              Результат записан в <code className="text-violet-300">match_log</code>.
+              Результат записан в <code className="text-indigo-300">match_log</code>.
               Если результат не устраивает — открой <strong>Журнал</strong> и сделай revert.
             </div>
           </div>
@@ -562,7 +562,7 @@ function StageRow({ stage, index }: { stage: Stage; index: number }) {
     : Circle
   const colors = {
     done:    'text-green-400',
-    running: 'text-violet-400 animate-pulse',
+    running: 'text-indigo-400 animate-pulse',
     skipped: 'text-gray-700',
     pending: 'text-gray-600',
   }[stage.state]
@@ -571,7 +571,7 @@ function StageRow({ stage, index }: { stage: Stage; index: number }) {
     <li className={clsx(
       'flex items-start gap-3 p-2.5 rounded border',
       stage.state === 'done' && 'bg-green-950/15 border-green-900/40',
-      stage.state === 'running' && 'bg-violet-950/15 border-violet-900/40',
+      stage.state === 'running' && 'bg-indigo-950/15 border-indigo-900/40',
       (stage.state === 'pending' || stage.state === 'skipped') && 'bg-gray-900/30 border-gray-800/50',
     )}>
       <Icon size={18} className={clsx('mt-0.5 flex-shrink-0', colors)} />
@@ -664,7 +664,7 @@ function PositionStep({
       <div className={clsx(
         'w-4 h-4 rounded-full border-2 flex items-center justify-center',
         done && 'bg-emerald-500/20 border-emerald-500 text-emerald-300',
-        active && 'bg-violet-500/20 border-violet-500 text-violet-300 animate-pulse',
+        active && 'bg-indigo-500/20 border-indigo-500 text-indigo-300 animate-pulse',
         !done && !active && 'bg-gray-800 border-gray-700 text-gray-600',
       )}>
         {done && <CheckCircle2 size={10} />}
@@ -707,7 +707,7 @@ function SingleExplainer() {
       </ul>
       <p className="text-gray-400">
         UI не ждёт результата inline (Ollama может отвечать 10-30 сек) — открывается drawer с polling.
-        Если на странице есть открытый drawer, polling работает раз в 1.5 сек на <code className="text-violet-300">/matching/log</code>.
+        Если на странице есть открытый drawer, polling работает раз в 1.5 сек на <code className="text-indigo-300">/matching/log</code>.
       </p>
     </>
   )

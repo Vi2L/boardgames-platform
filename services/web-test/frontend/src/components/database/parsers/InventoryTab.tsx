@@ -71,7 +71,7 @@ export function InventoryTab() {
     <div className="space-y-4">
       {/* Info-блок: назначение раздела */}
       <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
+        <Info size={13} className="text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="flex-1">
           <strong className="text-gray-300">Inventory parsers</strong> — состояние SQLite БД сервиса парсеров.
           Карточки сверху — суммарно: размер файла, общее количество товаров и точек цен (price_observations),

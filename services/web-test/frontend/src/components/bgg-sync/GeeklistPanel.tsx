@@ -12,7 +12,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  Loader2, Play, ExternalLink, BookOpen, ChevronDown, ChevronRight,
+  Loader2, Play, ExternalLink, BookOpen, ChevronDown, ChevronRight, CheckCircle2,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -64,7 +64,7 @@ export function GeeklistPanel() {
             href="https://boardgamegeek.com/geeklist/367126/"
             target="_blank"
             rel="noopener noreferrer"
-            className="text-violet-400 hover:underline"
+            className="text-indigo-400 hover:underline"
           >
             BGG Top 50 Most Played — October 2025 (id=367126) ↗
           </a>
@@ -82,7 +82,7 @@ export function GeeklistPanel() {
               value={geeklistIdInput}
               onChange={e => setGeeklistIdInput(e.target.value.replace(/\D/g, ''))}
               placeholder="367126"
-              className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm font-mono text-gray-200 focus:outline-none focus:border-violet-500"
+              className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-sm font-mono text-gray-200 focus:outline-none focus:border-indigo-500"
             />
           </div>
           <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer pb-1.5">
@@ -97,7 +97,7 @@ export function GeeklistPanel() {
             type="button"
             onClick={() => startImport.mutate()}
             disabled={!idValid || startImport.isPending}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded mb-0.5"
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded mb-0.5"
           >
             {startImport.isPending
               ? <Loader2 size={11} className="animate-spin" />
@@ -168,7 +168,7 @@ function GeeklistCard({ meta }: { meta: GeeklistMeta }) {
           href={`https://boardgamegeek.com/geeklist/${meta.geeklist_id}`}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-gray-500 hover:text-violet-300"
+          className="text-gray-500 hover:text-indigo-300"
           title="Открыть на BGG"
         >
           <ExternalLink size={12} />
@@ -196,7 +196,7 @@ function GeeklistItems({ snapshot }: { snapshot: GeeklistSnapshot }) {
         <div key={item.bgg_id} className={clsx(
           'flex items-start gap-3 px-3 py-2 hover:bg-gray-900/40',
         )}>
-          <div className="w-8 text-right text-violet-400 font-mono text-xs flex-shrink-0 pt-0.5">
+          <div className="w-8 text-right text-indigo-400 font-mono text-xs flex-shrink-0 pt-0.5">
             #{item.rank}
           </div>
           <div className="flex-1 min-w-0">
@@ -204,8 +204,8 @@ function GeeklistItems({ snapshot }: { snapshot: GeeklistSnapshot }) {
             <div className="text-[10px] text-gray-500">
               bgg_id={item.bgg_id}
               {item.game_id && (
-                <span className="ml-2 text-emerald-400">
-                  ✓ в каталоге{item.game_title && `: ${item.game_title}`}
+                <span className="ml-2 text-emerald-400 inline-flex items-center gap-0.5">
+                  <CheckCircle2 size={10} /> в каталоге{item.game_title && `: ${item.game_title}`}
                 </span>
               )}
             </div>
@@ -219,7 +219,7 @@ function GeeklistItems({ snapshot }: { snapshot: GeeklistSnapshot }) {
             href={`https://boardgamegeek.com/boardgame/${item.bgg_id}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-gray-500 hover:text-violet-300 flex-shrink-0 mt-0.5"
+            className="text-gray-500 hover:text-indigo-300 flex-shrink-0 mt-0.5"
             title="Открыть на BGG"
           >
             <ExternalLink size={11} />

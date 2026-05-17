@@ -135,7 +135,7 @@ export function RunDiffDrawer({ provider, runId, onClose }: Props) {
                 type="button"
                 onClick={() => applyMutation.mutate(['new', 'updated'])}
                 disabled={applyMutation.isPending}
-                className="px-3 py-1.5 text-sm rounded-md bg-violet-700 text-white hover:bg-violet-600 disabled:opacity-50"
+                className="px-3 py-1.5 text-sm rounded-md bg-indigo-700 text-white hover:bg-indigo-600 disabled:opacity-50"
               >
                 Применить new + updated
               </button>
@@ -235,7 +235,7 @@ function Chip({
     amber: 'bg-amber-900/40 text-amber-300',
     gray: 'bg-gray-800 text-gray-400',
     red: 'bg-red-900/40 text-red-300',
-    violet: 'bg-violet-900/40 text-violet-300',
+    violet: 'bg-indigo-900/40 text-indigo-300',
   }
   return (
     <span className={clsx('px-2 py-0.5 rounded text-xs', COLOR[color])}>

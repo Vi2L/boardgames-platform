@@ -67,7 +67,7 @@ export function MatchingHelpTab() {
               className={clsx(
                 'block px-2 py-1 rounded text-[11px] transition-colors',
                 active === s.id
-                  ? 'bg-violet-950/40 text-violet-300 border-l-2 border-violet-500 -ml-px'
+                  ? 'bg-indigo-950/40 text-indigo-300 border-l-2 border-indigo-500 -ml-px'
                   : 'text-gray-500 hover:text-gray-200 hover:bg-gray-900',
               )}
             >
@@ -304,7 +304,7 @@ export function MatchingHelpTab() {
           <p className="flex items-center gap-2">
             <AlertTriangle size={11} className="text-amber-500/60" />
             Эта вкладка — операционная справка, не исходник правды. Точная семантика —
-            всегда в коде <code className="text-violet-300/80">services/catalog/catalog/matching/v2/</code>.
+            всегда в коде <code className="text-indigo-300/80">services/catalog/catalog/matching/v2/</code>.
           </p>
         </div>
       </article>
@@ -321,13 +321,13 @@ function Section({ id, title, children }: { id: string; title: string; children:
         <span>{title}</span>
         <a
           href={`#mhelp-${id}`}
-          className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-violet-400 transition-opacity"
+          className="opacity-0 group-hover:opacity-100 text-gray-600 hover:text-indigo-400 transition-opacity"
           aria-label={`Ссылка на «${title}»`}
         >
           <Link2 size={12} />
         </a>
       </h2>
-      <div className="space-y-3 text-sm leading-relaxed text-gray-300 [&_code]:font-mono [&_code]:text-violet-300 [&_code]:text-[0.92em] [&_code]:bg-violet-950/30 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_ul]:list-disc [&_ul]:ml-5 [&_ul]:space-y-1.5 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:ml-5 [&_ol]:space-y-1.5 [&_ol]:my-2">
+      <div className="space-y-3 text-sm leading-relaxed text-gray-300 [&_code]:font-mono [&_code]:text-indigo-300 [&_code]:text-[0.92em] [&_code]:bg-indigo-950/30 [&_code]:px-1 [&_code]:py-0.5 [&_code]:rounded [&_ul]:list-disc [&_ul]:ml-5 [&_ul]:space-y-1.5 [&_ul]:my-2 [&_ol]:list-decimal [&_ol]:ml-5 [&_ol]:space-y-1.5 [&_ol]:my-2">
         {children}
       </div>
     </section>
@@ -345,7 +345,7 @@ function SubHeading({ children }: { children: React.ReactNode }) {
 function Glossary({ term, children }: { term: string; children: React.ReactNode }) {
   return (
     <div className="grid grid-cols-[140px_1fr] gap-3 items-baseline">
-      <dt className="font-mono text-[11px] text-violet-300">{term}</dt>
+      <dt className="font-mono text-[11px] text-indigo-300">{term}</dt>
       <dd className="text-xs text-gray-300 leading-relaxed">{children}</dd>
     </div>
   )

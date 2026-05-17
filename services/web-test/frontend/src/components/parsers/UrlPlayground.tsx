@@ -48,14 +48,14 @@ export function UrlPlayground() {
             onChange={e => setUrl(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submit() }}
             placeholder="https://gaga.ru/product/..."
-            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-violet-500 font-mono"
+            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500 font-mono"
             disabled={mutation.isPending}
           />
           <button
             type="button"
             onClick={submit}
             disabled={!url.trim() || mutation.isPending}
-            className="px-4 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+            className="px-4 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
           >
             {mutation.isPending
               ? <><Loader2 size={13} className="animate-spin" /> GET…</>
@@ -73,7 +73,7 @@ export function UrlPlayground() {
               className={clsx(
                 'px-2 py-0.5 rounded font-mono',
                 encodingHint === h
-                  ? 'bg-violet-900/60 text-violet-200'
+                  ? 'bg-indigo-900/60 text-indigo-200'
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800',
               )}
             >
@@ -137,7 +137,7 @@ function ProbeResult({
         <div className="text-xs text-gray-500">
           final-url:{' '}
           <a href={result.final_url} target="_blank" rel="noreferrer"
-             className="text-violet-300 hover:underline font-mono break-all">
+             className="text-indigo-300 hover:underline font-mono break-all">
             {result.final_url}
           </a>
         </div>
@@ -236,7 +236,7 @@ function SelectorPlayground({ html }: { html: string }) {
           value={selector}
           onChange={e => setSelector(e.target.value)}
           placeholder=".price, h1, [data-product-id]"
-          className="flex-1 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 font-mono focus:outline-none focus:border-violet-500"
+          className="flex-1 px-2 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 font-mono focus:outline-none focus:border-indigo-500"
         />
         {result?.kind === 'ok' && (
           <span className={clsx('text-xs whitespace-nowrap', result.matches.length ? 'text-emerald-400' : 'text-gray-500')}>

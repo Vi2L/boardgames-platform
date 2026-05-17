@@ -106,7 +106,7 @@ function AddAliasForm({
           type="button"
           onClick={submit}
           disabled={!alias.trim() || isPending}
-          className="px-3 py-1 text-xs flex items-center gap-1 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
+          className="px-3 py-1 text-xs flex items-center gap-1 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded"
         >
           {isPending ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
           Добавить
@@ -122,7 +122,7 @@ function AddAliasForm({
               onClick={() => setLanguage(l === language ? '' : l)}
               className={clsx('px-1.5 py-0.5 rounded font-mono uppercase',
                 language === l
-                  ? 'bg-violet-900/60 text-violet-200'
+                  ? 'bg-indigo-900/60 text-indigo-200'
                   : 'text-gray-500 hover:text-gray-200 hover:bg-gray-800')}
             >
               {l}
@@ -170,7 +170,7 @@ function AliasRow({
 
   if (editing) {
     return (
-      <div className="bg-gray-950 border border-violet-800 rounded p-2 space-y-2">
+      <div className="bg-gray-950 border border-indigo-800 rounded p-2 space-y-2">
         <div className="flex gap-2">
           <input
             type="text"
@@ -236,7 +236,7 @@ function AliasRow({
         type="button"
         onClick={() => setEditing(true)}
         title="Редактировать"
-        className="p-1 text-gray-500 hover:text-violet-300 hover:bg-violet-950/40 rounded"
+        className="p-1 text-gray-500 hover:text-indigo-300 hover:bg-indigo-950/40 rounded"
       >
         <Pencil size={12} />
       </button>

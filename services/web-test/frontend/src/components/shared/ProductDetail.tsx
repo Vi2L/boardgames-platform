@@ -217,7 +217,7 @@ export function ProductDetail({ product, pool = [], onSelectSimilar }: Props) {
           href={product.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="flex items-center gap-1.5 text-sm text-violet-400 hover:text-violet-300 w-fit"
+          className="flex items-center gap-1.5 text-sm text-indigo-400 hover:text-indigo-300 w-fit"
         >
           <ExternalLink size={13} /> Открыть в магазине
         </a>
@@ -266,7 +266,7 @@ export function ProductDetail({ product, pool = [], onSelectSimilar }: Props) {
                   href={r.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-sm text-violet-400 hover:text-violet-300"
+                  className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300"
                 >
                   <BookOpen size={12} /> {r.name}
                 </a>

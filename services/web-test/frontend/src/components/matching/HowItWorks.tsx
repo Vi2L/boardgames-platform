@@ -37,7 +37,7 @@ export function HowItWorks({
         'group rounded-lg overflow-hidden',
         variant === 'subtle'
           ? 'bg-gray-900/40 border border-gray-800/60'
-          : 'bg-violet-950/20 border border-violet-900/40',
+          : 'bg-indigo-950/20 border border-indigo-900/40',
         className,
       )}
     >
@@ -45,7 +45,7 @@ export function HowItWorks({
         className={clsx(
           'flex items-center gap-2 px-3.5 py-2.5 cursor-pointer select-none',
           'text-[11px] uppercase tracking-wider',
-          variant === 'subtle' ? 'text-gray-400 hover:text-gray-200' : 'text-violet-300 hover:text-violet-200',
+          variant === 'subtle' ? 'text-gray-400 hover:text-gray-200' : 'text-indigo-300 hover:text-indigo-200',
           'list-none [&::-webkit-details-marker]:hidden',
         )}
       >
@@ -72,7 +72,7 @@ const TIER_CONFIG: Record<TierChipProps['tier'], { bg: string; text: string; tit
   T0: { bg: 'bg-blue-900/30',   text: 'text-blue-300',   title: 'cache hit' },
   T1: { bg: 'bg-cyan-900/30',   text: 'text-cyan-300',   title: 'pg_trgm ≥ 0.92' },
   T2: { bg: 'bg-emerald-900/30',text: 'text-emerald-300',title: 'bge-m3 cosine ≥ 0.85' },
-  T3: { bg: 'bg-violet-900/30', text: 'text-violet-300', title: 'qwen2.5 LLM-арбитр' },
+  T3: { bg: 'bg-indigo-900/30', text: 'text-indigo-300', title: 'qwen2.5 LLM-арбитр' },
   T4: { bg: 'bg-amber-900/30',  text: 'text-amber-300',  title: 'manual queue' },
 }
 

@@ -142,7 +142,7 @@ function Item({
     <Command.Item
       onSelect={onSelect}
       disabled={disabled}
-      className="flex items-center gap-3 px-3 py-2 rounded text-sm text-gray-200 cursor-pointer aria-selected:bg-violet-900/40 aria-selected:text-violet-200 data-[disabled=true]:opacity-40 data-[disabled=true]:cursor-not-allowed"
+      className="flex items-center gap-3 px-3 py-2 rounded text-sm text-gray-200 cursor-pointer aria-selected:bg-indigo-900/40 aria-selected:text-indigo-200 data-[disabled=true]:opacity-40 data-[disabled=true]:cursor-not-allowed"
     >
       {icon}
       <span className="flex-1">{label}</span>

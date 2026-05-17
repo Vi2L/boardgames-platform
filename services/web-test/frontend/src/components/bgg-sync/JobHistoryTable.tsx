@@ -33,7 +33,7 @@ const TRIGGER_OPTIONS = ['', 'manual', 'scheduled', 'api']
 
 const STATUS_COLOR: Record<string, string> = {
   done:    'bg-emerald-900/50 text-emerald-300',
-  running: 'bg-violet-900/50 text-violet-300',
+  running: 'bg-indigo-900/50 text-indigo-300',
   pending: 'bg-amber-900/40 text-amber-300',
   failed:  'bg-red-950/30 text-red-300',
 }
@@ -82,7 +82,7 @@ export function JobHistoryTable() {
           <select
             value={filter.type ?? ''}
             onChange={e => setFilter(f => ({ ...f, type: e.target.value || undefined }))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           >
             {TYPE_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -94,7 +94,7 @@ export function JobHistoryTable() {
           <select
             value={filter.status ?? ''}
             onChange={e => setFilter(f => ({ ...f, status: (e.target.value || undefined) as ImportJobsFilter['status'] }))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           >
             {STATUS_OPTIONS.map(s => (
               <option key={s} value={s}>{s || 'все статусы'}</option>
@@ -106,7 +106,7 @@ export function JobHistoryTable() {
           <select
             value={filter.trigger ?? ''}
             onChange={e => setFilter(f => ({ ...f, trigger: (e.target.value || undefined) as ImportJobsFilter['trigger'] }))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           >
             {TRIGGER_OPTIONS.map(t => (
               <option key={t} value={t}>{t || 'любой'}</option>
@@ -202,7 +202,7 @@ function JobDetails({ job }: { job: ImportJob }) {
             Прогресс
           </div>
           <div className="text-gray-400 mb-1">
-            <span className="text-violet-300">{progress.phase}</span>
+            <span className="text-indigo-300">{progress.phase}</span>
             {' '}· {progress.current} / {progress.total}
             {progress.current_title && (
               <span className="ml-2 text-gray-500">— {progress.current_title}</span>
@@ -210,7 +210,7 @@ function JobDetails({ job }: { job: ImportJob }) {
           </div>
           <div className="w-full bg-gray-800 rounded-full h-1 overflow-hidden">
             <div
-              className="bg-violet-500 h-full transition-all"
+              className="bg-indigo-500 h-full transition-all"
               style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
             />
           </div>

@@ -294,7 +294,7 @@ export function ResultsTable({ products, deltas, adjusted, priceStats, showOutOf
                 className={clsx(
                   'flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors',
                   active
-                    ? 'bg-violet-900/40 border-violet-700 text-violet-200'
+                    ? 'bg-indigo-900/40 border-indigo-700 text-indigo-200'
                     : 'bg-gray-900 border-gray-800 text-gray-400 hover:text-gray-200',
                 )}
               >

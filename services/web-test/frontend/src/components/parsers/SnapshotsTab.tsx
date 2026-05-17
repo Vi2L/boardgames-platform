@@ -87,7 +87,7 @@ export function SnapshotsTab() {
               className={clsx(
                 'px-2 py-0.5 rounded',
                 hours === h
-                  ? 'bg-violet-900/60 text-violet-200'
+                  ? 'bg-indigo-900/60 text-indigo-200'
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800',
               )}
             >

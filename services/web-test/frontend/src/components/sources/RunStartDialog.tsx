@@ -104,7 +104,7 @@ export function RunStartDialog({ provider, open, onClose }: Props) {
             type="button"
             disabled={m.isPending}
             onClick={() => m.mutate()}
-            className="px-3 py-1.5 text-sm rounded-md bg-violet-700 text-white hover:bg-violet-600 disabled:opacity-50"
+            className="px-3 py-1.5 text-sm rounded-md bg-indigo-700 text-white hover:bg-indigo-600 disabled:opacity-50"
           >
             {m.isPending ? 'Запускаем…' : 'Запустить'}
           </button>

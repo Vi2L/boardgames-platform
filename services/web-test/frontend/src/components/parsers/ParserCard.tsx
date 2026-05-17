@@ -153,7 +153,7 @@ export function ParserCard({ parser }: Props) {
           onChange={e => setRunQuery(e.target.value)}
           onKeyDown={e => { if (e.key === 'Enter') { isRunning ? stop() : run() } }}
           placeholder="Запрос для теста…"
-          className="flex-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-violet-500"
+          className="flex-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
           disabled={isRunning}
         />
         <button
@@ -162,7 +162,7 @@ export function ParserCard({ parser }: Props) {
             'px-3 py-1.5 rounded text-xs font-medium flex items-center gap-1 transition-colors',
             isRunning
               ? 'bg-red-900 hover:bg-red-800 text-red-300'
-              : 'bg-violet-700 hover:bg-violet-600 text-white',
+              : 'bg-indigo-700 hover:bg-indigo-600 text-white',
           )}
         >
           {isRunning ? <><Square size={11} /> Стоп</> : <><Play size={11} /> Запуск</>}
@@ -179,7 +179,7 @@ export function ParserCard({ parser }: Props) {
         )}>
           {resultInfo.error
             ? `Ошибка: ${resultInfo.error}`
-            : `✓ ${resultInfo.count} результатов за ${resultInfo.ms}ms`}
+            : <span className="inline-flex items-center gap-1"><CheckCircle2 size={11} /> {resultInfo.count} результатов за {resultInfo.ms}ms</span>}
         </div>
       )}
 

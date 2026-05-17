@@ -88,7 +88,7 @@ export function MergeDialog({ source, onClose }: Props) {
                     <button
                       type="button"
                       onClick={() => setPicked(null)}
-                      className="text-xs text-violet-300 hover:underline"
+                      className="text-xs text-indigo-300 hover:underline"
                     >
                       сменить
                     </button>
@@ -161,7 +161,7 @@ export function MergeDialog({ source, onClose }: Props) {
               <button
                 type="button"
                 onClick={onClose}
-                className="w-full px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded"
+                className="w-full px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 text-white rounded"
               >
                 Закрыть
               </button>

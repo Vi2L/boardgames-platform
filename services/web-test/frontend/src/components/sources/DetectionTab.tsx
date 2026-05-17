@@ -43,7 +43,7 @@ export function DetectionTab({ provider }: Props) {
         <button
           type="button"
           onClick={() => setStartOpen(true)}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-violet-700 text-white hover:bg-violet-600"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md bg-indigo-700 text-white hover:bg-indigo-600"
         >
           <Play size={14} />
           Запустить прогон
@@ -127,7 +127,7 @@ function RunRow({ run, onOpen }: { run: ScrapeRun; onOpen: () => void }) {
       <td className="pr-3 text-right tabular-nums text-red-400">
         {run.totals.errors ?? '—'}
       </td>
-      <td className="text-right text-violet-400 text-xs">→</td>
+      <td className="text-right text-indigo-400 text-xs">→</td>
     </tr>
   )
 }

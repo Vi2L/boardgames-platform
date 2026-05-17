@@ -118,7 +118,7 @@ export function ImportWizard({ onClose }: Props) {
                 className={clsx(
                   'px-3 py-2 text-sm transition-colors border-b-2 -mb-px',
                   source === s
-                    ? 'text-violet-300 border-violet-500'
+                    ? 'text-indigo-300 border-indigo-500'
                     : 'text-gray-400 border-transparent hover:text-gray-200',
                 )}
               >
@@ -141,14 +141,14 @@ export function ImportWizard({ onClose }: Props) {
                   onChange={e => setInput(e.target.value)}
                   placeholder={source === 'bgg' ? '174430\n167791, 192291' : 'pandemic\nktulhu_pochti\n12345'}
                   rows={4}
-                  className="w-full px-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded text-gray-100 placeholder-gray-500 font-mono focus:outline-none focus:border-violet-500"
+                  className="w-full px-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded text-gray-100 placeholder-gray-500 font-mono focus:outline-none focus:border-indigo-500"
                 />
               </div>
               <button
                 type="button"
                 onClick={() => start.mutate()}
                 disabled={!input.trim() || start.isPending}
-                className="w-full px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+                className="w-full px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
               >
                 {start.isPending
                   ? <><Loader2 size={13} className="animate-spin" /> Создаю задачу…</>
@@ -161,7 +161,7 @@ export function ImportWizard({ onClose }: Props) {
             <>
               <div className="text-xs text-gray-400 leading-relaxed">
                 Парсер обходит каталог dicefest.ru (~900 игр на 3 года), пишет
-                в staging-таблицу <code className="text-violet-300">dicefest_raw_games</code>.
+                в staging-таблицу <code className="text-indigo-300">dicefest_raw_games</code>.
                 Основная БД <b>не</b> трогается — перенос в canonical games будет отдельным
                 управляемым процессом (промоушен с матчингом).
                 <br/>
@@ -172,7 +172,7 @@ export function ImportWizard({ onClose }: Props) {
                   type="checkbox"
                   checked={dicefestTrial}
                   onChange={e => setDicefestTrial(e.target.checked)}
-                  className="accent-violet-500"
+                  className="accent-indigo-500"
                 />
                 Пробный прогон (только первые 10 slug'ов)
               </label>
@@ -183,7 +183,7 @@ export function ImportWizard({ onClose }: Props) {
                 <select
                   value={dicefestOnlyYear}
                   onChange={e => setDicefestOnlyYear(e.target.value)}
-                  className="w-full px-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded text-gray-100 focus:outline-none focus:border-violet-500"
+                  className="w-full px-3 py-2 text-sm bg-gray-800 border border-gray-700 rounded text-gray-100 focus:outline-none focus:border-indigo-500"
                 >
                   <option value="">Все годы (2024 + 2025 + 2026)</option>
                   <option value="2024">только 2024</option>
@@ -195,7 +195,7 @@ export function ImportWizard({ onClose }: Props) {
                 type="button"
                 onClick={() => start.mutate()}
                 disabled={start.isPending || reparse.isPending}
-                className="w-full px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+                className="w-full px-4 py-2 rounded text-sm font-medium flex items-center justify-center gap-2 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
               >
                 {start.isPending
                   ? <><Loader2 size={13} className="animate-spin" /> Создаю задачу…</>
@@ -275,7 +275,7 @@ function JobProgress({
         <span className="text-xs font-mono text-gray-500">
           {job.type} · job #{job.id}
         </span>
-        {!isFinal && <Loader2 size={12} className="animate-spin text-violet-400" />}
+        {!isFinal && <Loader2 size={12} className="animate-spin text-indigo-400" />}
       </div>
 
       {/* Progress bar (показываем для job'ов с progress — пока только dicefest,
@@ -294,7 +294,7 @@ function JobProgress({
           </div>
           <div className="h-1.5 bg-gray-800 rounded overflow-hidden">
             <div
-              className="h-full bg-violet-500 transition-all duration-300"
+              className="h-full bg-indigo-500 transition-all duration-300"
               style={{ width: `${pct}%` }}
             />
           </div>
@@ -378,7 +378,7 @@ function JobProgress({
           <button
             type="button"
             onClick={onClose}
-            className="flex-1 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded"
+            className="flex-1 px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 text-white rounded"
           >
             Закрыть
           </button>
@@ -391,7 +391,7 @@ function JobProgress({
 function StatusBadge({ status }: { status: ImportJobStatus }) {
   const map: Record<ImportJobStatus, { label: string; cls: string }> = {
     pending: { label: 'pending',  cls: 'bg-gray-800 text-gray-400' },
-    running: { label: 'running',  cls: 'bg-violet-900/50 text-violet-300' },
+    running: { label: 'running',  cls: 'bg-indigo-900/50 text-indigo-300' },
     done:    { label: 'done',     cls: 'bg-emerald-900/50 text-emerald-300' },
     failed:  { label: 'failed',   cls: 'bg-red-900/50 text-red-300' },
   }

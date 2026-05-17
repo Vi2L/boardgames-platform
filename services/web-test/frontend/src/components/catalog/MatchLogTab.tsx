@@ -125,7 +125,7 @@ export function MatchLogTab() {
             type="checkbox"
             checked={filters.only_active ?? false}
             onChange={e => setFilters(f => ({ ...f, only_active: e.target.checked, offset: 0 }))}
-            className="accent-violet-500"
+            className="accent-indigo-500"
           />
           <span className="text-gray-300">только активные (не reverted)</span>
         </label>
@@ -180,7 +180,7 @@ export function MatchLogTab() {
                     type="checkbox"
                     checked={allSelected}
                     onChange={toggleAll}
-                    className="accent-violet-500"
+                    className="accent-indigo-500"
                   />
                 </th>
                 <th className="px-2 py-1.5 text-left">tier</th>
@@ -291,7 +291,7 @@ function LogRow({
           checked={selected}
           disabled={isReverted || isRevertAction}
           onChange={onToggle}
-          className="accent-violet-500"
+          className="accent-indigo-500"
         />
       </td>
       <td className="px-2 py-1.5">
@@ -309,7 +309,7 @@ function LogRow({
           <span className="text-gray-500">{row.prev_status ?? '∅'}</span>
           <span className="text-gray-600">→</span>
           <span className={clsx(
-            row.new_status === 'auto' && 'text-violet-300',
+            row.new_status === 'auto' && 'text-indigo-300',
             row.new_status === 'manual' && 'text-emerald-300',
             row.new_status === 'rejected' && 'text-red-300',
             row.new_status === 'unmatched' && 'text-amber-300',

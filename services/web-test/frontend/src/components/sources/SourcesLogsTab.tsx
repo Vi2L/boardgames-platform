@@ -88,7 +88,7 @@ function RunCompactRow({ run }: { run: ScrapeRun }) {
           <span className="text-red-400">err {totals.errors}</span>
         ) : null}
         {totals.applied ? (
-          <span className="text-violet-300">applied {totals.applied}</span>
+          <span className="text-indigo-300">applied {totals.applied}</span>
         ) : null}
       </div>
     </li>

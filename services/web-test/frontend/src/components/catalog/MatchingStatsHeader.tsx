@@ -60,7 +60,7 @@ export function MatchingStatsHeader() {
                 {getStoreLabel(s.store_slug)}
               </span>
               <div className="flex-1 h-4 bg-gray-950 rounded overflow-hidden">
-                <div className="h-full bg-violet-700"
+                <div className="h-full bg-indigo-700"
                      style={{ width: `${total > 0 ? (s.total / total) * 100 : 0}%` }} />
               </div>
               <span className="w-16 text-right font-mono text-gray-300">{s.total}</span>

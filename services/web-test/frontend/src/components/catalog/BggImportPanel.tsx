@@ -124,9 +124,9 @@ function BggRanksImportSection() {
         <h2 className="text-sm font-semibold text-gray-200">Seed каталога из BGG ranks CSV</h2>
         {/* Wizard step pills */}
         <div className="flex items-center gap-1 ml-auto text-[10px] text-gray-500">
-          <span className={file ? 'text-violet-400' : ''}>① CSV</span>
+          <span className={file ? 'text-indigo-400' : ''}>① CSV</span>
           <ChevronRight size={10} />
-          <span className={activeJobId ? 'text-violet-400' : ''}>② Import</span>
+          <span className={activeJobId ? 'text-indigo-400' : ''}>② Import</span>
           <ChevronRight size={10} />
           <span className={isDone && !dryRun ? 'text-green-400' : ''}>③ Enrich ↓</span>
         </div>
@@ -138,7 +138,7 @@ function BggRanksImportSection() {
           href="https://boardgamegeek.com/data_dumps/bg_ranks"
           target="_blank"
           rel="noopener noreferrer"
-          className="text-violet-400 hover:underline"
+          className="text-indigo-400 hover:underline"
         >
           Скачать CSV ↗
         </a>
@@ -156,8 +156,8 @@ function BggRanksImportSection() {
         onDrop={e => { e.preventDefault(); setDragging(false); handleFileDrop(e.dataTransfer.files) }}
         className={[
           'border-2 border-dashed rounded-lg px-4 py-5 text-center cursor-pointer transition-colors',
-          dragging ? 'border-violet-500 bg-violet-950/20' : 'border-gray-700 hover:border-gray-600',
-          file ? 'border-violet-700 bg-violet-950/10' : '',
+          dragging ? 'border-indigo-500 bg-indigo-950/20' : 'border-gray-700 hover:border-gray-600',
+          file ? 'border-indigo-700 bg-indigo-950/10' : '',
         ].join(' ')}
       >
         <input
@@ -168,8 +168,8 @@ function BggRanksImportSection() {
           onChange={e => handleFileDrop(e.target.files)}
         />
         {file ? (
-          <div className="flex items-center justify-center gap-2 text-sm text-violet-300">
-            <CheckCircle2 size={16} className="text-violet-400 flex-shrink-0" />
+          <div className="flex items-center justify-center gap-2 text-sm text-indigo-300">
+            <CheckCircle2 size={16} className="text-indigo-400 flex-shrink-0" />
             <span className="truncate max-w-xs">{file.name}</span>
             <span className="text-gray-500 text-xs flex-shrink-0">
               ({(file.size / 1024 / 1024).toFixed(1)} MB)
@@ -204,7 +204,7 @@ function BggRanksImportSection() {
             value={topN}
             onChange={e => setTopN(e.target.value === '' ? '' : Math.max(1, parseInt(e.target.value) || 1))}
             placeholder="например, 500"
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 placeholder-gray-600 focus:outline-none focus:border-indigo-500"
           />
         </div>
         <div className="flex items-end">
@@ -225,7 +225,7 @@ function BggRanksImportSection() {
           type="button"
           onClick={() => startImport.mutate()}
           disabled={!canRun}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded"
         >
           {startImport.isPending || isRunning
             ? <Loader2 size={12} className="animate-spin" />
@@ -244,7 +244,7 @@ function BggRanksImportSection() {
         <div className="mt-4 space-y-1.5">
           <div className="flex items-center justify-between text-xs text-gray-400">
             <span>
-              <span className="text-violet-300">{progress.phase}</span>
+              <span className="text-indigo-300">{progress.phase}</span>
               {progress.total > 0 && (
                 <> · {progress.current} / {progress.total}</>
               )}
@@ -253,7 +253,7 @@ function BggRanksImportSection() {
           {progress.total > 0 && (
             <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
               <div
-                className="bg-violet-500 h-full transition-all"
+                className="bg-indigo-500 h-full transition-all"
                 style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
               />
             </div>
@@ -265,10 +265,12 @@ function BggRanksImportSection() {
       {job.data && (isDone || isFailed) && (
         <div className={[
           'mt-3 p-3 rounded text-xs border',
-          isDone ? 'bg-gray-900 border-gray-800 text-gray-300' : 'bg-red-950/20 border-red-900/50 text-red-300',
+          isDone ? 'bg-zinc-900 border-zinc-800 text-zinc-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300',
         ].join(' ')}>
-          <div className="font-medium mb-1">
-            {isDone ? (dryRun ? '✓ Dry-run завершён' : '✓ Импорт завершён') : '✗ Ошибка'}
+          <div className="font-medium mb-1 inline-flex items-center gap-1.5">
+            {isDone
+              ? <><CheckCircle2 size={12} className="text-emerald-400" /> {dryRun ? 'Dry-run завершён' : 'Импорт завершён'}</>
+              : <><XCircle size={12} className="text-rose-400" /> Ошибка</>}
           </div>
           {isDone && (
             <div className="flex gap-6 mt-1">
@@ -353,7 +355,7 @@ function BggSearchSection() {
             value={query}
             onChange={e => setQuery(e.target.value)}
             placeholder="например, Carcassonne или Каркассон"
-            className="w-full pl-9 pr-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-violet-500"
+            className="w-full pl-9 pr-3 py-2 bg-gray-900 border border-gray-700 rounded text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
           />
         </div>
         <label className="flex items-center gap-1.5 text-xs text-gray-400 cursor-pointer">
@@ -405,7 +407,7 @@ function BggSearchSection() {
                       href={`https://boardgamegeek.com/boardgame/${hit.bgg_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="hover:text-violet-300"
+                      className="hover:text-indigo-300"
                     >
                       {hit.bgg_id}
                     </a>
@@ -417,7 +419,7 @@ function BggSearchSection() {
                       type="button"
                       onClick={() => importOne.mutate(hit.bgg_id)}
                       disabled={importOne.isPending && importOne.variables === hit.bgg_id}
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white rounded"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white rounded"
                     >
                       {importOne.isPending && importOne.variables === hit.bgg_id
                         ? <Loader2 size={11} className="animate-spin" />
@@ -509,7 +511,7 @@ function BggBatchSection() {
             <select
               value={scope}
               onChange={e => setScope(e.target.value as 'rank_le' | 'all_ranked')}
-              className="flex-shrink-0 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+              className="flex-shrink-0 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
             >
               <option value="rank_le">Топ-N по rank</option>
               <option value="all_ranked">Все ranked игры</option>
@@ -521,7 +523,7 @@ function BggBatchSection() {
                 max={100000}
                 value={rankLe}
                 onChange={e => setRankLe(Math.max(1, parseInt(e.target.value) || 1))}
-                className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+                className="flex-1 px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
               />
             )}
           </div>
@@ -537,7 +539,7 @@ function BggBatchSection() {
             min={0}
             value={skipRecentDays}
             onChange={e => setSkipRecentDays(Math.max(0, parseInt(e.target.value) || 0))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           />
         </div>
 
@@ -551,7 +553,7 @@ function BggBatchSection() {
             max={20}
             value={batchSize}
             onChange={e => setBatchSize(Math.min(20, Math.max(1, parseInt(e.target.value) || 1)))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           />
         </div>
 
@@ -572,7 +574,7 @@ function BggBatchSection() {
           type="button"
           onClick={() => startBatch.mutate()}
           disabled={startBatch.isPending || isRunning}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white rounded"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white rounded"
         >
           {startBatch.isPending || isRunning
             ? <Loader2 size={12} className="animate-spin" />
@@ -591,7 +593,7 @@ function BggBatchSection() {
         <div className="mt-4 space-y-1.5">
           <div className="flex items-center justify-between text-xs text-gray-400">
             <span>
-              <span className="text-violet-300">{progress.phase}</span>
+              <span className="text-indigo-300">{progress.phase}</span>
               {progress.total > 0 && (
                 <> · {progress.current} / {progress.total}</>
               )}
@@ -603,7 +605,7 @@ function BggBatchSection() {
           {progress.total > 0 && (
             <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
               <div
-                className="bg-violet-500 h-full transition-all"
+                className="bg-indigo-500 h-full transition-all"
                 style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
               />
             </div>
@@ -613,9 +615,11 @@ function BggBatchSection() {
 
       {/* Финальный результат */}
       {job.data?.result && (
-        <div className="mt-3 p-3 bg-gray-900 border border-gray-800 rounded text-xs text-gray-300">
-          <div className="font-medium mb-1">
-            {job.data.status === 'done' ? '✓ Завершено' : '✗ Ошибка'}
+        <div className="mt-3 p-3 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-300">
+          <div className="font-medium mb-1 inline-flex items-center gap-1.5">
+            {job.data.status === 'done'
+              ? <><CheckCircle2 size={12} className="text-emerald-400" /> Завершено</>
+              : <><XCircle size={12} className="text-rose-400" /> Ошибка</>}
           </div>
           <div className="grid grid-cols-3 gap-3 mt-2">
             <Stat label="Обогащено" value={(job.data.result as Record<string, number>).enriched ?? 0} />
