@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { useParams, Link, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink, Loader2, Share2, Check } from 'lucide-react'
-import clsx from 'clsx'
 import { toast } from 'sonner'
 import { fetchDbProduct } from '../lib/api'
 import { getStoreBadgeColor, getStoreLabel } from '../lib/stores'
 import { ProductDetail } from '../components/shared/ProductDetail'
+import { Button } from '../components/ui'
 
 /**
  * Полноценная страница товара. Открывается:
@@ -45,7 +45,7 @@ export function ProductPage() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center gap-2 text-gray-500">
+      <div className="p-4 flex items-center gap-2 text-zinc-500">
         <Loader2 size={14} className="animate-spin" /> Загрузка…
       </div>
     )
@@ -61,18 +61,19 @@ export function ProductPage() {
   }
 
   return (
-    <div className="space-y-4 max-w-5xl">
+    <div className="p-4 space-y-4 max-w-5xl">
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="sm"
+          icon={ArrowLeft}
           onClick={() => navigate(-1)}
-          className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-gray-200"
         >
-          <ArrowLeft size={14} /> Назад
-        </button>
+          Назад
+        </Button>
 
-        <span className={clsx('text-xs font-mono px-2 py-0.5 rounded', getStoreBadgeColor(product.store_slug))}>
+        <span className={`text-xs font-mono px-2 py-0.5 rounded ${getStoreBadgeColor(product.store_slug)}`}>
           {getStoreLabel(product.store_slug)}
         </span>
 
@@ -80,24 +81,25 @@ export function ProductPage() {
           href={product.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"
+          className="text-xs text-indigo-300 hover:text-indigo-200 flex items-center gap-1"
         >
           <ExternalLink size={11} /> в магазине
         </a>
 
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="sm"
+          icon={copied ? Check : Share2}
           onClick={handleShare}
-          className="ml-auto text-xs text-gray-400 hover:text-gray-200 flex items-center gap-1.5 px-2 py-1 rounded bg-gray-900 border border-gray-800"
           title="Скопировать ссылку"
+          className={copied ? 'text-emerald-300' : undefined}
         >
-          {copied ? <Check size={12} className="text-green-400" /> : <Share2 size={12} />}
           {copied ? 'Скопировано' : 'Поделиться'}
-        </button>
+        </Button>
       </div>
 
       {/* Карточка */}
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-5">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
         <ProductDetail product={product} />
       </div>
     </div>
@@ -106,10 +108,10 @@ export function ProductPage() {
 
 function ErrorState({ title, hint }: { title: string; hint?: string }) {
   return (
-    <div className="max-w-md py-12 text-center">
-      <h1 className="text-lg font-semibold text-gray-100">{title}</h1>
-      {hint && <p className="text-sm text-gray-500 mt-2">{hint}</p>}
-      <Link to="/" className="inline-block mt-4 text-sm text-violet-400 hover:text-violet-300">
+    <div className="p-4 max-w-md py-12 text-center">
+      <h1 className="text-lg font-semibold text-zinc-100">{title}</h1>
+      {hint && <p className="text-sm text-zinc-500 mt-2">{hint}</p>}
+      <Link to="/" className="inline-block mt-4 text-sm text-indigo-300 hover:text-indigo-200">
         ← К поиску
       </Link>
     </div>

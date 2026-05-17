@@ -14,13 +14,13 @@
  */
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import clsx from 'clsx'
 import { ProviderSidebar } from '../components/sources/ProviderSidebar'
 import { DetectionTab } from '../components/sources/DetectionTab'
 import { MatchParamsTab } from '../components/sources/MatchParamsTab'
 import { SourcesLogsTab } from '../components/sources/SourcesLogsTab'
 import { StagingTab } from '../components/sources/StagingTab'
 import { DEFAULT_PROVIDER, getProvider } from '../lib/sourceProviders'
+import { Tabs } from '../components/ui'
 
 type TabKey = 'detection' | 'staging' | 'match' | 'logs'
 
@@ -53,42 +53,33 @@ export function SourcesPage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-3rem)] -m-4 md:-m-6">
+    <div className="flex h-[calc(100vh-3rem)]">
       <ProviderSidebar current={providerSlug} onSelect={handleSelectProvider} />
 
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header: имя провайдера + табы */}
-        <header className="border-b border-gray-800 px-6 py-3 bg-gray-900/30">
+        <header className="border-b border-zinc-800 px-6 py-3 bg-zinc-900/30">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-lg font-semibold text-gray-100">
+              <h1 className="text-lg font-semibold text-zinc-100">
                 {provider?.label ?? providerSlug}
               </h1>
               {provider?.description && (
-                <p className="text-xs text-gray-500 mt-0.5 max-w-2xl">
+                <p className="text-xs text-zinc-500 mt-0.5 max-w-2xl">
                   {provider.description}
                 </p>
               )}
             </div>
           </div>
-          <nav className="flex gap-1 mt-3">
-            {TABS.map(t => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setTab(t.key)}
-                title={t.description}
-                className={clsx(
-                  'px-3 py-1.5 text-sm rounded-md transition-colors',
-                  tab === t.key
-                    ? 'bg-violet-900/50 text-violet-200'
-                    : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800/60',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </nav>
+          <Tabs value={tab} onValueChange={(v) => setTab(v as TabKey)} className="mt-3">
+            <Tabs.List>
+              {TABS.map(t => (
+                <Tabs.Trigger key={t.key} value={t.key}>
+                  <span title={t.description}>{t.label}</span>
+                </Tabs.Trigger>
+              ))}
+            </Tabs.List>
+          </Tabs>
         </header>
 
         <div className="flex-1 overflow-y-auto p-6">

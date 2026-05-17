@@ -18,9 +18,10 @@ import {
   CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from 'recharts'
-import { CheckCircle2, XCircle, RefreshCw, Activity } from 'lucide-react'
+import { RefreshCw, Activity } from 'lucide-react'
 import clsx from 'clsx'
 import { recordPing, fetchStatusHistory, type PingRecord } from '../lib/api'
+import { Button, IconButton, StatusDot } from '../components/ui'
 
 // ── Window options ────────────────────────────────────────────────────────────
 
@@ -66,38 +67,33 @@ export function StatusPage() {
   const latest = items[0] ?? null
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6">
+    <div className="p-4 max-w-4xl mx-auto space-y-6">
       <Header latest={latest} isPinging={ping.isPending} onPing={() => ping.mutate()} />
 
-      {/* Window selector */}
+      {/* Window selector — сегментированный switch */}
       <div className="flex items-center gap-1">
-        <span className="text-xs text-gray-500 mr-2">Период:</span>
+        <span className="text-xs text-zinc-500 mr-2">Период:</span>
         {WINDOWS.map(w => (
-          <button
+          <Button
             key={w.hours}
-            type="button"
+            size="xs"
+            variant={hours === w.hours ? 'primary' : 'ghost'}
             onClick={() => setHours(w.hours)}
-            className={clsx(
-              'px-2.5 py-1 text-xs rounded',
-              hours === w.hours
-                ? 'bg-violet-700 text-white'
-                : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800',
-            )}
           >
             {w.label}
-          </button>
+          </Button>
         ))}
-        <span className="ml-auto text-xs text-gray-600">
+        <span className="ml-auto text-xs text-zinc-600 font-mono tabular-nums">
           {items.length} точек
         </span>
       </div>
 
       {history.isLoading && (
-        <div className="text-center py-12 text-gray-500 text-sm">Загрузка…</div>
+        <div className="text-center py-12 text-zinc-500 text-sm">Загрузка…</div>
       )}
 
       {items.length === 0 && !history.isLoading && (
-        <div className="text-center py-12 text-gray-500 text-sm">
+        <div className="text-center py-12 text-zinc-500 text-sm">
           Пока нет данных за этот период. Оставайтесь на странице — данные накапливаются.
         </div>
       )}
@@ -125,12 +121,12 @@ function Header({
   return (
     <div className="flex items-start justify-between">
       <div>
-        <h1 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
-          <Activity size={18} className="text-violet-400" />
+        <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
+          <Activity size={18} className="text-indigo-400" />
           Статус сервисов
         </h1>
         {latest && (
-          <p className="text-xs text-gray-500 mt-0.5">
+          <p className="text-xs text-zinc-500 mt-0.5">
             Последний пинг:{' '}
             {new Date(latest.checked_at).toLocaleString('ru-RU', { hour12: false })}
           </p>
@@ -140,32 +136,30 @@ function Header({
       <div className="flex items-center gap-4">
         {latest && (
           <div className="flex items-center gap-3">
-            <ServiceDot name="parsers" status={latest.parsers_status} />
-            <ServiceDot name="catalog" status={latest.catalog_status} />
+            <ServiceLabel name="parsers" status={latest.parsers_status} />
+            <ServiceLabel name="catalog" status={latest.catalog_status} />
           </div>
         )}
-        <button
-          type="button"
-          onClick={onPing}
-          disabled={isPinging}
+        <IconButton
+          icon={RefreshCw}
+          variant="ghost"
+          size="sm"
+          aria-label="Пинговать сейчас"
           title="Пинговать сейчас"
-          className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-50"
-        >
-          <RefreshCw size={14} className={isPinging ? 'animate-spin' : ''} />
-        </button>
+          loading={isPinging}
+          onClick={onPing}
+        />
       </div>
     </div>
   )
 }
 
-function ServiceDot({ name, status }: { name: string; status: string }) {
+function ServiceLabel({ name, status }: { name: string; status: string }) {
   const ok = status === 'ok'
   return (
     <div className="flex items-center gap-1.5 text-xs">
-      {ok
-        ? <CheckCircle2 size={13} className="text-green-400" />
-        : <XCircle size={13} className="text-red-400" />}
-      <span className={ok ? 'text-green-400' : 'text-red-400'}>{name}</span>
+      <StatusDot status={ok ? 'done' : 'failed'} />
+      <span className={ok ? 'text-emerald-300' : 'text-rose-300'}>{name}</span>
     </div>
   )
 }
@@ -202,27 +196,28 @@ function UnmatchedChart({ data }: { data: PingRecord[] }) {
 
   return (
     <section>
-      <h2 className="text-sm font-semibold text-gray-300 mb-3">
+      <h2 className="text-sm font-semibold text-zinc-300 mb-3">
         Unmatched offers
       </h2>
       <ResponsiveContainer width="100%" height={220}>
         <AreaChart data={points} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
           <defs>
             <linearGradient id="gradUnmatched" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.3} />
-              <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+              {/* indigo-500 — accent design-tokens */}
+              <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
             </linearGradient>
             <linearGradient id="gradGood" x1="0" y1="0" x2="0" y2="1">
               <stop offset="5%" stopColor="#10b981" stopOpacity={0.2} />
               <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-          <XAxis dataKey="ts" tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
-          <YAxis tick={{ fill: '#6b7280', fontSize: 10 }} width={40} allowDecimals={false} />
+          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+          <XAxis dataKey="ts" tick={{ fill: '#71717a', fontSize: 10 }} interval="preserveStartEnd" />
+          <YAxis tick={{ fill: '#71717a', fontSize: 10 }} width={40} allowDecimals={false} />
           <Tooltip
-            contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }}
-            labelStyle={{ color: '#9ca3af' }}
+            contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
+            labelStyle={{ color: '#a1a1aa' }}
             formatter={(v: number, name: string) => [
               v?.toLocaleString('ru-RU') ?? '—',
               name === 'unmatched' ? 'Unmatched' : 'Good (≥0.6)',
@@ -230,12 +225,12 @@ function UnmatchedChart({ data }: { data: PingRecord[] }) {
           />
           <Legend
             formatter={(v) => v === 'unmatched' ? 'Unmatched' : 'Good (≥0.6)'}
-            wrapperStyle={{ fontSize: 11, color: '#9ca3af' }}
+            wrapperStyle={{ fontSize: 11, color: '#a1a1aa' }}
           />
           <Area
             type="monotone"
             dataKey="unmatched"
-            stroke="#7c3aed"
+            stroke="#6366f1"
             strokeWidth={2}
             fill="url(#gradUnmatched)"
             dot={false}
@@ -264,7 +259,7 @@ function GamesChart({ data }: { data: PingRecord[] }) {
 
   return (
     <section>
-      <h2 className="text-sm font-semibold text-gray-300 mb-3">
+      <h2 className="text-sm font-semibold text-zinc-300 mb-3">
         Игры в каталоге
       </h2>
       <ResponsiveContainer width="100%" height={160}>
@@ -275,17 +270,17 @@ function GamesChart({ data }: { data: PingRecord[] }) {
               <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
             </linearGradient>
           </defs>
-          <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
-          <XAxis dataKey="ts" tick={{ fill: '#6b7280', fontSize: 10 }} interval="preserveStartEnd" />
+          <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+          <XAxis dataKey="ts" tick={{ fill: '#71717a', fontSize: 10 }} interval="preserveStartEnd" />
           <YAxis
-            tick={{ fill: '#6b7280', fontSize: 10 }}
+            tick={{ fill: '#71717a', fontSize: 10 }}
             width={55}
             allowDecimals={false}
             tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}K` : String(v)}
           />
           <Tooltip
-            contentStyle={{ background: '#111827', border: '1px solid #374151', borderRadius: 6, fontSize: 12 }}
-            labelStyle={{ color: '#9ca3af' }}
+            contentStyle={{ background: '#18181b', border: '1px solid #3f3f46', borderRadius: 6, fontSize: 12 }}
+            labelStyle={{ color: '#a1a1aa' }}
             formatter={(v: number) => [v?.toLocaleString('ru-RU') ?? '—', 'Игры']}
           />
           <Area
@@ -308,13 +303,13 @@ function GamesChart({ data }: { data: PingRecord[] }) {
 function StatusTimeline({ items }: { items: PingRecord[] }) {
   return (
     <section>
-      <h2 className="text-sm font-semibold text-gray-300 mb-3">
+      <h2 className="text-sm font-semibold text-zinc-300 mb-3">
         Лента событий{' '}
-        <span className="text-gray-600 font-normal text-xs">(последние {items.length})</span>
+        <span className="text-zinc-600 font-normal text-xs">(последние {items.length})</span>
       </h2>
-      <div className="border border-gray-800 rounded overflow-hidden">
+      <div className="border border-zinc-800 rounded overflow-hidden">
         <table className="w-full text-xs">
-          <thead className="bg-gray-900 border-b border-gray-800 text-gray-400">
+          <thead className="bg-zinc-900 border-b border-zinc-800 text-zinc-400">
             <tr>
               <th className="text-left px-3 py-2 font-normal">Время</th>
               <th className="text-center px-3 py-2 font-normal">parsers</th>
@@ -326,8 +321,8 @@ function StatusTimeline({ items }: { items: PingRecord[] }) {
           </thead>
           <tbody>
             {items.map(p => (
-              <tr key={p.id} className="border-b border-gray-800 last:border-0 hover:bg-gray-900/40">
-                <td className="px-3 py-1.5 text-gray-400 font-mono whitespace-nowrap">
+              <tr key={p.id} className="border-b border-zinc-800 last:border-0 hover:bg-zinc-800/30">
+                <td className="px-3 py-1.5 text-zinc-400 font-mono whitespace-nowrap">
                   {new Date(p.checked_at).toLocaleString('ru-RU', {
                     month: '2-digit', day: '2-digit',
                     hour: '2-digit', minute: '2-digit',
@@ -335,20 +330,20 @@ function StatusTimeline({ items }: { items: PingRecord[] }) {
                   })}
                 </td>
                 <td className="px-3 py-1.5 text-center">
-                  <StatusDot status={p.parsers_status} error={p.parsers_error} />
+                  <TimelineDot status={p.parsers_status} error={p.parsers_error} />
                 </td>
                 <td className="px-3 py-1.5 text-center">
-                  <StatusDot status={p.catalog_status} error={p.catalog_error} />
+                  <TimelineDot status={p.catalog_status} error={p.catalog_error} />
                 </td>
-                <td className="px-3 py-1.5 text-right font-mono text-gray-300">
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-300">
                   {p.unmatched_offers?.toLocaleString('ru-RU') ?? '—'}
                 </td>
-                <td className="px-3 py-1.5 text-right font-mono text-emerald-400">
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-emerald-400">
                   {p.unmatched_good != null && p.unmatched_good > 0
                     ? p.unmatched_good.toLocaleString('ru-RU')
-                    : <span className="text-gray-600">—</span>}
+                    : <span className="text-zinc-600">—</span>}
                 </td>
-                <td className="px-3 py-1.5 text-right font-mono text-gray-400">
+                <td className="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">
                   {p.total_games?.toLocaleString('ru-RU') ?? '—'}
                 </td>
               </tr>
@@ -360,13 +355,13 @@ function StatusTimeline({ items }: { items: PingRecord[] }) {
   )
 }
 
-function StatusDot({ status, error }: { status: string; error?: string | null }) {
+function TimelineDot({ status, error }: { status: string; error?: string | null }) {
   const ok = status === 'ok'
   return (
     <span title={error ?? status} className="inline-flex justify-center">
       <span className={clsx(
         'inline-block w-2 h-2 rounded-full',
-        ok ? 'bg-green-500' : 'bg-red-500',
+        ok ? 'bg-emerald-500' : 'bg-rose-500',
       )} />
     </span>
   )

@@ -44,9 +44,18 @@ import { MatchLogTab } from '../components/catalog/MatchLogTab'
 import { useCatalogTableStore } from '../store/catalog'
 import { SuggestInput } from '../components/shared/SuggestInput'
 import { useSearchHistory } from '../lib/searchHistory'
-import { Download, Plus, Settings2 } from 'lucide-react'
+import { Download, Plus, Settings2, CheckCircle2 } from 'lucide-react'
+import { Tabs, Button, Badge } from '../components/ui'
 
 type Tab = 'catalog' | 'matching' | 'match-log' | 'promotion' | 'bgg'
+
+const TAB_LABELS: Record<Tab, string> = {
+  'catalog':    'Каталог',
+  'matching':   'Очередь матчинга',
+  'match-log':  'Журнал матчинга',
+  'promotion':  'Промоушен Dicefest',
+  'bgg':        'BGG',
+}
 
 export function CatalogPage() {
   const [tab, setTab] = useState<Tab>('catalog')
@@ -60,28 +69,21 @@ export function CatalogPage() {
   })
 
   return (
-    <div className="space-y-4">
+    <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-gray-100">Каталог настольных игр</h1>
+        <h1 className="text-lg font-semibold text-zinc-100">Каталог настольных игр</h1>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 text-white rounded"
-          >
-            <Plus size={12} /> Новая игра
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowImport(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded"
-          >
-            <Download size={12} /> Импорт BGG / Tesera
-          </button>
+          <Button variant="success" size="sm" icon={Plus} onClick={() => setShowCreate(true)}>
+            Новая игра
+          </Button>
+          <Button variant="primary" size="sm" icon={Download} onClick={() => setShowImport(true)}>
+            Импорт BGG / Tesera
+          </Button>
           <BackupButton />
-          <div className="text-xs text-gray-400">
-            catalog: {health.isError ? <span className="text-red-400">недоступен</span> :
-              health.data ? <span className="text-emerald-400">{health.data.status}</span> :
+          <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+            catalog:
+            {health.isError ? <Badge status="failed" size="xs">недоступен</Badge> :
+              health.data ? <Badge status="done" size="xs">{health.data.status}</Badge> :
               <span>...</span>}
           </div>
         </div>
@@ -89,32 +91,19 @@ export function CatalogPage() {
       {showImport && <ImportWizard onClose={() => setShowImport(false)} />}
       {showCreate && <GameEditor mode="create" onClose={() => setShowCreate(false)} />}
 
-      <div className="flex gap-2 border-b border-gray-800">
-        {(['catalog', 'matching', 'match-log', 'promotion', 'bgg'] as Tab[]).map(t => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`px-3 py-2 text-sm transition-colors ${
-              tab === t
-                ? 'text-violet-300 border-b-2 border-violet-500'
-                : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {t === 'catalog' ? 'Каталог'
-              : t === 'matching' ? 'Очередь матчинга'
-              : t === 'match-log' ? 'Журнал матчинга'
-              : t === 'promotion' ? 'Промоушен Dicefest'
-              : 'BGG'}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+        <Tabs.List>
+          {(['catalog', 'matching', 'match-log', 'promotion', 'bgg'] as Tab[]).map(t => (
+            <Tabs.Trigger key={t} value={t}>{TAB_LABELS[t]}</Tabs.Trigger>
+          ))}
+        </Tabs.List>
 
-      {tab === 'catalog'  ? <CatalogSection />
-        : tab === 'matching' ? <MatchingSection />
-        : tab === 'match-log' ? <MatchLogTab />
-        : tab === 'promotion' ? <PromotionPanel provider="dicefest" />
-        : <BggImportPanel />}
+        <Tabs.Content value="catalog" className="pt-4"><CatalogSection /></Tabs.Content>
+        <Tabs.Content value="matching" className="pt-4"><MatchingSection /></Tabs.Content>
+        <Tabs.Content value="match-log" className="pt-4"><MatchLogTab /></Tabs.Content>
+        <Tabs.Content value="promotion" className="pt-4"><PromotionPanel provider="dicefest" /></Tabs.Content>
+        <Tabs.Content value="bgg" className="pt-4"><BggImportPanel /></Tabs.Content>
+      </Tabs>
     </div>
   )
 }
@@ -209,8 +198,8 @@ const COLUMNS: LocalColumnDef[] = [
     id: 'is_localized_ru', label: 'RU?', defaultVisible: false, defaultSize: 60,
     cellClass: 'text-center text-xs',
     render: g => g.is_localized_ru
-      ? <span className="text-emerald-400">✓</span>
-      : <span className="text-gray-600">—</span>,
+      ? <CheckCircle2 size={12} className="text-emerald-400" />
+      : <span className="text-zinc-600">—</span>,
   },
   {
     id: 'preorder_price', label: 'preorder', defaultVisible: false, defaultSize: 100,

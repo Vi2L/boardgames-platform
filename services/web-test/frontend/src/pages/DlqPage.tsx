@@ -13,11 +13,12 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
-  Loader2, RefreshCw, Trash2, Inbox, AlertTriangle, PlayCircle,
+  Loader2, RefreshCw, Trash2, Inbox, AlertTriangle, PlayCircle, CheckCircle2,
 } from 'lucide-react'
 import {
   fetchDlq, replayDlq, replayDlqAll, deleteDlq,
 } from '../lib/api'
+import { Button, IconButton, Badge, EmptyState } from '../components/ui'
 
 export function DlqPage() {
   const queryClient = useQueryClient()
@@ -43,7 +44,7 @@ export function DlqPage() {
   const replayAll = useMutation({
     mutationFn: () => replayDlqAll(50),
     onSuccess: (r) => {
-      toast.success(`Replay all: ✓ ${r.success}, ✗ ${r.failed} (всего ${r.replayed})`)
+      toast.success(`Replay all: успех ${r.success}, ошибок ${r.failed} (всего ${r.replayed})`)
       invalidate()
     },
     onError: (e) => toast.error(`${e}`),
@@ -58,12 +59,12 @@ export function DlqPage() {
   const total = list.data?.total ?? 0
 
   return (
-    <div className="space-y-4">
+    <div className="p-4 space-y-4">
       <div>
-        <h1 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
+        <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
           <Inbox size={18} /> DLQ — catalog ingest
         </h1>
-        <p className="text-xs text-gray-500 mt-0.5">
+        <p className="text-xs text-zinc-500 mt-0.5">
           Зависшие батчи с парсеров, которые catalog не принял (downtime,
           5xx и т.п.). Replay переотправляет payload — при успехе запись
           удаляется из DLQ.
@@ -71,96 +72,112 @@ export function DlqPage() {
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
-        <span className={total > 0 ? 'text-amber-400 text-sm' : 'text-emerald-400 text-sm'}>
-          {total > 0 ? <><AlertTriangle size={12} className="inline mr-1" />{total} зависших батчей</>
-                     : '✓ DLQ пуст'}
-        </span>
-        <button
+        {total > 0 ? (
+          <Badge tone="danger" size="sm" dot={false}>
+            <AlertTriangle size={11} /> {total} зависших
+          </Badge>
+        ) : (
+          <Badge tone="ok" size="sm" dot={false}>
+            <CheckCircle2 size={11} /> DLQ пуст
+          </Badge>
+        )}
+        <Button
+          variant="ghost"
+          icon={RefreshCw}
+          loading={list.isFetching}
           onClick={() => list.refetch()}
-          className="ml-auto flex items-center gap-1 px-2 py-1 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800 rounded"
+          className="ml-auto"
         >
-          <RefreshCw size={11} className={list.isFetching ? 'animate-spin' : ''} /> Обновить
-        </button>
+          Обновить
+        </Button>
         {total > 0 && (
-          <button
+          <Button
+            variant="primary"
+            icon={PlayCircle}
+            loading={replayAll.isPending}
             onClick={() => {
               if (window.confirm(`Replay всех ${Math.min(total, 50)} зависших батчей?`))
                 replayAll.mutate()
             }}
-            disabled={replayAll.isPending}
-            className="px-3 py-1 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded flex items-center gap-1"
           >
-            {replayAll.isPending ? <Loader2 size={11} className="animate-spin" /> : <PlayCircle size={11} />}
             Replay all
-          </button>
+          </Button>
         )}
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
         <table className="w-full text-xs">
-          <thead className="bg-gray-950 text-gray-500 text-left">
+          <thead className="bg-zinc-950 text-zinc-500 text-left">
             <tr>
-              <th className="px-3 py-2">id</th>
-              <th className="px-3 py-2">создано</th>
-              <th className="px-3 py-2">последняя попытка</th>
-              <th className="px-3 py-2 text-right">попыток</th>
-              <th className="px-3 py-2 text-right">payload</th>
-              <th className="px-3 py-2">last_error</th>
-              <th className="px-3 py-2 text-right w-32">действия</th>
+              <th className="px-3 py-2 font-normal">id</th>
+              <th className="px-3 py-2 font-normal">создано</th>
+              <th className="px-3 py-2 font-normal">последняя попытка</th>
+              <th className="px-3 py-2 font-normal text-right">попыток</th>
+              <th className="px-3 py-2 font-normal text-right">payload</th>
+              <th className="px-3 py-2 font-normal">last_error</th>
+              <th className="px-3 py-2 font-normal text-right w-32">действия</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-800">
+          <tbody className="divide-y divide-zinc-800">
             {items.map(it => (
-              <tr key={it.id} className="hover:bg-gray-850">
-                <td className="px-3 py-2 font-mono text-gray-500">{it.id}</td>
-                <td className="px-3 py-2 font-mono text-gray-400 whitespace-nowrap">
+              <tr key={it.id} className="hover:bg-zinc-800/40">
+                <td className="px-3 py-2 font-mono text-zinc-500">{it.id}</td>
+                <td className="px-3 py-2 font-mono text-zinc-400 whitespace-nowrap">
                   {new Date(it.created_at).toLocaleString('ru-RU', { hour12: false })}
                 </td>
-                <td className="px-3 py-2 font-mono text-gray-500 whitespace-nowrap">
+                <td className="px-3 py-2 font-mono text-zinc-500 whitespace-nowrap">
                   {new Date(it.last_attempt_at).toLocaleString('ru-RU', { hour12: false })}
                 </td>
-                <td className="px-3 py-2 text-right font-mono text-amber-400">
+                <td className="px-3 py-2 text-right font-mono text-amber-400 tabular-nums">
                   {it.attempt_count}
                 </td>
-                <td className="px-3 py-2 text-right font-mono text-gray-500">
+                <td className="px-3 py-2 text-right font-mono text-zinc-500 tabular-nums">
                   {(it.payload_size / 1024).toFixed(1)} KB
                 </td>
-                <td className="px-3 py-2 text-red-300 truncate max-w-md font-mono"
+                <td className="px-3 py-2 text-rose-300 truncate max-w-md font-mono"
                     title={it.last_error ?? ''}>
                   {it.last_error ?? '—'}
                 </td>
-                <td className="px-3 py-2 text-right space-x-1">
-                  <button
-                    type="button"
-                    onClick={() => replayOne.mutate(it.id)}
-                    disabled={replayOne.isPending}
-                    title="Replay этой записи"
-                    className="p-1 text-violet-300 hover:text-violet-200 hover:bg-violet-950/40 rounded disabled:opacity-40"
-                  >
-                    <PlayCircle size={12} />
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (window.confirm(`Удалить DLQ #${it.id} без попытки replay?`))
-                        remove.mutate(it.id)
-                    }}
-                    disabled={remove.isPending}
-                    title="Удалить запись (отказ от данных)"
-                    className="p-1 text-gray-500 hover:text-red-400 hover:bg-red-950/40 rounded disabled:opacity-40"
-                  >
-                    <Trash2 size={12} />
-                  </button>
+                <td className="px-3 py-2 text-right">
+                  <div className="inline-flex items-center gap-1">
+                    <IconButton
+                      icon={PlayCircle}
+                      size="xs"
+                      variant="ghost"
+                      aria-label="Replay этой записи"
+                      title="Replay этой записи"
+                      disabled={replayOne.isPending}
+                      onClick={() => replayOne.mutate(it.id)}
+                    />
+                    <IconButton
+                      icon={Trash2}
+                      size="xs"
+                      variant="ghost"
+                      aria-label="Удалить запись"
+                      title="Удалить запись (отказ от данных)"
+                      disabled={remove.isPending}
+                      onClick={() => {
+                        if (window.confirm(`Удалить DLQ #${it.id} без попытки replay?`))
+                          remove.mutate(it.id)
+                      }}
+                    />
+                  </div>
                 </td>
               </tr>
             ))}
             {items.length === 0 && !list.isLoading && (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-emerald-400">
-                ✓ Зависших батчей нет — все ingest'ы успешны.
-              </td></tr>
+              <tr>
+                <td colSpan={7} className="px-3 py-8">
+                  <EmptyState
+                    icon={CheckCircle2}
+                    title="Зависших батчей нет"
+                    description="Все ingest'ы успешны."
+                  />
+                </td>
+              </tr>
             )}
             {list.isLoading && (
-              <tr><td colSpan={7} className="px-3 py-8 text-center text-gray-500">
+              <tr><td colSpan={7} className="px-3 py-8 text-center text-zinc-500">
                 <Loader2 size={14} className="animate-spin inline" />
               </td></tr>
             )}

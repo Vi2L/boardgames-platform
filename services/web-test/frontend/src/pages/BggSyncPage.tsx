@@ -14,13 +14,13 @@
 import { useState } from 'react'
 import { Calendar, ListChecks, Flame, BookOpen, AlertCircle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
-import clsx from 'clsx'
 
 import { SchedulerHealth } from '../components/bgg-sync/SchedulerHealth'
 import { JobHistoryTable } from '../components/bgg-sync/JobHistoryTable'
 import { HotnessPanel } from '../components/bgg-sync/HotnessPanel'
 import { GeeklistPanel } from '../components/bgg-sync/GeeklistPanel'
 import { NoBggList } from '../components/bgg-sync/NoBggList'
+import { Tabs } from '../components/ui'
 
 type Tab = 'schedule' | 'history' | 'hotness' | 'geeklist' | 'no-bgg'
 
@@ -36,43 +36,31 @@ export function BggSyncPage() {
   const [tab, setTab] = useState<Tab>('schedule')
 
   return (
-    <div className="space-y-4">
+    <div className="p-4 space-y-4">
       <header className="flex items-baseline gap-3">
-        <h1 className="text-lg font-bold text-gray-100">BGG Sync</h1>
-        <span className="text-xs text-gray-500">
+        <h1 className="text-lg font-semibold text-zinc-100">BGG Sync</h1>
+        <span className="text-xs text-zinc-500">
           Периодическая синхронизация с BoardGameGeek: ручные триггеры, история,
           расписание, snapshot'ы Hotness и GeekList.
         </span>
       </header>
 
-      {/* Tab strip */}
-      <nav className="flex items-center gap-1 border-b border-gray-800">
-        {TABS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            type="button"
-            onClick={() => setTab(id)}
-            className={clsx(
-              'flex items-center gap-1.5 px-3 py-2 text-sm border-b-2 -mb-px transition-colors',
-              tab === id
-                ? 'border-violet-500 text-violet-300'
-                : 'border-transparent text-gray-400 hover:text-gray-200',
-            )}
-          >
-            <Icon size={14} />
-            {label}
-          </button>
-        ))}
-      </nav>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+        <Tabs.List>
+          {TABS.map(({ id, label, icon: Icon }) => (
+            <Tabs.Trigger key={id} value={id}>
+              <Icon size={12} />
+              {label}
+            </Tabs.Trigger>
+          ))}
+        </Tabs.List>
 
-      {/* Tab content */}
-      <div>
-        {tab === 'schedule' && <SchedulerHealth />}
-        {tab === 'history' && <JobHistoryTable />}
-        {tab === 'hotness' && <HotnessPanel />}
-        {tab === 'geeklist' && <GeeklistPanel />}
-        {tab === 'no-bgg' && <NoBggList />}
-      </div>
+        <Tabs.Content value="schedule" className="pt-4"><SchedulerHealth /></Tabs.Content>
+        <Tabs.Content value="history" className="pt-4"><JobHistoryTable /></Tabs.Content>
+        <Tabs.Content value="hotness" className="pt-4"><HotnessPanel /></Tabs.Content>
+        <Tabs.Content value="geeklist" className="pt-4"><GeeklistPanel /></Tabs.Content>
+        <Tabs.Content value="no-bgg" className="pt-4"><NoBggList /></Tabs.Content>
+      </Tabs>
     </div>
   )
 }
