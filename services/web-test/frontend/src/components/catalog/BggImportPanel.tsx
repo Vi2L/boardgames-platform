@@ -25,6 +25,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { CheckCircle2, ChevronRight, Loader2, Search, Download, Play, Upload, XCircle } from 'lucide-react'
+import { JobView, importJobToJobLike } from '../jobs'
 
 import {
   searchBgg,
@@ -232,72 +233,30 @@ function BggRanksImportSection() {
             : <Play size={12} />}
           {dryRun ? 'Dry-run' : 'Импортировать'}
         </button>
-        {activeJobId && (
-          <span className="text-xs text-gray-500">
-            Job #{activeJobId} · {job.data?.status ?? '...'}
-          </span>
-        )}
       </div>
 
-      {/* Progress */}
-      {progress && (
-        <div className="mt-4 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-gray-400">
-            <span>
-              <span className="text-indigo-300">{progress.phase}</span>
-              {progress.total > 0 && (
-                <> · {progress.current} / {progress.total}</>
-              )}
-            </span>
-          </div>
-          {progress.total > 0 && (
-            <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-              <div
-                className="bg-indigo-500 h-full transition-all"
-                style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
-              />
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Result */}
-      {job.data && (isDone || isFailed) && (
-        <div className={[
-          'mt-3 p-3 rounded text-xs border',
-          isDone ? 'bg-zinc-900 border-zinc-800 text-zinc-300' : 'bg-rose-500/10 border-rose-500/30 text-rose-300',
-        ].join(' ')}>
-          <div className="font-medium mb-1 inline-flex items-center gap-1.5">
-            {isDone
-              ? <><CheckCircle2 size={12} className="text-emerald-400" /> {dryRun ? 'Dry-run завершён' : 'Импорт завершён'}</>
-              : <><XCircle size={12} className="text-rose-400" /> Ошибка</>}
-          </div>
+      {/* JobView · unified template (см. components/jobs/) */}
+      {job.data && (
+        <div className="mt-4">
+          <JobView job={importJobToJobLike(job.data)} />
+          {/* Domain-specific: дополнение для dry-run / live-импорта */}
           {isDone && (
-            <div className="flex gap-6 mt-1">
-              <Stat label={dryRun ? 'Будет импортировано' : 'Импортировано'} value={enrichedCount} />
-            </div>
-          )}
-          {isFailed && job.data.error && (
-            <div className="mt-1 font-mono text-[11px] text-red-400 break-all">{job.data.error}</div>
-          )}
-          {isDone && !dryRun && enrichedCount > 0 && (
-            <div className="mt-2 text-gray-500 text-[11px]">
-              Игры проиндексированы. Перейдите к «Batch-обогащению» ниже чтобы заполнить описания через BGG XML API.
+            <div className="mt-3 p-3 rounded text-xs border bg-zinc-900 border-zinc-800 text-zinc-300">
+              <div className="font-medium mb-1 inline-flex items-center gap-1.5">
+                <CheckCircle2 size={12} className="text-emerald-400" />
+                {dryRun ? 'Dry-run завершён' : 'Импорт завершён'}
+              </div>
+              <div className="flex gap-6 mt-1">
+                <Stat label={dryRun ? 'Будет импортировано' : 'Импортировано'} value={enrichedCount} />
+              </div>
+              {!dryRun && enrichedCount > 0 && (
+                <div className="mt-2 text-zinc-500 text-xxs">
+                  Игры проиндексированы. Перейдите к «Batch-обогащению» ниже чтобы заполнить описания через BGG XML API.
+                </div>
+              )}
             </div>
           )}
         </div>
-      )}
-
-      {/* Log */}
-      {job.data?.log_lines && job.data.log_lines.length > 0 && (
-        <details className="mt-3 group">
-          <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-200">
-            Лог ({job.data.log_lines.length} строк)
-          </summary>
-          <pre className="mt-2 max-h-48 overflow-y-auto text-[11px] font-mono text-gray-400 bg-gray-950 p-2 rounded border border-gray-800 whitespace-pre-wrap">
-            {job.data.log_lines.slice(-50).join('\n')}
-          </pre>
-        </details>
       )}
     </section>
   )
@@ -581,66 +540,27 @@ function BggBatchSection() {
             : <Play size={12} />}
           {dryRun ? 'Dry-run' : 'Запустить enrich'}
         </button>
-        {activeJobId && (
-          <span className="text-xs text-gray-500">
-            Job #{activeJobId} · {job.data?.status ?? '...'}
-          </span>
-        )}
       </div>
 
-      {/* Прогресс */}
-      {progress && (
-        <div className="mt-4 space-y-1.5">
-          <div className="flex items-center justify-between text-xs text-gray-400">
-            <span>
-              <span className="text-indigo-300">{progress.phase}</span>
-              {progress.total > 0 && (
-                <> · {progress.current} / {progress.total}</>
-              )}
-            </span>
-            {progress.current_title && (
-              <span className="text-gray-500 truncate ml-3">{progress.current_title}</span>
-            )}
-          </div>
-          {progress.total > 0 && (
-            <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
-              <div
-                className="bg-indigo-500 h-full transition-all"
-                style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
-              />
+      {/* Unified JobView · phase strip + progress + stats + log */}
+      {job.data && (
+        <div className="mt-4">
+          <JobView job={importJobToJobLike(job.data)} />
+          {job.data.result && job.data.status === 'done' && (
+            <div className="mt-3 p-3 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-300">
+              <div className="font-medium mb-2 inline-flex items-center gap-1.5">
+                <CheckCircle2 size={12} className="text-emerald-400" /> Завершено
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <Stat label="Обогащено" value={(job.data.result as Record<string, number>).enriched ?? 0} />
+                <Stat label="Пропущено" value={(job.data.result as Record<string, number>).skipped ?? 0} />
+                <Stat label="Ошибки" value={(job.data.result as Record<string, number>).failed ?? 0} className={
+                  ((job.data.result as Record<string, number>).failed ?? 0) > 0 ? 'text-rose-300' : ''
+                } />
+              </div>
             </div>
           )}
         </div>
-      )}
-
-      {/* Финальный результат */}
-      {job.data?.result && (
-        <div className="mt-3 p-3 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-300">
-          <div className="font-medium mb-1 inline-flex items-center gap-1.5">
-            {job.data.status === 'done'
-              ? <><CheckCircle2 size={12} className="text-emerald-400" /> Завершено</>
-              : <><XCircle size={12} className="text-rose-400" /> Ошибка</>}
-          </div>
-          <div className="grid grid-cols-3 gap-3 mt-2">
-            <Stat label="Обогащено" value={(job.data.result as Record<string, number>).enriched ?? 0} />
-            <Stat label="Пропущено" value={(job.data.result as Record<string, number>).skipped ?? 0} />
-            <Stat label="Ошибки" value={(job.data.result as Record<string, number>).failed ?? 0} className={
-              ((job.data.result as Record<string, number>).failed ?? 0) > 0 ? 'text-red-300' : ''
-            } />
-          </div>
-        </div>
-      )}
-
-      {/* Ring-buffer last 200 строк лога */}
-      {job.data?.log_lines && job.data.log_lines.length > 0 && (
-        <details className="mt-3 group">
-          <summary className="text-xs text-gray-400 cursor-pointer hover:text-gray-200">
-            Лог ({job.data.log_lines.length} строк)
-          </summary>
-          <pre className="mt-2 max-h-60 overflow-y-auto text-[11px] font-mono text-gray-400 bg-gray-950 p-2 rounded border border-gray-800 whitespace-pre-wrap">
-            {job.data.log_lines.slice(-50).join('\n')}
-          </pre>
-        </details>
       )}
     </section>
   )
@@ -649,8 +569,8 @@ function BggBatchSection() {
 function Stat({ label, value, className = '' }: { label: string; value: number; className?: string }) {
   return (
     <div>
-      <div className="text-[10px] uppercase tracking-wide text-gray-500">{label}</div>
-      <div className={`text-lg font-mono ${className || 'text-gray-100'}`}>{value}</div>
+      <div className="text-xxs uppercase tracking-widest text-zinc-500">{label}</div>
+      <div className={`text-lg font-mono tabular-nums ${className || 'text-zinc-100'}`}>{value}</div>
     </div>
   )
 }
