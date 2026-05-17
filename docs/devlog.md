@@ -8,6 +8,81 @@
 
 ---
 
+## 2026-05-18 · [CAT-FILTER] фильтр «только настолки» на 3 слоях (parsers + ingest + LLM)
+
+**Что сделано:** трёхслойная защита от не-настольных товаров. Раньше на
+запрос «книга» парсеры avito/ozon/onlinetrade возвращали книги/одежду,
+catalog их сматчивал auto-T1 на похожие игры (книга «Каркассон.
+Жан-Жак Руссо» → игра «Каркассон»).
+
+**Слой 1 — парсеры.**
+- avito: strict-фильтр локально по `microCategoryId` whitelist'у
+  `{2301995, 2301997, 2301999}` («Настольные игры» внутри Спорт/Хобби).
+  Параметр `categoryId` в URL `/web/1/js/items` Avito игнорирует —
+  подтверждено probe'ами в `bin/probe_avito_*.py`.
+- wildberries: убран soft twin-search fallback. Возвращаются только
+  `subjectId == 120` (Настольные игры). Если в выдаче WB меньше limit'а
+  настолок — возвращаем сколько есть.
+- ozon: URL переключен с `/search/?text=` на
+  `/category/nastolnye-i-kartochnye-igry-13506/?text=` —
+  поиск внутри категории «Настольные и карточные игры».
+- onlinetrade: URL `/search.html?search=` → `/catalogue/board_games/?search=`.
+
+**Слой 2 — контракт + ingest.**
+- `IngestOfferIn.category: str | None` (`packages/shared-py/bg_shared/
+  ingest.py`). `catalog_publisher` проставляет `"boardgames"` для всех
+  парсеров — они теперь возвращают исключительно настолки.
+- `POST /ingest/offers` (catalog) проверяет
+  `_ALLOWED_CATEGORIES = {boardgames, expansion, accessory, None}`.
+  `None` оставлен для legacy-клиентов. Офферы вне whitelist'а дропаются
+  до записи в БД. Ответ обогащён счётчиком `skipped_category`.
+
+**Слой 3 — LLM arbiter (T3).**
+- system-prompt qwen2.5 учит возвращать
+  `{"game_id": null, "reason": "not_a_boardgame: <причина>", "confidence": 0.99}`
+  для очевидно не-настольных товаров (книги, одежда, посуда).
+- `tier_3_llm` распознаёт префикс `not_a_boardgame:` + confidence ≥
+  threshold и возвращает `MatchAction.REJECT`. Worker `_finalize_reject`
+  ставит `match_status='rejected'`, пишет negative cache в T0 →
+  следующий ingest того же `title_norm` отсечётся ещё до T1.
+
+**Cleanup-скрипт.** `services/catalog/catalog/scripts/reset_mismatched.py`
+с dry-run/`--apply`/`--threshold`/`--store` для сброса исторических
+auto-матчей маркетплейсов с низким `match_score` в `unmatched`.
+
+**Как пользоваться:**
+
+```bash
+# 1. После деплоя сбросить кеш парсеров (TTL 4ч переждать не надо):
+curl -X DELETE "http://localhost:8001/api/cache?confirm=true"
+
+# 2. Проверить, сколько исторического мусора есть (dry-run):
+docker compose exec catalog python -m catalog.scripts.reset_mismatched
+
+# 3. Применить cleanup (threshold 0.75 — порог T1 auto-match):
+docker compose exec catalog python -m catalog.scripts.reset_mismatched \
+    --apply --threshold 0.75
+
+# 4. Проверить здоровье через debug-парсе на «мусорные» запросы:
+curl -sG "http://localhost:8001/api/debug/parse" \
+    --data-urlencode "q=книга" --data-urlencode "stores=ozon,avito" \
+    --data-urlencode "limit=5"
+# Ожидаемо: 0 продуктов (категория не пропускает).
+```
+
+**Затронутые файлы:**
+- Парсеры: `services/parsers/parsers/stores/{avito,wildberries,ozon,onlinetrade}.py`.
+- Контракт: `packages/shared-py/bg_shared/ingest.py`,
+  `services/parsers/parsers/catalog_publisher.py`,
+  `services/catalog/catalog/{routers/ingest.py,schemas.py}`.
+- LLM/worker: `services/catalog/catalog/matching/v2/{llm_arbiter,worker}.py`.
+- Cleanup: `services/catalog/catalog/scripts/reset_mismatched.py`.
+- Probes: `bin/probe_avito_{category,item_keys,microcategory}.py`.
+
+Коммит `715e6cd`. Тесты: 153 parsers + 53 catalog passed.
+
+---
+
 ## 2026-05-17 · [WT-F11-DRAWER] GameGroupDrawer с табами Офферы/История/Матчинг/Raw
 
 **Что сделано:** Полный split-view drawer для канонической группы из

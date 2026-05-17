@@ -310,6 +310,11 @@ X-API-Key: <ingest scope>     ← обязателен только при REQUI
       "in_stock": true,                          // nullable: true | false | null (неизвестно)
       "original_price": 199000,                  // nullable, копейки до скидки
       "is_preorder": false,                      // nullable
+      // Категорийный whitelist (2026-05-18). Парсер заявляет, к какой
+      // широкой категории относится товар. Допустимые значения:
+      // boardgames | expansion | accessory | null (legacy).
+      // Офферы вне whitelist'а дропаются ДО upsert (см. _ALLOWED_CATEGORIES).
+      "category": "boardgames",                 // nullable
       "extra": {                                // ParsedProduct.raw из parsers
         "gallery": ["..."],
         "tags": [...],
@@ -328,6 +333,7 @@ X-API-Key: <ingest scope>     ← обязателен только при REQUI
   "accepted": 1,
   "auto_matched": 1,
   "unmatched": 0,
+  "skipped_category": 0,                        // сколько офферов дропнуто whitelist'ом
   "items": [
     {
       "external_id": "1234",
@@ -341,6 +347,11 @@ X-API-Key: <ingest scope>     ← обязателен только при REQUI
 ```
 
 **Семантика:**
+- **Категорийный whitelist (2026-05-18)** — `routers/ingest.py`
+  проверяет `product.category in {boardgames, expansion, accessory, None}`
+  **до** upsert'а. `None` — для обратной совместимости со старым
+  publisher'ом без поля. Не-настолка ни в `offers`, ни в матчинг не
+  попадёт; счётчик `skipped_category` в ответе.
 - Upsert по `(store_slug, external_id)` — один offer = один ряд в `offers`.
 - Если `match_status` уже `manual` или `rejected` — не пересматчиваем
   (решение оператора финально).
@@ -420,8 +431,12 @@ docker compose exec catalog python -m catalog.cli create-key --owner parsers --s
 - **`reassess` уважает `manual`/`rejected`**: операторские решения не пересчитываются — single-reassess отвечает 409, batch-reassess их игнорирует через WHERE `match_status='unmatched'`. Чтобы пересмотреть manual-связку — сначала reject/unlink вручную.
 - **`find_match_candidates` группирует per-game**: одна игра может всплыть и через `title`, и через `alias` одновременно — берём `MAX(score)` и `via` от лучшего. Иначе UI показывал бы дубль одной игры со score 0.85 и 0.72.
 - **Conftest защита от prod БД** (`tests/conftest.py:38-83`): фикстура `clean_db` делает `TRUNCATE ... CASCADE`. Чтобы не уничтожить prod, conftest падает при загрузке, если имя БД не содержит `test`. Резолвит URL по приоритету `TEST_DATABASE_URL` → `DATABASE_URL` → дефолт `catalog_test`. Прецедент: 2026-05-07 случайный pytest на prod БД с `DATABASE_URL=...catalog` обнулил 162K игр.
+- **Категорийный whitelist на ingest (2026-05-18)**: `routers/ingest.py` дропает офферы, у которых `category` не в `_ALLOWED_CATEGORIES = {boardgames, expansion, accessory, None}`, ДО upsert'а — ни в `offers`, ни в матчинг такие записи не идут. `None` — для обратной совместимости. Это defence-in-depth поверх категорийного фильтра на парсерах: даже если парсер сломается и начнёт слать книги, catalog их не примет. Счётчик возврата — `IngestResult.skipped_category`.
+- **LLM-арбитр умеет финально отказывать (2026-05-18)**: системный промпт в `matching/v2/llm_arbiter.py` учит qwen2.5 возвращать `{"game_id": null, "reason": "not_a_boardgame: <...>"}` для не-настолок. `tier_3_llm` распознаёт префикс `not_a_boardgame:` + `confidence ≥ threshold` и возвращает `MatchAction.REJECT`. В worker'е `_finalize_reject` ставит `offer.match_status='rejected'` и пишет negative-cache в T0 (`save_decision(game_id=None, source='auto_t3')`) — следующий ingest того же `title_norm` отсечётся ещё на T0 без обращения к LLM. TTL T0 negative cache — 7 дней, после чего перепроверка.
+- **Cleanup исторического мусора**: `catalog.scripts.reset_mismatched` — CLI для сброса auto-матчей с маркетплейсов (avito/ozon/wildberries/onlinetrade) с `match_score` ниже порога в `unmatched`. Dry-run по умолчанию; `--apply --threshold 0.75 --store avito` для реальной операции. Также удаляет `game_aliases` от auto-match для этих офферов (чтобы T0 не подсовывал старую связь). Аудит в `match_log` пишется ДО UPDATE'а (иначе prev_game_id уже NULL).
 
 ## Запреты
 
-- Не менять формат webhook `/ingest/offers` без синхронного обновления `services/parsers/parsers/catalog_publisher.py`.
+- Не менять формат webhook `/ingest/offers` без синхронного обновления `services/parsers/parsers/catalog_publisher.py` (контракт в `packages/shared-py/bg_shared/ingest.py` — single source of truth).
+- Не расширять `_ALLOWED_CATEGORIES` в `routers/ingest.py` без обсуждения — каждое новое значение пропускает в матчинг новый класс товаров.
 - Не push'ить в remote без явного разрешения пользователя.

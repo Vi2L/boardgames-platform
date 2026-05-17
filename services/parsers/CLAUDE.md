@@ -98,6 +98,15 @@ curl "http://127.0.0.1:8001/api/debug/parse?q=Каркассон&stores=hobbygam
   HobbyGames кладёт `sku`/`availability`/`original_price` в raw,
   Crowd Games — `in_stock`. Старые клиенты без этих полей продолжают
   работать (catalog умеет извлекать из `extra` как fallback).
+- **`category` (2026-05-18)**: publisher проставляет
+  `category="boardgames"` для всех офферов — это маркер для
+  catalog'ого whitelist'а
+  (`_ALLOWED_CATEGORIES = {boardgames, expansion, accessory, None}` в
+  `routers/ingest.py`). Все наши парсеры теперь возвращают только
+  настолки (либо специализированные магазины, либо отфильтрованы по
+  категории на источнике), поэтому жёстко `boardgames`. Если когда-то
+  добавим парсер расширений/аксессуаров — поменять значение в
+  `catalog_publisher.CatalogPublisher._build_offer`.
 - **При изменении формата** в `catalog_publisher.py` — синхронно править
   `services/catalog/catalog/routers/ingest.py` и общую схему в
   `services/catalog/catalog/schemas.py:IngestRequest`.
@@ -116,20 +125,24 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
            ├─ CrowdGamesParser  (stores/crowdgames.py)  — каталог издателя, локальный поиск
            ├─ AvitoParser       (stores/avito.py)       — C2C-объявления;
            │                     L0-обход Qrator через curl-cffi + публичный
-           │                     JSON /web/1/js/items (см. stores/avito_qrator.py)
+           │                     JSON /web/1/js/items (см. stores/avito_qrator.py);
+           │                     strict-фильтр локально по microCategoryId ∈
+           │                     {2301995, 2301997, 2301999} (Настольные игры)
            ├─ WildberriesParser (stores/wildberries.py) — публичный JSON
            │                     search.wb.ru/.../v5/search; pluggable backend
-           │                     (httpx | curl-cffi); локальный фильтр
-           │                     subjectId=120 = «Настольные игры»
+           │                     (httpx | curl-cffi); STRICT-фильтр subjectId=120
+           │                     (без fallback — лучше пусто, чем мусор)
            ├─ OzonParser        (stores/ozon.py) — через browser-service
            │                     (Antibot Challenge Page требует JS-runtime);
            │                     persistent profile `ozon`; SSR HTML парсинг;
-           │                     warmup loop в lifespan
+           │                     warmup loop в lifespan; поиск ТОЛЬКО внутри
+           │                     /category/nastolnye-i-kartochnye-igry-13506/
            └─ OnlineTradeParser  (stores/onlinetrade.py) — через browser-service
                                  (ServicePipe JS challenge); persistent profile
                                  `onlinetrade`; SSR HTML парсинг; warmup loop
                                  (default 30 мин — ServicePipe ротирует токены
-                                 агрессивнее Ozon)
+                                 агрессивнее Ozon); поиск внутри раздела
+                                 /catalogue/board_games/
 ```
 
 **Ключевые модули:**
@@ -203,9 +216,12 @@ PriceService (service.py)   ← оркестрация: TTL-кеш per-store + �
 - **HobbyGames**: работает с любого IP. URL поиска — `/catalog/search?keyword=`, данные в JSON-LD `ItemList` (не HTML). `players`/`age_min`/`playtime` недоступны в структурированном виде.
 - **CrowdGames**: издатель (не магазин). Весь каталог `/collection/igry-crowd-games` (~167 игр, 8+ страниц). Поиск локальный: обходим все страницы через `data-collection-infinity`, фильтруем по запросу в памяти. Кеш TTL спасает от повторных обходов. `players`/`age_min`/`playtime` недоступны. `enrich_ms` в метриках = None (этапа нет).
 - **Avito (L0-стратегия, 2026-05-14)**: парсер работает **только через `curl-cffi`** с TLS-impersonation Chrome 124 — никакого браузера/Playwright/Camoufox. Запрос идёт прямо в публичный JSON `/web/1/js/items` (тот же, что дёргает фронт avito.ru после CSR-загрузки). Низкоуровневый клиент — `stores/avito_qrator.py:AvitoQratorClient`: держит один `AsyncSession` на процесс, авто-ротация `_avisc` (Max-Age=60s, refresh ≥50s), retry-with-fresh-session при 429/403. Cold-start ~2.0–2.5s, hot ~500–700ms. **Без хост-зависимостей** — chrome-extension перенесён в `DEPRECATED/` (удалить после 2026-05-28), `POST /api/avito/cookies` отдаёт 410 Gone. Если когда-нибудь endpoint сломается — повторить `bin/probe_avito_l0_xhr.py` для diagnostics.
+- **Avito категорийный фильтр (2026-05-18)**: параметр `categoryId` в `/web/1/js/items` endpoint **игнорирует** — подтверждено probe'ом `bin/probe_avito_category.py`. Поэтому фильтр локальный: `_build_products` в `stores/avito.py` оставляет только item'ы с `microCategoryId ∈ {2301995, 2301997, 2301999}` (значения из `_BOARDGAMES_MICRO_IDS`, подтверждены `bin/probe_avito_microcategory.py`). Корневая `category.id=39` («Спорт и отдых») слишком широкая — включает велосипеды/тренажёры. Если Avito выкатит новую подкатегорию настолок и `microCategoryId` поменяется — добавить в whitelist. Без fallback'а: «лучше пусто, чем мусор».
+- **OnlineTrade URL раздела (2026-05-18)**: поиск зашит на `/catalogue/board_games/?search=<q>` вместо глобального `/search.html?search=`. Раздел сужает выдачу до настолок ещё до парсинга — не приходят книги/электроника. Если onlinetrade когда-нибудь сменит URL раздела (slug `board_games` → новый) и парсер начнёт ловить 404, откатиться на `/search.html?search=` (1 line) и добавить probe.
 - **OnlineTrade (2026-05-16)**: парсер работает **только через browser-service**. Сайт защищён через **ServicePipe** (`servicepipe.ru`) — российский WAF класса DataDome/Akamai с трёхслойной защитой: TLS-fingerprint + JS fingerprinting + Proof-of-Work challenge. Probe 2026-05-16 показал: прямой `curl/httpx/curl-cffi` получает ~2KB заглушку (спиннер с `servicepipe.ru/static/fp.min.js`, `jsrsasign-all-min.js`, `checkjs/<hash>.js`), challenge **обязан** быть исполнен браузером для получения валидных cookies (`spcheck`, `sp_*`). Только Camoufox через browser-service отдаёт реальную SSR-выдачу. URL поиска — `https://www.onlinetrade.ru/search.html?search=<query>`, сквозной по сайту. Архитектура — клон Ozon-паттерна: persistent profile `onlinetrade` накапливает cookies в `/data/profiles/onlinetrade`, **warmup loop** в `lifespan` (default `ONLINETRADE_WARMUP_INTERVAL_MINUTES=30` — короче Ozon, ServicePipe ротирует токены агрессивнее). Парсинг — SSR HTML regex'ом по якорю `<a href="/.../<numeric-id>.html">` (numeric product-id перед `.html`), цена в рублях с маркером «руб.» или «₽». Детектор challenge-page по наличию `servicepipe.ru/static/fp` или `id_captcha_frame_div` в HTML — поднимает `RuntimeError`, чтобы не похоронить ошибку в метриках «success but 0 products». **Известное ограничение (2026-05-16)**: browser-service был временно сломан (Camoufox `new_context()` в ARM64 docker — см. отдельную memory-запись). Парсер написан и юнитов-протестирован на mock'ах (28 тестов); реальные HTML-селекторы (`_LINK_RE`, `_PRICE_RE`, `_TITLE_RE`) подобраны по эвристикам и могут потребовать корректировки после первого реального запроса через починенный browser-service.
 - **Ozon (2026-05-16)**: парсер работает **только через browser-service** (Camoufox persistent profile `ozon`). Прямой HTTP (включая `curl-cffi` chrome124) ловит **Antibot Challenge Page** (FunCaptcha-like JS challenge, проверяет TLS+behavioural+cookies в комплексе). Probe 2026-05-15 показал: даже с cookies, выгребенными Camoufox'ом, прямой запрос на `composer-api.bx` → 403 + incidentId. Поэтому весь search идёт через `BrowserClient.fetch(profile_id="ozon", wait_for_selector="[data-widget=searchResultsV2]")`, парсится **SSR HTML** (regex по карточкам `<a href="/product/<slug>-<id>/">`). Persistent profile хранит cookies в `/data/profiles/ozon` между запросами — second-trip warm. **Warmup loop** в `lifespan` (background `asyncio.Task`) каждые `OZON_WARMUP_INTERVAL_MINUTES` (default 60) делает «холостой» fetch на главную, чтобы профиль не остыл. Latency cold ~10-12с, warm ~3-5с — медленнее WB (~500мс), но это плата за обход antibot. `OzonParser` зависит от `_browser_client` — если browser-service выключен, `search()` поднимает `RuntimeError` (PriceService пишет в `SearchResult.errors`, остальные парсеры работают). **Цена с Ozon-картой** идёт в `price` (выделенная Headline-цена в карточке), обычная — в `raw.original_price`. См. SSR-парсинг в `stores/ozon.py:_parse_cards()`.
-- **Wildberries (2026-05-14)**: парсер через публичный JSON `search.wb.ru/exactmatch/ru/common/v5/search` — тот же, что дёргает фронт WB. Один HTTP-запрос → 100 items (без pagination). **Pluggable backend** через env `WB_BACKEND=httpx|curl-cffi` (default `curl-cffi` — Angie/WB агрессивно rate-limit'ит DC-IP, TLS-impersonation проходит чаще). Override на лету — query-параметр `?wb_backend=...` в `/api/debug/parse`. WB endpoint v8+ требует preset-routing через `catalog.wb.ru` (тот всегда 403 из Docker) — поэтому используем legacy v5 без preset-redirect. **Soft twin-search**: локальный фильтр `subjectId=120` («Настольные игры»), при недоборе до `limit` — добиваем общей выдачей. Retry-once при HTTP 429 (через 2s). Если сломается — `bin/probe_wb4.py` для диагностики. См. roadmap [PRS-5] про enrichment через `card.wb.ru/cards/v{N}/detail`.
+- **Ozon категорийный фильтр (2026-05-18)**: URL поиска зашит на `/category/nastolnye-i-kartochnye-igry-13506/?text=<q>` (константа `_BOARDGAMES_CATEGORY_PATH`). Раньше использовался глобальный `/search/?text=` с расчётом на category-prediction самого Ozon — но он срабатывает только для «узких» query («Каркассон»). На общих query («книга», «подарок») probe 2026-05-18 показал 5/5 книг в выдаче. Если query не имеет настолок в категории — Ozon вернёт пустую выдачу, это корректно для источника настолок.
+- **Wildberries (2026-05-14)**: парсер через публичный JSON `search.wb.ru/exactmatch/ru/common/v5/search` — тот же, что дёргает фронт WB. Один HTTP-запрос → 100 items (без pagination). **Pluggable backend** через env `WB_BACKEND=httpx|curl-cffi` (default `curl-cffi` — Angie/WB агрессивно rate-limit'ит DC-IP, TLS-impersonation проходит чаще). Override на лету — query-параметр `?wb_backend=...` в `/api/debug/parse`. WB endpoint v8+ требует preset-routing через `catalog.wb.ru` (тот всегда 403 из Docker) — поэтому используем legacy v5 без preset-redirect. **Strict-фильтр subjectId=120** (2026-05-18): возвращаем ТОЛЬКО товары с `subjectId == 120` («Настольные игры»). Раньше работал soft twin-search — при недоборе limit'а добивал «общей выдачей», в catalog шёл мусор. Теперь: лучше вернуть 4 настолки, чем 5 (4 настолки + 1 кроссовки). Retry-once при HTTP 429 (через 2s). Если сломается — `bin/probe_wb4.py` для диагностики. См. roadmap [PRS-5] про enrichment через `card.wb.ru/cards/v{N}/detail`.
 - **cp1251 (GaGa)**: gaga.ru возвращает тело в cp1251. httpx декодирует автоматически по `Content-Type`. Поисковый запрос нужно кодировать в cp1251 перед percent-encoding: `quote(query.encode('cp1251'))`. В `parser_snapshot` body хранится как BLOB и декодируется по сохранённому `encoding` при выдаче.
 - **SQLite `lower()`**: не поддерживает Unicode → используем `normalized_title` (Python `.lower()`).
 - **Цены в копейках**: `ParsedProduct.price` и `ProductRecord.price` — всегда копейки. `/search` конвертирует в рубли (`price_rub`), `/history` отдаёт сырые копейки (`price`). `/api/debug/parse` возвращает оба формата (`price` + `price_rub`) — для дебага удобно видеть raw.
