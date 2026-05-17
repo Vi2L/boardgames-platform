@@ -87,6 +87,12 @@ class Settings(BaseSettings):
     match_decisions_ttl_t2_days: int = Field(default=14)
     match_decisions_ttl_t3_days: int = Field(default=7)
 
+    # Retention для match_log (CAT-11). Записи старше N дней удаляются
+    # ежедневным scheduler-job'ом `match_log_retention`. Не реверченные
+    # записи (`reverted_at IS NULL` И `action != 'revert'`) сохраняются —
+    # они потенциально нужны для отката.
+    match_log_retention_days: int = Field(default=90)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

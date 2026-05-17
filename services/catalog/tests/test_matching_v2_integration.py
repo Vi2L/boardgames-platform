@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from catalog import api as api_mod
 from catalog.matching.v2 import normalize_title
-from catalog.matching.v2.auditor import log_change, revert_one, revert_batch
+from catalog.matching.v2.auditor import evict_older_than, log_change, revert_batch, revert_one
 from catalog.matching.v2.decisions import (
     invalidate_for_game,
     save_decision,
@@ -243,6 +243,77 @@ class TestMatchLogAudit:
         assert log.new_game_id == gid
         assert log.score == 0.95
         assert log.reverted_at is None
+
+    async def test_evict_older_than_keeps_active_auto_match(self, session: AsyncSession):
+        """CAT-11 retention: активные (нереверченные) auto-match записи
+        сохраняются независимо от возраста — они нужны для возможности
+        будущего revert. Удаляются: реверченные и сами revert-записи
+        старше N дней."""
+        from sqlalchemy import select, text as sql_text
+        gid = await _seed_game(session)
+        offer = Offer(
+            store_slug="test", external_id="r",
+            url="http://x", title_raw="X",
+            match_status="auto", game_id=gid,
+        )
+        session.add(offer)
+        await session.commit()
+        await session.refresh(offer)
+
+        # 1) Старая активная auto-запись (200 дней) — должна СОХРАНИТЬСЯ.
+        active_id = await log_change(
+            session, offer_id=offer.id, action=MatchAction.AUTO_T1,
+            prev_game_id=None, new_game_id=gid,
+            prev_status="unmatched", new_status="auto",
+            tier=1, score=0.95,
+        )
+        await session.commit()
+        await session.execute(sql_text(
+            "UPDATE match_log SET performed_at = now() - interval '200 days' "
+            "WHERE id = :i"
+        ).bindparams(i=active_id))
+
+        # 2) Старая реверченная auto-запись (200 дней) — должна УДАЛИТЬСЯ.
+        reverted_id = await log_change(
+            session, offer_id=offer.id, action=MatchAction.AUTO_T1,
+            prev_game_id=None, new_game_id=gid,
+            prev_status="unmatched", new_status="auto",
+            tier=1, score=0.95,
+        )
+        await session.commit()
+        await session.execute(sql_text(
+            "UPDATE match_log SET performed_at = now() - interval '200 days', "
+            "reverted_at = now() - interval '195 days' WHERE id = :i"
+        ).bindparams(i=reverted_id))
+
+        # 3) Свежая активная auto-запись (5 дней) — должна СОХРАНИТЬСЯ.
+        fresh_id = await log_change(
+            session, offer_id=offer.id, action=MatchAction.AUTO_T1,
+            prev_game_id=None, new_game_id=gid,
+            prev_status="unmatched", new_status="auto",
+            tier=1, score=0.95,
+        )
+        await session.commit()
+        await session.execute(sql_text(
+            "UPDATE match_log SET performed_at = now() - interval '5 days' "
+            "WHERE id = :i"
+        ).bindparams(i=fresh_id))
+
+        await session.commit()
+
+        deleted = await evict_older_than(session, days=90)
+        await session.commit()
+
+        # Удалена только реверченная старая запись.
+        assert deleted == 1
+        surviving_ids = set(
+            (await session.execute(
+                select(MatchLog.id).where(MatchLog.id.in_([active_id, reverted_id, fresh_id]))
+            )).scalars()
+        )
+        assert active_id in surviving_ids
+        assert fresh_id in surviving_ids
+        assert reverted_id not in surviving_ids
 
     async def test_revert_one_restores_offer_state(self, session: AsyncSession):
         gid = await _seed_game(session)

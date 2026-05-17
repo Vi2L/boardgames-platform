@@ -272,6 +272,33 @@ async def revert_batch(
     }
 
 
+async def evict_older_than(session: AsyncSession, days: int) -> int:
+    """Удаляет записи match_log старше N дней (CAT-11 retention).
+
+    Сохраняем строки, которые могут понадобиться для отката:
+      - не реверченные (`reverted_at IS NULL`)
+      - **и** не сами revert-записи (action='revert')
+
+    Это значит, что одиночный auto_t1 живёт ≤ N дней, но если оператор
+    реверчнул его — обе записи (auto_t1 + revert) живут N дней с
+    `performed_at` каждой. Через 90 дней даже реверченные истории
+    исчезают — их аудит уже не нужен (offer либо переехал на новую
+    игру, либо был окончательно отвергнут).
+
+    Возвращает количество удалённых строк. Caller отвечает за commit.
+    """
+    result = await session.execute(
+        text(
+            "DELETE FROM match_log "
+            "WHERE performed_at < now() - make_interval(days => :days) "
+            "AND (reverted_at IS NOT NULL OR action = 'revert')"
+        ).bindparams(days=days)
+    )
+    deleted = result.rowcount or 0
+    logger.info("match_log retention: удалено %d записей старше %d дней", deleted, days)
+    return deleted
+
+
 async def revert_many(
     session: AsyncSession,
     log_ids: list[int],

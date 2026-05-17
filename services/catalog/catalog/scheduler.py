@@ -90,6 +90,16 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "финализирует offer. Interval-trigger (не cron)."
         ),
     },
+    "match_log_retention": {
+        "display_name": "Match Log Retention (daily)",
+        "description": (
+            "Ежедневная чистка match_log: удаляет записи старше "
+            "Settings.match_log_retention_days (default 90), сохраняя "
+            "не-реверченные auto-match'и (потенциально нужны для отката). "
+            "Параметр `retention_days` в scheduler_configs.params "
+            "переопределяет default."
+        ),
+    },
 }
 
 # Interval-jobs (не cron) — не пишутся в scheduler_configs cron_expr,
@@ -199,6 +209,17 @@ def _resolve_handler(job_id: str, params: dict[str, Any]):
 
         return run_hotness_import_job, "bgg-hotness"
 
+    if job_id == "match_log_retention":
+        # Retention: один SQL DELETE через auditor.evict_older_than.
+        # Параметр `retention_days` из scheduler_configs.params
+        # переопределяет Settings.match_log_retention_days — это даёт
+        # оператору ручку «прогнать с меньшим окном» без рестарта.
+        retention_days = params.get("retention_days")
+        return (
+            lambda jid: _run_match_log_retention(jid, retention_days),
+            "match-log-retention",
+        )
+
     if job_id == "bgg_mini_batch":
         from catalog.routers.imports import _run_bgg_batch_job
         from catalog.schemas import BggBatchImportRequest
@@ -232,6 +253,48 @@ def _resolve_handler(job_id: str, params: dict[str, Any]):
 # ── Interval-job runners (не используют trigger_scheduled_job + ImportJob) ───
 # Эти job'ы — короткие, не нужны polling/log_lines/progress. APScheduler
 # вызывает их напрямую без обёртки в _make_cron_job.
+
+
+async def _run_match_log_retention(import_job_id: int, retention_days: int | None) -> None:
+    """Runner для job 'match_log_retention'. Дёргает auditor.evict_older_than,
+    обновляет ImportJob с count удалённых.
+
+    Если `retention_days` не задан в params — берётся из Settings.
+    """
+    from catalog.config import get_settings
+    from catalog.db import get_engine
+    from catalog.matching.v2.auditor import evict_older_than
+    from catalog.models import ImportJob
+
+    days = retention_days if retention_days is not None else get_settings().match_log_retention_days
+
+    engine = get_engine()
+    SessionFactory = async_sessionmaker(engine, expire_on_commit=False)
+
+    deleted = 0
+    error_msg: str | None = None
+    try:
+        async with SessionFactory() as session:
+            deleted = await evict_older_than(session, days=days)
+            await session.commit()
+    except Exception as exc:
+        logger.exception("match_log_retention: failed")
+        error_msg = f"{type(exc).__name__}: {exc}"
+
+    # Завершаем ImportJob со статусом и кратким отчётом — UI sched-history
+    # показывает их в `/import/jobs?type=match-log-retention`.
+    async with SessionFactory() as session:
+        job = await session.get(ImportJob, import_job_id)
+        if job is not None:
+            job.status = "failed" if error_msg else "done"
+            payload = dict(job.payload or {})
+            payload.update({
+                "retention_days": days,
+                "deleted": deleted,
+                "error": error_msg,
+            })
+            job.payload = payload
+            await session.commit()
 
 
 async def _ml_health_check_runner() -> None:
