@@ -5,12 +5,23 @@ import type { ApiLog, ProductOut, StoreProgress } from '../types/api'
 
 let logId = 0
 
+/**
+ * `groupMode`: вид отображения результатов.
+ *   - `group` (default) — Master+drawer по канонической игре (WT-F11).
+ *     Backend пока не возвращает game_id, поэтому делаем клиентский
+ *     greedy-clustering по `titleSimilarity` (см. `lib/searchGrouping.ts`).
+ *   - `flat` — старая плоская таблица. Нужна для debug, оставлена per
+ *     handoff §05 «Не удалять flat режим — нужен для debug».
+ */
+export type SearchGroupMode = 'group' | 'flat'
+
 interface SearchStore {
   query: string
   selectedStores: string[]
   refresh: boolean
   limit: number
   showOutOfStock: boolean
+  groupMode: SearchGroupMode
 
   isSearching: boolean
   sseUrl: string | null
@@ -27,6 +38,7 @@ interface SearchStore {
   setRefresh: (v: boolean) => void
   setLimit: (n: number) => void
   setShowOutOfStock: (v: boolean) => void
+  setGroupMode: (m: SearchGroupMode) => void
   startSearch: (availableSlugs: string[]) => void
   stopSearch: () => void
   handleSSEEvent: (event: string, data: unknown) => void
@@ -47,6 +59,7 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
   refresh: false,
   limit: 100,
   showOutOfStock: false,
+  groupMode: 'group',
   isSearching: false,
   sseUrl: null,
   storeProgress: {},
@@ -68,6 +81,7 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
   setRefresh: (v) => set({ refresh: v }),
   setLimit: (n) => set({ limit: n }),
   setShowOutOfStock: (v) => set({ showOutOfStock: v }),
+  setGroupMode: (m) => set({ groupMode: m }),
 
   startSearch: (availableSlugs) => {
     const { query, selectedStores, refresh, limit } = get()
@@ -218,5 +232,6 @@ export const useSearchStore = create<SearchStore>()(persist((set, get) => ({
     refresh: s.refresh,
     limit: s.limit,
     showOutOfStock: s.showOutOfStock,
+    groupMode: s.groupMode,
   }),
 }))

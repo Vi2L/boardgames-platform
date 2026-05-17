@@ -17,9 +17,13 @@ import { useLoyaltyStore } from '../store/loyalty'
 import { SearchForm } from '../components/search/SearchForm'
 import { StoreProgressBadge } from '../components/search/StoreProgressBadge'
 import { ResultsTable } from '../components/search/ResultsTable'
+import { ResultsTableGrouped } from '../components/search/ResultsTableGrouped'
+import { UnmatchedSection } from '../components/search/UnmatchedSection'
 import { ProductDrawer } from '../components/search/ProductDrawer'
 import type { PriceDeltaOut, PriceStatsOut, ProductOut } from '../types/api'
 import { Tabs, Button, Tag, Badge } from '../components/ui'
+import { groupProducts, type ProductGroup } from '../lib/searchGrouping'
+import { Layers, List } from 'lucide-react'
 
 type Tab = 'results' | 'api-log'
 
@@ -35,11 +39,17 @@ export function SearchPage() {
   const queryClient = useQueryClient()
 
   const {
-    query, selectedStores, refresh, limit, showOutOfStock,
+    query, selectedStores, refresh, limit, showOutOfStock, groupMode,
     sseUrl, storeProgress, results, apiLogs, totalMs, source,
-    setQuery, setAllStores, setRefresh, setLimit, setShowOutOfStock,
+    setQuery, setAllStores, setRefresh, setLimit, setShowOutOfStock, setGroupMode,
     startSearch, stopSearch, handleSSEEvent, isSearching,
   } = useSearchStore()
+
+  // Group-mode: выбранная группа для drawer'а (пока показываем первый
+  // оффер группы через существующий ProductDrawer; полноценный
+  // `<GameGroupDrawer>` с табами Офферы/История/Матчинг/Raw — отдельная
+  // задача, см. roadmap WT-F11-DRAWER).
+  const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null)
 
   // ── URL sync (deep-link) ──────────────────────────────────────────────
   const [searchParams, setSearchParams] = useSearchParams()
@@ -123,6 +133,24 @@ export function SearchPage() {
     new Map(priceStatsArray.map(s => [s.product_id, s])),
     [priceStatsArray],
   )
+
+  // WT-F11: frontend-fallback группировка по titleSimilarity.
+  // Дешёво (O(n×k), n≤500 — ≤10мс), greedy-clustering ≥ 0.6 Jaccard.
+  // Когда backend выкатит /search/grouped с game_id — заменим на прямой group-by-id.
+  const grouped = useMemo(
+    () => groupMode === 'group' ? groupProducts(visibleResults) : null,
+    [groupMode, visibleResults],
+  )
+
+  const handleSelectGroup = (g: ProductGroup) => {
+    setSelectedGroupKey(g.canonicalTitle)
+    // Минимальный UX: открываем drawer с min-price offer'ом группы.
+    const minOffer = g.offers.reduce((best, o) =>
+      best == null || o.price_rub < best.price_rub ? o : best,
+      null as ProductOut | null,
+    )
+    if (minOffer) setSelectedProduct(minOffer)
+  }
 
   const buildPayload = () => ({
     query: query.trim(),
@@ -363,26 +391,90 @@ export function SearchPage() {
 
             <div className="p-4 border-t border-zinc-800">
               <Tabs.Content value="results">
-                {hiddenCount > 0 && (
-                  <div className="mb-3 text-xs text-zinc-500 flex items-center gap-2">
-                    <span>Скрыто {hiddenCount} товаров не в наличии.</span>
+                {/* Header-bar: toggle group/flat + skipped-stock note */}
+                <div className="flex items-center gap-2 mb-3 flex-wrap">
+                  <div className="inline-flex rounded border border-zinc-800 overflow-hidden">
                     <button
                       type="button"
-                      onClick={() => setShowOutOfStock(true)}
-                      className="text-indigo-300 hover:text-indigo-200 underline"
+                      onClick={() => setGroupMode('group')}
+                      className={`inline-flex items-center gap-1 h-7 px-2.5 text-xs ${
+                        groupMode === 'group'
+                          ? 'bg-indigo-500/15 text-indigo-200'
+                          : 'bg-transparent text-zinc-400 hover:bg-zinc-800/40'
+                      }`}
+                      title="По канонической игре (frontend-clustering)"
                     >
-                      Показать
+                      <Layers size={12} />
+                      По игре
+                      {grouped && (
+                        <span className="ml-1 font-mono text-xxs tabular-nums text-zinc-500">
+                          {grouped.stats.totalGroups}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGroupMode('flat')}
+                      className={`inline-flex items-center gap-1 h-7 px-2.5 text-xs border-l border-zinc-800 ${
+                        groupMode === 'flat'
+                          ? 'bg-indigo-500/15 text-indigo-200'
+                          : 'bg-transparent text-zinc-400 hover:bg-zinc-800/40'
+                      }`}
+                      title="Плоский список (debug)"
+                    >
+                      <List size={12} />
+                      Плоский
+                      <span className="ml-1 font-mono text-xxs tabular-nums text-zinc-500">
+                        {visibleResults.length}
+                      </span>
                     </button>
                   </div>
+
+                  {hiddenCount > 0 && (
+                    <span className="text-xs text-zinc-500">
+                      Скрыто {hiddenCount}.
+                      <button
+                        type="button"
+                        onClick={() => setShowOutOfStock(true)}
+                        className="text-indigo-300 hover:text-indigo-200 underline ml-1"
+                      >
+                        Показать
+                      </button>
+                    </span>
+                  )}
+
+                  {grouped && (
+                    <span className="ml-auto text-xxs text-zinc-500 font-mono tabular-nums">
+                      {grouped.stats.totalGroups} игр · {grouped.stats.totalOffers} офферов
+                      {grouped.stats.totalOrphans > 0 && (
+                        <> · <span className="text-amber-300">{grouped.stats.totalOrphans} unmatched</span></>
+                      )}
+                    </span>
+                  )}
+                </div>
+
+                {groupMode === 'group' && grouped ? (
+                  <>
+                    <ResultsTableGrouped
+                      data={grouped}
+                      selectedId={selectedGroupKey}
+                      onSelectGroup={handleSelectGroup}
+                    />
+                    <UnmatchedSection
+                      orphans={grouped.orphans}
+                      onSelectOrphan={setSelectedProduct}
+                    />
+                  </>
+                ) : (
+                  <ResultsTable
+                    products={visibleResults}
+                    deltas={deltas}
+                    adjusted={adjusted}
+                    priceStats={priceStats}
+                    showOutOfStock={showOutOfStock}
+                    onSelect={setSelectedProduct}
+                  />
                 )}
-                <ResultsTable
-                  products={visibleResults}
-                  deltas={deltas}
-                  adjusted={adjusted}
-                  priceStats={priceStats}
-                  showOutOfStock={showOutOfStock}
-                  onSelect={setSelectedProduct}
-                />
               </Tabs.Content>
 
               <Tabs.Content value="api-log">
