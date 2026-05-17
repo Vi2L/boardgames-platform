@@ -893,6 +893,37 @@ export const batchRevertMatchLog = (batchId: string, deleteAlias = false) =>
     body: JSON.stringify({ batch_id: batchId, delete_alias: deleteAlias }),
   }).then(r => json<{ requested: number; reverted: number; batch_id: string }>(r))
 
+/**
+ * Эквивалент Python normalize_title из catalog/matching/v2/domain.py:
+ * NFKD-разложение → удалить combining marks → lowercase → trim.
+ *
+ * Используется UI для построения title_norm перед вызовом
+ * DELETE /matching/decisions/{title_norm}. Если эквивалентность с
+ * backend'ом сломается (например, добавят unaccent ß→ss) — caller
+ * получит deleted=0 (запись осталась) и должен дёрнуть bulk-вариант.
+ */
+export function normalizeTitle(raw: string): string {
+  return raw
+    .normalize('NFKD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .trim()
+}
+
+export const invalidateDecision = (titleNorm: string) =>
+  fetch(`${BASE}/matching/decisions/${encodeURIComponent(titleNorm)}`, {
+    method: 'DELETE',
+  }).then(r => json<{ title_norm: string; deleted: number }>(r))
+
+export const invalidateDecisionsBulk = (
+  filters: { title_contains?: string; only_negative?: boolean },
+) =>
+  fetch(`${BASE}/matching/decisions/invalidate`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(filters),
+  }).then(r => json<{ deleted: number; filters: Record<string, unknown> }>(r))
+
 
 export type WarmupParams = {
   batch_size?: number

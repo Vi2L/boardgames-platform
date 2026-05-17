@@ -37,7 +37,9 @@ from catalog.matching.v2.auditor import (
     revert_one as v2_revert_one,
 )
 from catalog.matching.v2.decisions import (
+    invalidate_bulk,
     invalidate_for_game,
+    invalidate_for_title,
     save_decision,
 )
 from catalog.matching.v2.domain import MatchAction
@@ -493,7 +495,8 @@ async def ml_status(
 class MatchLogOut(BaseModel):
     """Одна запись match_log для UI отчёта."""
     id: int
-    offer_id: int
+    # nullable с CAT-12: action='invalidate' не привязан к оферу.
+    offer_id: int | None = None
     prev_game_id: int | None = None
     new_game_id: int | None = None
     prev_status: str | None = None
@@ -1210,6 +1213,23 @@ class ProbeResultOut(BaseModel):
     last_check_at: str | None = None
 
 
+class InvalidateDecisionOut(BaseModel):
+    """Ответ DELETE /matching/decisions/{title_norm}."""
+    title_norm: str
+    deleted: int
+
+
+class InvalidateBulkIn(BaseModel):
+    """POST /matching/decisions/invalidate — bulk-фильтры."""
+    title_contains: str | None = None
+    only_negative: bool = False
+
+
+class InvalidateBulkOut(BaseModel):
+    deleted: int
+    filters: dict
+
+
 @router.post(
     "/ml-models/{name}/probe",
     response_model=ProbeResultOut,
@@ -1270,3 +1290,103 @@ async def cancel_queue_item(
             detail=f"queue item {queue_id} {result.replace('_', ' ')} — нельзя отменить",
         )
     return CancelQueueItemOut(queue_id=queue_id, result=result)
+
+
+@router.delete(
+    "/decisions/{title_norm}",
+    response_model=InvalidateDecisionOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def invalidate_decision(
+    title_norm: str,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> InvalidateDecisionOut:
+    """Точечная инвалидация Tier 0 кэша (CAT-12).
+
+    Когда оператор хочет пересмотреть `reject` или ошибочный auto-match —
+    удаляет запись в `match_decisions` для конкретного title_norm.
+    Следующий ingest того же title пройдёт T0 miss → T1/T2/T3 заново.
+
+    Audit: пишет в `match_log` запись `action='invalidate'` с
+    `reason='manual_invalidate'`. `offer_id` не указан — инвалидация
+    относится к title_norm, а не к конкретному оферу.
+    """
+    # Принимаем title_norm как есть — caller обычно берёт его из
+    # MatchLog row, где он уже нормализован. Если пришла raw-форма,
+    # пользователю поможет normalize_title до отправки запроса.
+    deleted = await invalidate_for_title(session, title_norm)
+    if deleted > 0:
+        await session.execute(
+            text(
+                "INSERT INTO match_log (offer_id, action, prev_status, new_status, "
+                "reason, performed_by, performed_at) "
+                "VALUES (NULL, 'invalidate', NULL, 'invalidated', "
+                ":reason, :who, now())"
+            ).bindparams(
+                reason=f"manual_invalidate: title_norm={title_norm}"[:500],
+                who=_performed_by_from_request(request),
+            )
+        )
+    await session.commit()
+    return InvalidateDecisionOut(title_norm=title_norm, deleted=deleted)
+
+
+@router.post(
+    "/decisions/invalidate",
+    response_model=InvalidateBulkOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def invalidate_decisions_bulk(
+    body: InvalidateBulkIn,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
+) -> InvalidateBulkOut:
+    """Bulk-инвалидация по фильтрам (CAT-12).
+
+    Поддерживает: `title_contains` (ILIKE %X%), `only_negative` (только
+    reject-кэш). Без фильтров — 400 (защита от accidental wipe-all).
+
+    Audit: одна запись `action='invalidate'` с reason'ом из payload.
+    """
+    if body.title_contains is None and not body.only_negative:
+        raise HTTPException(
+            status_code=400,
+            detail="нужен хотя бы один фильтр (title_contains или only_negative)",
+        )
+    deleted = await invalidate_bulk(
+        session,
+        title_contains=body.title_contains,
+        only_negative=body.only_negative,
+    )
+    if deleted > 0:
+        filters_desc = ", ".join(
+            f"{k}={v!r}" for k, v in body.model_dump(exclude_none=True).items() if v
+        )
+        await session.execute(
+            text(
+                "INSERT INTO match_log (offer_id, action, prev_status, new_status, "
+                "reason, performed_by, performed_at) "
+                "VALUES (NULL, 'invalidate', NULL, 'invalidated', "
+                ":reason, :who, now())"
+            ).bindparams(
+                reason=f"bulk_invalidate ({deleted} rows): {filters_desc}"[:500],
+                who=_performed_by_from_request(request),
+            )
+        )
+    await session.commit()
+    return InvalidateBulkOut(
+        deleted=deleted,
+        filters=body.model_dump(exclude_none=True),
+    )
+
+
+def _performed_by_from_request(request: Request) -> str:
+    """Берёт identity из X-API-Key или заголовка X-User. Fallback 'operator'."""
+    owner = getattr(request.state, "api_key_owner", None)
+    if owner:
+        return str(owner)[:64]
+    user = request.headers.get("x-user")
+    if user:
+        return user[:64]
+    return "operator"

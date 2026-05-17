@@ -554,6 +554,33 @@ async def batch_revert_match_log(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.delete("/matching/decisions/{title_norm}")
+async def invalidate_decision(
+    title_norm: str,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Точечная инвалидация Tier 0 кэша (CAT-12). Используется в MatchLog UI."""
+    try:
+        return await client.invalidate_decision(title_norm)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/decisions/invalidate")
+async def invalidate_decisions_bulk(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """Bulk-инвалидация: ILIKE %title_contains% и/или only_negative."""
+    try:
+        return await client.invalidate_decisions_bulk(
+            title_contains=body.get("title_contains"),
+            only_negative=body.get("only_negative", False),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.post("/matching/warmup-embeddings")
 async def warmup_embeddings(
     body: dict,

@@ -1,16 +1,23 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import clsx from 'clsx'
-import { Undo2, AlertTriangle } from 'lucide-react'
+import { Undo2, AlertTriangle, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 import {
-  fetchMatchLog,
-  revertMatchLog,
   bulkRevertMatchLog,
+  fetchMatchLog,
+  invalidateDecision,
+  normalizeTitle,
+  revertMatchLog,
   type MatchLogEntry,
   type MatchLogFilters,
 } from '../../lib/catalog'
 import { TierBadge } from './TierBadge'
+
+// action'ы, для которых имеет смысл инвалидировать T0 cache decision:
+// reject (negative cache от оператора) и auto_t3 (часто 'not_a_boardgame'
+// от LLM, который мог ошибочно сработать).
+const INVALIDATE_ACTIONS = new Set(['reject', 'auto_t3'])
 
 /**
  * Журнал матчинга: список MatchLog записей с фильтрами + bulk revert.
@@ -49,6 +56,19 @@ export function MatchLogTab() {
       invalidate()
     },
     onError: (e: Error) => toast.error(`Ошибка отката: ${e.message}`),
+  })
+
+  const invalidate_decision = useMutation({
+    mutationFn: (titleNorm: string) => invalidateDecision(titleNorm),
+    onSuccess: (res) => {
+      if (res.deleted > 0) {
+        toast.success(`Decision инвалидирован (${res.deleted}). Следующий ingest пройдёт T1/T2/T3 заново.`)
+      } else {
+        toast.warning('Decision не найден (возможно уже истёк по TTL).')
+      }
+      invalidate()
+    },
+    onError: (e: Error) => toast.error(`Ошибка инвалидации: ${e.message}`),
   })
 
   const bulkRevert = useMutation({
@@ -94,6 +114,7 @@ export function MatchLogTab() {
             ['reject', 'reject'],
             ['unlink', 'unlink'],
             ['revert', 'revert'],
+            ['invalidate', 'invalidate (T0 cache)'],
           ]}
           onChange={v => setFilters(f => ({ ...f, action: v || undefined, offset: 0 }))}
         />
@@ -203,6 +224,9 @@ export function MatchLogTab() {
                   onRevert={(withAlias) =>
                     oneRevert.mutate({ id: row.id, withAlias })
                   }
+                  onInvalidateDecision={(titleNorm) =>
+                    invalidate_decision.mutate(titleNorm)
+                  }
                 />
               ))}
             </tbody>
@@ -270,15 +294,19 @@ function FilterSelect({
 }
 
 function LogRow({
-  row, selected, onToggle, onRevert,
+  row, selected, onToggle, onRevert, onInvalidateDecision,
 }: {
   row: MatchLogEntry
   selected: boolean
   onToggle: () => void
   onRevert: (withAlias: boolean) => void
+  onInvalidateDecision: (titleNorm: string) => void
 }) {
   const isReverted = row.reverted_at != null
   const isRevertAction = row.action === 'revert'
+  // T0 кэш можно инвалидировать только если у записи есть title_raw
+  // и action соответствует «решающим» T0-источникам.
+  const canInvalidate = !!row.title_raw && INVALIDATE_ACTIONS.has(row.action)
 
   return (
     <tr className={clsx(
@@ -297,7 +325,30 @@ function LogRow({
       <td className="px-2 py-1.5">
         <TierBadge tier={row.tier} compact />
       </td>
-      <td className="px-2 py-1.5 font-mono text-gray-300">{row.action}</td>
+      <td className="px-2 py-1.5 font-mono text-gray-300">
+        <div className="flex items-center gap-1.5">
+          <span>{row.action}</span>
+          {canInvalidate && (
+            <button
+              type="button"
+              title="Инвалидировать decision в T0 cache — следующий ingest пройдёт T1/T2/T3 заново"
+              onClick={(e) => {
+                e.stopPropagation()
+                if (!row.title_raw) return
+                const norm = normalizeTitle(row.title_raw)
+                if (!confirm(
+                  `Инвалидировать decision для:\n  «${row.title_raw}»\n\nСледующий ingest того же title прогонит matching заново.`,
+                )) return
+                onInvalidateDecision(norm)
+              }}
+              className="px-1 py-0.5 text-[9px] bg-amber-900/30 hover:bg-amber-900/60 text-amber-300 rounded inline-flex items-center gap-0.5"
+            >
+              <Trash2 size={9} />
+              cache
+            </button>
+          )}
+        </div>
+      </td>
       <td className="px-2 py-1.5 max-w-[200px]">
         <span className="truncate block text-gray-200" title={row.title_raw ?? ''}>
           {row.title_raw ?? '—'}

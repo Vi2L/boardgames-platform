@@ -28,6 +28,7 @@ class MatchAction(str, Enum):
     UNLINK = "unlink"       # отвязать (вернуть в unmatched)
     REASSESS = "reassess"   # batch reassess
     REVERT = "revert"       # откат конкретной записи match_log
+    INVALIDATE = "invalidate"  # инвалидация Tier 0 cache (CAT-12)
     # Промежуточные progress-entries для UI Штучного матчинга. Не меняют
     # offer.game_id — пишутся через `log_progress()` вместо `log_change()`.
     # При revert игнорируются (revert_one фильтрует по action не in PROGRESS).

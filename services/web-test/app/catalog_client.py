@@ -469,6 +469,26 @@ class CatalogClient:
         )
         return _ok_or_raise(resp)
 
+    async def invalidate_decision(self, title_norm: str) -> dict[str, Any]:
+        """DELETE /matching/decisions/{title_norm} — точечная инвалидация
+        Tier 0 кэша (CAT-12). Используется в MatchLog UI для отмены
+        ошибочного reject'а или auto-match'а — следующий ingest того же
+        title прогонит T1/T2/T3 заново."""
+        resp = await self._client.delete(f"/matching/decisions/{title_norm}")
+        return _ok_or_raise(resp)
+
+    async def invalidate_decisions_bulk(
+        self, *, title_contains: str | None = None, only_negative: bool = False,
+    ) -> dict[str, Any]:
+        """POST /matching/decisions/invalidate — bulk-инвалидация по фильтрам."""
+        payload: dict[str, Any] = {}
+        if title_contains is not None:
+            payload["title_contains"] = title_contains
+        if only_negative:
+            payload["only_negative"] = True
+        resp = await self._client.post("/matching/decisions/invalidate", json=payload)
+        return _ok_or_raise(resp)
+
     async def batch_revert_match_log(
         self, batch_id: str, *, delete_alias: bool = False,
     ) -> dict[str, Any]:

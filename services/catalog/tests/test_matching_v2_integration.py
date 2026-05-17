@@ -865,3 +865,91 @@ class TestIngestE2E:
         body = r.json()
         assert "items" in body
         assert "total" in body
+
+
+# ── CAT-12: invalidation API ──────────────────────────────────────────────────
+
+
+class TestInvalidationApi:
+    """Endpoints DELETE/POST /matching/decisions для очистки T0 cache."""
+
+    async def test_invalidate_single_title(self, client: AsyncClient, session: AsyncSession):
+        # Засеваем negative cache (reject) на title_norm "spam"
+        from catalog.matching.v2.decisions import save_decision
+        await save_decision(
+            session, title_norm="spam", game_id=None,
+            source="auto_t3", tier=3, score=0.99,
+        )
+        await session.commit()
+
+        r = await client.delete("/matching/decisions/spam")
+        assert r.status_code == 200
+        body = r.json()
+        assert body == {"title_norm": "spam", "deleted": 1}
+
+        # Audit-запись появилась с action='invalidate'
+        logs = (await client.get("/matching/log?action=invalidate")).json()
+        assert logs["total"] == 1
+        assert "manual_invalidate: title_norm=spam" in logs["items"][0]["reason"]
+
+    async def test_invalidate_missing_returns_zero(self, client: AsyncClient):
+        r = await client.delete("/matching/decisions/nonexistent")
+        assert r.status_code == 200
+        assert r.json()["deleted"] == 0
+        # И audit не пишется (нечего инвалидировать)
+        logs = (await client.get("/matching/log?action=invalidate")).json()
+        assert logs["total"] == 0
+
+    async def test_invalidate_bulk_requires_filter(self, client: AsyncClient):
+        r = await client.post("/matching/decisions/invalidate", json={})
+        assert r.status_code == 400
+
+    async def test_invalidate_bulk_only_negative(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        from catalog.matching.v2.decisions import save_decision
+        gid = await _seed_game(session)
+        # 2 reject'а + 1 positive — bulk only_negative удалит первые два
+        await save_decision(
+            session, title_norm="reject_a", game_id=None,
+            source="auto_t3", tier=3,
+        )
+        await save_decision(
+            session, title_norm="reject_b", game_id=None,
+            source="auto_t3", tier=3,
+        )
+        await save_decision(
+            session, title_norm="positive", game_id=gid,
+            source="auto_t1", tier=1, score=0.95,
+        )
+        await session.commit()
+
+        r = await client.post(
+            "/matching/decisions/invalidate",
+            json={"only_negative": True},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert body["deleted"] == 2
+        assert body["filters"] == {"only_negative": True}
+
+    async def test_invalidate_bulk_title_contains(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        from catalog.matching.v2.decisions import save_decision
+        await save_decision(
+            session, title_norm="каркасон", game_id=None,
+            source="auto_t3", tier=3,
+        )
+        await save_decision(
+            session, title_norm="монополия", game_id=None,
+            source="auto_t3", tier=3,
+        )
+        await session.commit()
+
+        r = await client.post(
+            "/matching/decisions/invalidate",
+            json={"title_contains": "каркас"},
+        )
+        assert r.status_code == 200
+        assert r.json()["deleted"] == 1

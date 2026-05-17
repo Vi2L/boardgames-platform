@@ -920,8 +920,10 @@ class MatchLog(Base):
     __tablename__ = "match_log"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    offer_id: Mapped[int] = mapped_column(
-        BigInteger, ForeignKey("offers.id", ondelete="CASCADE"), nullable=False,
+    # nullable с миграции 0016 — `action='invalidate'` относится к
+    # title_norm, а не к конкретному оферу.
+    offer_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("offers.id", ondelete="CASCADE"),
     )
     prev_game_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("games.id", ondelete="SET NULL"),
@@ -931,6 +933,8 @@ class MatchLog(Base):
     )
     prev_status: Mapped[str | None] = mapped_column(String(16))
     new_status: Mapped[str] = mapped_column(String(16), nullable=False)
+    # `action='invalidate'` (CAT-12) — глобальная операция без оффера,
+    # см. миграцию 0016 (offer_id стал nullable).
     action: Mapped[str] = mapped_column(String(16), nullable=False)
     tier: Mapped[int | None] = mapped_column(SmallInteger)
     score: Mapped[float | None] = mapped_column(Float)

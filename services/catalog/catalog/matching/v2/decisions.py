@@ -95,3 +95,34 @@ async def invalidate_for_title(session: AsyncSession, title_norm: str) -> int:
         text("DELETE FROM match_decisions WHERE title_norm = :norm").bindparams(norm=title_norm)
     )
     return result.rowcount or 0
+
+
+async def invalidate_bulk(
+    session: AsyncSession,
+    *,
+    title_contains: str | None = None,
+    only_negative: bool = False,
+) -> int:
+    """Bulk-delete по фильтрам (CAT-12).
+
+    `title_contains` — подстрочный фильтр по `title_norm` (ILIKE).
+    `only_negative` — только negative cache (`game_id IS NULL`),
+    т.е. reject'ы и LLM `not_a_boardgame`. Манипуляция позитивным кешем
+    более рискованная — следующий ingest пройдёт T1/T2/T3 заново.
+
+    Без фильтров — НЕ удаляет всё (защита). Вернётся 0.
+    """
+    if title_contains is None and not only_negative:
+        return 0
+
+    conditions: list[str] = []
+    params: dict = {}
+    if title_contains is not None:
+        conditions.append("title_norm ILIKE :pattern")
+        params["pattern"] = f"%{title_contains}%"
+    if only_negative:
+        conditions.append("game_id IS NULL")
+
+    sql = f"DELETE FROM match_decisions WHERE {' AND '.join(conditions)}"
+    result = await session.execute(text(sql).bindparams(**params))
+    return result.rowcount or 0
