@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
 import {
   Search, Cpu, Database, FlaskConical, Library, Bug, Inbox, Boxes,
-  Activity, RefreshCw, Sparkles,
+  Activity, RefreshCw, Sparkles, BookOpen,
 } from 'lucide-react'
 
 import { SearchPage } from './pages/SearchPage'
@@ -42,6 +42,9 @@ const NAV: NavItem[] = [
   { to: '/testing',   label: 'Тесты',     icon: FlaskConical },
   { to: '/dlq',       label: 'DLQ',       icon: Inbox },
   { to: '/status',    label: 'Статус',    icon: Activity },
+  // external=true → открывается в новой вкладке как статический /help.html,
+  // лежит в frontend/public/. Не часть SPA.
+  { to: '/help.html', label: 'Помощь',    icon: BookOpen, external: true },
 ]
 
 // ─── Breadcrumb mapping ─────────────────────────────────────────────────────

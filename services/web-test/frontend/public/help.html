@@ -1,0 +1,1352 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Помощь · Parser Debug Portal</title>
+  <meta name="description" content="Инструкция администратора по разделам портала: Поиск, Парсеры, Debug, БД, Каталог, Матчинг, BGG Sync, Источники, Тесты, DLQ, Статус." />
+
+  <!--
+    Стили инлайн — страница self-contained, не зависит от React-бандла портала.
+    Палитра: Tailwind gray-950..gray-100 + violet-500/300 для акцентов, чтобы
+    визуально стыковалось с основным интерфейсом.
+  -->
+  <style>
+    :root {
+      --bg:        #030712; /* gray-950 */
+      --bg-card:  #111827;  /* gray-900 */
+      --bg-soft:  #1f2937;  /* gray-800 */
+      --bd:       #1f2937;
+      --bd-soft:  #374151;  /* gray-700 */
+      --fg:       #f3f4f6;  /* gray-100 */
+      --fg-muted: #9ca3af;  /* gray-400 */
+      --fg-dim:   #6b7280;  /* gray-500 */
+      --accent:   #a78bfa;  /* violet-400 */
+      --accent-d: #7c3aed;  /* violet-600 */
+      --accent-b: #1e1b4b;  /* indigo-950 / violet-950 */
+      --good:     #34d399;  /* emerald-400 */
+      --warn:     #fbbf24;  /* amber-400 */
+      --bad:      #f87171;  /* red-400 */
+      --mono: ui-monospace, "SF Mono", Menlo, Consolas, "Roboto Mono", monospace;
+    }
+
+    * { box-sizing: border-box; }
+    html, body { background: var(--bg); color: var(--fg); margin: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+      font-size: 14px; line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Layout ─────────────────────────────────────────────────────────── */
+    .shell {
+      display: grid;
+      grid-template-columns: 260px minmax(0, 1fr);
+      max-width: 1400px;
+      margin: 0 auto;
+      min-height: 100vh;
+    }
+    .topbar {
+      position: sticky; top: 0; z-index: 10;
+      background: rgba(3, 7, 18, 0.92);
+      backdrop-filter: blur(8px);
+      border-bottom: 1px solid var(--bd);
+      padding: 14px 24px;
+      display: flex; align-items: center; gap: 16px;
+      grid-column: 1 / -1;
+    }
+    .brand { font-weight: 700; color: var(--fg); }
+    .brand small { color: var(--fg-dim); font-weight: 400; margin-left: 8px; }
+    .topbar input[type="search"] {
+      flex: 1; max-width: 460px;
+      background: var(--bg-card);
+      border: 1px solid var(--bd-soft);
+      color: var(--fg);
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      outline: none;
+    }
+    .topbar input[type="search"]:focus {
+      border-color: var(--accent-d);
+      box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.2);
+    }
+    .topbar .hint {
+      color: var(--fg-dim); font-size: 11px; font-family: var(--mono);
+    }
+    .topbar .back-link {
+      color: var(--fg-muted); text-decoration: none; font-size: 13px;
+      padding: 6px 12px; border-radius: 6px;
+      border: 1px solid var(--bd-soft);
+      transition: color .15s, background .15s;
+    }
+    .topbar .back-link:hover { color: var(--fg); background: var(--bg-soft); }
+
+    aside.toc {
+      border-right: 1px solid var(--bd);
+      padding: 16px 8px 32px 16px;
+      position: sticky; top: 60px;
+      align-self: start;
+      max-height: calc(100vh - 60px);
+      overflow-y: auto;
+    }
+    aside.toc h3 {
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--fg-dim);
+      margin: 12px 8px 6px;
+      font-family: var(--mono);
+    }
+    aside.toc a {
+      display: block;
+      color: var(--fg-muted);
+      text-decoration: none;
+      padding: 5px 10px;
+      border-radius: 6px;
+      font-size: 13px;
+      border-left: 2px solid transparent;
+    }
+    aside.toc a:hover { color: var(--fg); background: var(--bg-soft); }
+    aside.toc a.active {
+      color: var(--accent);
+      background: rgba(124, 58, 237, 0.12);
+      border-left-color: var(--accent-d);
+    }
+    aside.toc a .icon { display: inline-block; width: 18px; opacity: 0.7; }
+
+    main {
+      padding: 24px 32px 80px;
+      max-width: 920px;
+    }
+    @media (max-width: 900px) {
+      .shell { grid-template-columns: 1fr; }
+      aside.toc {
+        position: static; max-height: none;
+        border-right: none; border-bottom: 1px solid var(--bd);
+      }
+      main { padding: 20px 16px 60px; }
+    }
+
+    /* ── Typography ─────────────────────────────────────────────────────── */
+    h1 { font-size: 24px; margin: 36px 0 8px; }
+    h2 {
+      font-size: 18px; margin: 28px 0 12px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid var(--bd);
+    }
+    h3 { font-size: 15px; margin: 20px 0 8px; color: var(--fg); }
+    h4 { font-size: 13px; margin: 16px 0 6px; color: var(--fg-muted); text-transform: uppercase; letter-spacing: 0.06em; }
+    p  { margin: 8px 0; color: #d1d5db; /* gray-300 */ }
+    ul, ol { margin: 8px 0 12px; padding-left: 22px; color: #d1d5db; }
+    li { margin: 4px 0; }
+    a { color: var(--accent); }
+    a:hover { color: #c4b5fd; }
+    code {
+      background: var(--bg-soft);
+      padding: 1px 6px; border-radius: 4px;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #e5e7eb;
+    }
+    pre {
+      background: var(--bg-card);
+      border: 1px solid var(--bd);
+      border-radius: 8px;
+      padding: 12px 14px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      color: #e5e7eb;
+    }
+    pre code { background: transparent; padding: 0; }
+
+    .section {
+      border: 1px solid var(--bd);
+      background: var(--bg-card);
+      border-radius: 12px;
+      padding: 18px 22px;
+      margin: 18px 0;
+    }
+    .section header.section-head {
+      display: flex; align-items: center; gap: 10px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .section header.section-head .chev {
+      color: var(--fg-dim);
+      transition: transform .15s;
+    }
+    .section.closed header.section-head .chev { transform: rotate(-90deg); }
+    .section.closed > .section-body { display: none; }
+    .section h2 { border: none; margin: 0; flex: 1; padding: 0; }
+    .section .tag {
+      font-family: var(--mono);
+      font-size: 11px;
+      padding: 2px 8px;
+      border-radius: 10px;
+      background: rgba(124, 58, 237, 0.18);
+      color: var(--accent);
+      border: 1px solid rgba(124, 58, 237, 0.35);
+    }
+    .section .tag.danger {
+      background: rgba(239, 68, 68, 0.18); color: var(--bad);
+      border-color: rgba(239, 68, 68, 0.4);
+    }
+    .section .tag.warn {
+      background: rgba(251, 191, 36, 0.18); color: var(--warn);
+      border-color: rgba(251, 191, 36, 0.4);
+    }
+    .section .tag.good {
+      background: rgba(52, 211, 153, 0.18); color: var(--good);
+      border-color: rgba(52, 211, 153, 0.4);
+    }
+    .section .path {
+      font-family: var(--mono); font-size: 12px;
+      color: var(--fg-dim);
+    }
+
+    /* ── Tabs (внутри секций) ───────────────────────────────────────────── */
+    .tabs {
+      display: flex; gap: 4px;
+      border-bottom: 1px solid var(--bd);
+      margin: 12px 0 14px;
+      flex-wrap: wrap;
+    }
+    .tabs button {
+      background: none; border: none; cursor: pointer;
+      color: var(--fg-muted);
+      padding: 7px 12px;
+      font-size: 13px;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+      font-family: inherit;
+    }
+    .tabs button:hover { color: var(--fg); }
+    .tabs button.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent-d);
+    }
+    .tab-panel { display: none; }
+    .tab-panel.active { display: block; }
+
+    /* ── Callouts ───────────────────────────────────────────────────────── */
+    .callout {
+      border-left: 3px solid var(--accent-d);
+      background: rgba(124, 58, 237, 0.06);
+      padding: 10px 14px;
+      border-radius: 0 8px 8px 0;
+      margin: 12px 0;
+      color: #e5e7eb;
+    }
+    .callout.warn  { border-left-color: var(--warn); background: rgba(251, 191, 36, 0.06); }
+    .callout.danger{ border-left-color: var(--bad);  background: rgba(239, 68, 68, 0.06); }
+    .callout.good  { border-left-color: var(--good); background: rgba(52, 211, 153, 0.06); }
+    .callout strong { display: block; margin-bottom: 4px; }
+
+    /* ── Таблицы ────────────────────────────────────────────────────────── */
+    table {
+      width: 100%; border-collapse: collapse;
+      margin: 8px 0 12px;
+      font-size: 13px;
+    }
+    th, td {
+      text-align: left; padding: 7px 10px;
+      border-bottom: 1px solid var(--bd);
+    }
+    th { color: var(--fg-muted); font-weight: 500; }
+    td { color: #d1d5db; }
+    tr:hover td { background: rgba(255,255,255,0.02); }
+    td code { white-space: nowrap; }
+
+    /* ── kbd ────────────────────────────────────────────────────────────── */
+    kbd {
+      display: inline-block;
+      background: var(--bg-soft);
+      border: 1px solid var(--bd-soft);
+      border-bottom-width: 2px;
+      border-radius: 4px;
+      padding: 1px 6px;
+      font-family: var(--mono); font-size: 11.5px;
+      color: var(--fg);
+    }
+
+    /* ── Карточки workflow ──────────────────────────────────────────────── */
+    .recipe {
+      border: 1px solid var(--bd);
+      background: var(--bg);
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin: 10px 0;
+    }
+    .recipe .recipe-title {
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: var(--fg);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .recipe ol { padding-left: 22px; }
+    .recipe ol li { margin: 3px 0; }
+
+    /* ── search no-match ────────────────────────────────────────────────── */
+    .empty {
+      text-align: center; color: var(--fg-dim);
+      padding: 60px 0;
+      font-style: italic;
+    }
+
+    @media print {
+      .topbar, aside.toc { display: none; }
+      .shell { grid-template-columns: 1fr; }
+      main { padding: 0; max-width: none; }
+      .section.closed > .section-body { display: block; }
+      .section { page-break-inside: avoid; border-color: #ccc; }
+      body { color: #000; background: #fff; }
+      p, td, li { color: #222; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="shell">
+
+  <!-- ── Topbar ───────────────────────────────────────────────────────── -->
+  <div class="topbar">
+    <div class="brand">📘 Помощь <small>Parser Debug Portal · v0.1.0</small></div>
+    <input
+      id="search"
+      type="search"
+      placeholder="Поиск по инструкции… (нажмите /)"
+      aria-label="Поиск по инструкции"
+    />
+    <span class="hint">esc — снять фокус</span>
+    <a href="/" class="back-link">← Вернуться в портал</a>
+  </div>
+
+  <!-- ── Sticky TOC ───────────────────────────────────────────────────── -->
+  <aside class="toc" aria-label="Содержание">
+    <h3>Содержание</h3>
+    <a href="#intro" class="active"><span class="icon">📖</span>О портале</a>
+    <a href="#search-page"><span class="icon">🔍</span>Поиск</a>
+    <a href="#parsers"><span class="icon">⚙️</span>Парсеры</a>
+    <a href="#debug"><span class="icon">🐞</span>Debug</a>
+    <a href="#database"><span class="icon">💾</span>База данных</a>
+    <a href="#catalog"><span class="icon">📚</span>Каталог</a>
+    <a href="#matching"><span class="icon">🎯</span>Матчинг</a>
+    <a href="#bgg-sync"><span class="icon">🔁</span>BGG Sync</a>
+    <a href="#sources"><span class="icon">📦</span>Источники</a>
+    <a href="#testing"><span class="icon">🧪</span>Тесты</a>
+    <a href="#dlq"><span class="icon">📨</span>DLQ</a>
+    <a href="#status"><span class="icon">📈</span>Статус</a>
+    <h3>Прочее</h3>
+    <a href="#hotkeys"><span class="icon">⌨️</span>Горячие клавиши</a>
+    <a href="#recipes"><span class="icon">🧰</span>Рецепты</a>
+    <a href="#faq"><span class="icon">❓</span>Troubleshooting</a>
+  </aside>
+
+  <!-- ── Main content ─────────────────────────────────────────────────── -->
+  <main>
+    <p style="color: var(--fg-dim); font-size: 12px; margin-top: 8px;">
+      Инструкция администратора по работе с разделами портала. Все секции
+      сворачиваются — кликните по заголовку, чтобы свернуть/развернуть.
+      Используйте поиск в шапке для быстрого перехода.
+    </p>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 1. О ПОРТАЛЕ                                                    -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="intro" data-keywords="портал начало sidebar навигация health">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>О портале</h2>
+        <span class="tag">базовое</span>
+      </header>
+      <div class="section-body">
+        <p>
+          <strong>Parser Debug Portal</strong> — внутренний веб-«cockpit» для работы с
+          каталогом настольных игр и парсерами магазинов. Объединяет три бэкенд-сервиса:
+        </p>
+        <table>
+          <thead><tr><th>Сервис</th><th>Роль</th><th>URL в dev</th></tr></thead>
+          <tbody>
+            <tr><td><code>parsers</code></td>     <td>парсинг цен 6+ магазинов</td>     <td><code>:8001</code></td></tr>
+            <tr><td><code>catalog</code></td>     <td>каталог игр + ML-матчинг</td>     <td><code>:8002</code></td></tr>
+            <tr><td><code>web-test</code></td>    <td>сам портал (этот UI)</td>         <td><code>:8000</code></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Открытие портала</h3>
+        <ul>
+          <li><strong>Локально:</strong> <code>http://localhost:8000/</code></li>
+          <li><strong>Dev-режим фронта:</strong> <code>http://localhost:5173/</code> (Vite, hot-reload)</li>
+        </ul>
+
+        <h3>Навигация</h3>
+        <p>Сайдбар слева содержит 11 разделов + бейдж здоровья всех сервисов внизу.
+          Сворачивается/разворачивается кнопкой в правом верхнем углу сайдбара —
+          состояние сохраняется в <code>localStorage</code>.</p>
+
+        <div class="callout">
+          <strong>Health-бейдж</strong>
+          Внизу сайдбара виден индикатор состояния <code>parsers</code> и <code>catalog</code>.
+          Клик показывает popover с подробностями: размер БД parsers, total games в каталоге,
+          число unmatched оффер'ов.
+        </div>
+
+        <h3>Cmd+K — командная палитра</h3>
+        <p>Глобальный hotkey <kbd>⌘</kbd>+<kbd>K</kbd> (или <kbd>Ctrl</kbd>+<kbd>K</kbd>) открывает
+          палитру с быстрыми действиями: переход в разделы, перезапуск последнего
+          поиска с force-refresh, запуск любимых поисков (Favorites).</p>
+
+        <h3>Cmd+/ — фокус на поиске</h3>
+        <p>Из любого места портала <kbd>⌘</kbd>+<kbd>/</kbd> переключает на главную и
+          ставит фокус в поле запроса. Удобно для быстрой проверки цены.</p>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 2. ПОИСК                                                        -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="search-page" data-keywords="поиск SSE цена магазин лояльность бонусы Лавка HobbyGames CrowdGames фильтр out-of-stock наличие watch снимок сохранить">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Поиск <span class="path">/</span></h2>
+        <span class="tag">главный экран</span>
+      </header>
+      <div class="section-body">
+        <p>
+          Streaming-поиск (SSE) по 6+ магазинам параллельно. По мере того как каждый
+          парсер отвечает, результаты подмешиваются в таблицу — не нужно ждать
+          медленный магазин.
+        </p>
+
+        <h3>Форма поиска</h3>
+        <ul>
+          <li><strong>Поле запроса</strong> — название игры. Фокус по <kbd>⌘</kbd>+<kbd>/</kbd>.</li>
+          <li><strong>Магазины</strong> — мульти-select. Пусто = «все доступные».</li>
+          <li><strong>Лимит</strong> — по умолчанию 100 строк, потолок 500.</li>
+          <li><strong>Refresh</strong> — мимо кеша (обращается напрямую к магазину).</li>
+          <li><strong>Показать товары не в наличии</strong> — иначе скрытые товары (HG <code>availability=false</code>, CrowdGames <code>in_stock=false</code>) убираются из таблицы.</li>
+        </ul>
+
+        <h3>Колонки таблицы результатов</h3>
+        <table>
+          <thead><tr><th>Колонка</th><th>Что показывает</th></tr></thead>
+          <tbody>
+            <tr><td><strong>Товар</strong></td><td>Название + клик → ProductDrawer</td></tr>
+            <tr><td><strong>Магазин</strong></td><td>Цветной бейдж + ссылка на оригинал</td></tr>
+            <tr><td><strong>Цена</strong></td><td>В рублях. С учётом скидок лояльности (если включены)</td></tr>
+            <tr><td><strong>Min 30д</strong></td><td>Минимум по этому товару за последние 30 дней</td></tr>
+            <tr><td><strong>Min всё</strong></td><td>Исторический минимум по <code>price_observations</code></td></tr>
+            <tr><td><strong>Δ</strong></td><td>Дельта против последнего наблюдения (▲▼)</td></tr>
+            <tr><td><strong>Статус</strong></td><td>Бейдж <em>sale</em>, <em>нет в наличии</em>, <em>loyalty</em></td></tr>
+          </tbody>
+        </table>
+
+        <h3>Лояльность (личные скидки)</h3>
+        <p>Кнопка <strong>Лояльность</strong> в шапке открывает панель настройки. Поддерживаются:</p>
+        <ul>
+          <li><strong>HobbyGames</strong> — до 15% бонусами от цены товара (если товар не на акции <code>extra.on_sale</code>).</li>
+          <li><strong>Лавка игр</strong> — фиксированный процент + донор-карта VK.</li>
+        </ul>
+        <div class="callout warn">
+          <strong>Оптимистичная цена</strong>
+          HG-бонусы применяются «по каждому товару отдельно» (<code>min(пул, 15% × цена)</code>).
+          При покупке нескольких товаров одной корзиной фактическая скидка может быть меньше.
+          Дисклеймер указан в самой LoyaltyPanel.
+        </div>
+
+        <h3>Бейджи в таблице</h3>
+        <ul>
+          <li><strong style="color: var(--bad);">sale</strong> — цена со скидкой (HG <code>extra.on_sale</code>); зачёркнутая <code>extra.original_price</code> рядом.</li>
+          <li><strong style="color: var(--fg-dim);">нет в наличии</strong> — товар скрыт, если выключен фильтр.</li>
+          <li><strong style="color: var(--accent);">loyalty -N₽</strong> — применена скидка из настроек.</li>
+        </ul>
+
+        <h3>Действия над результатом</h3>
+        <ul>
+          <li><strong>📷 Snapshot</strong> — сохраняет текущий результат в локальную БД портала. Можно потом сравнить с другим прогоном на странице <a href="#testing">Тесты</a>.</li>
+          <li><strong>⭐ Сохранить в Избранное</strong> — запоминает запрос + магазины + конфиг лояльности. Запускается одним кликом из <kbd>⌘</kbd>+<kbd>K</kbd>.</li>
+          <li><strong>👁 Watch-mode</strong> — периодически (по таймеру) повторяет запрос с force-refresh, обновляет цены в реальном времени.</li>
+          <li><strong>⬇️ CSV / JSON</strong> — выгрузка текущей таблицы.</li>
+        </ul>
+
+        <h3>ProductDrawer — карточка товара</h3>
+        <p>Клик по строке открывает drawer с:</p>
+        <ul>
+          <li>Полным заголовком, ценой, ссылкой на магазин.</li>
+          <li>Графиком истории цен (по <code>price_observations</code>).</li>
+          <li>Сырыми полями <code>extra</code> (наличие, акции, original_price).</li>
+          <li>Связанной игрой из каталога, если матчинг проставил <code>game_id</code>.</li>
+        </ul>
+
+        <h3>Deep-link и шеринг ссылок</h3>
+        <p>Параметры в URL: <code>?q=&amp;stores=&amp;limit=&amp;refresh=&amp;auto=1</code>. С <code>auto=1</code>
+          поиск стартует автоматически — удобно для шеринга и для команды «Запустить» из палитры.</p>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 3. ПАРСЕРЫ                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="parsers" data-keywords="парсер run кэш cache магазин trash slug HobbyGames Avito Ozon OnlineTrade GaGa Лавка">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Парсеры <span class="path">/parsers</span></h2>
+        <span class="tag">диагностика</span>
+      </header>
+      <div class="section-body">
+        <p>
+          Сетка карточек: одна карточка на парсер. Сверху — бейдж доступности
+          <code>parsers</code> API (обновляется каждые 15 сек).
+        </p>
+
+        <h3>Карточка парсера</h3>
+        <ul>
+          <li><strong>Slug + название магазина</strong></li>
+          <li><strong>Версия и описание</strong> (берётся из метаданных парсера)</li>
+          <li><strong>Run</strong> — запускает парсер с введённым запросом, показывает результаты прямо в карточке. Удобно «пощупать» один источник, не уходя в /search.</li>
+          <li><strong>🗑 Очистить кеш</strong> — инвалидирует кеш этого магазина. Дальше первый запрос пойдёт live.</li>
+          <li><strong>Status</strong> — последний пинг, latency, ошибки.</li>
+        </ul>
+
+        <div class="callout">
+          <strong>Когда сюда заходить</strong>
+          После добавления нового парсера, после деплоя парсера с правками,
+          для точечной проверки «жив или мёртв». Для глубокой диагностики
+          (Live vs cache, raw HTTP, contract) — раздел <a href="#debug">Debug</a>.
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 4. DEBUG                                                        -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="debug" data-keywords="debug live compare raw http url contract схема coverage heatmap snapshot">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Debug <span class="path">/debug</span></h2>
+        <span class="tag">диагностика</span>
+      </header>
+      <div class="section-body">
+        <p>5 вкладок диагностических инструментов. Все — про парсеры.</p>
+
+        <div class="tabs" data-tabs="debug">
+          <button class="active" data-tab="debug-live">Live Test</button>
+          <button data-tab="debug-compare">Сравнить</button>
+          <button data-tab="debug-url">По URL</button>
+          <button data-tab="debug-contract">Контракт</button>
+          <button data-tab="debug-snap">Raw HTTP</button>
+        </div>
+
+        <div class="tab-panel active" id="debug-live">
+          <h3>Live Test</h3>
+          <p>Запускает выбранный парсер по запросу <strong>мимо кеша</strong> и
+            показывает сырой <code>ParsedProduct</code> — то, что парсер реально вернул из магазина.
+            Используется, чтобы:</p>
+          <ul>
+            <li>Проверить, парсится ли новая категория товаров</li>
+            <li>Увидеть все поля, включая <code>extra.*</code></li>
+            <li>Поймать падение или таймаут до того, как оно попадёт в кеш</li>
+          </ul>
+        </div>
+
+        <div class="tab-panel" id="debug-compare">
+          <h3>Сравнить (cache vs live)</h3>
+          <p>Side-by-side diff: что лежит в кеше vs что отдаст live-парсер по тому же URL.
+            Полезно для расследования «почему цена не обновилась», «почему в поиске старые данные».</p>
+        </div>
+
+        <div class="tab-panel" id="debug-url">
+          <h3>По URL (URL probe)</h3>
+          <p>Парсит конкретный URL карточки товара (а не запрос/категорию). Удобно для:</p>
+          <ul>
+            <li>Проверки парсинга нового шаблона страницы</li>
+            <li>Воспроизведения бага по конкретной ссылке</li>
+            <li>Отладки regex / селекторов на живом ответе</li>
+          </ul>
+        </div>
+
+        <div class="tab-panel" id="debug-contract">
+          <h3>Контракт</h3>
+          <p>Показывает JSON-schema <code>ParsedProduct</code> + heatmap покрытия полей по магазинам:
+            какие парсеры какие поля заполняют. Тёмные ячейки = поле почти не приходит — повод посмотреть,
+            мёртвый ли это парсер или поле опциональное.</p>
+        </div>
+
+        <div class="tab-panel" id="debug-snap">
+          <h3>Raw HTTP snapshots</h3>
+          <p>Таблица всех сохранённых HTTP-ответов (headers + body) от магазинов.
+            Клик по строке открывает drawer с raw-ответом — можно скопировать, искать в нём regex'ом,
+            понять почему парсер «не видит» товар.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 5. БД                                                           -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="database" data-keywords="база данных products stores searches inventory analytics charts latency 429 cache_hit_rate histogram гистограмма цена">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>База данных <span class="path">/database</span></h2>
+        <span class="tag">аналитика</span>
+      </header>
+      <div class="section-body">
+        <p>Большая страница с 7 вкладками. Сверху сводный <strong>health-блок</strong> —
+          4 кликабельные карточки (товары портала, магазины, журнал, БД parsers),
+          каждая ведёт на соответствующую вкладку.</p>
+
+        <div class="tabs" data-tabs="db">
+          <button class="active" data-tab="db-products">Товары портала</button>
+          <button data-tab="db-stores">Магазины</button>
+          <button data-tab="db-searches">Журнал</button>
+          <button data-tab="db-inv">parsers: inventory</button>
+          <button data-tab="db-prods">parsers: товары</button>
+          <button data-tab="db-an">parsers: аналитика</button>
+          <button data-tab="db-ch">parsers: графики</button>
+        </div>
+
+        <div class="tab-panel active" id="db-products">
+          <h3>Товары портала</h3>
+          <p>Локальный кеш товаров, найденных через /search. Можно фильтровать по магазину,
+            сортировать (свежие / цена / алфавит), удалять. Клик по строке открывает
+            ProductDrawer (как на /search).</p>
+        </div>
+
+        <div class="tab-panel" id="db-stores">
+          <h3>Магазины</h3>
+          <p>Список парсеров с метриками: <code>success_rate_24h</code>, <code>avg_response_ms</code>,
+            последний успех/ошибка. Сортировка по умолчанию — «проблемные сначала» (низкий success-rate).</p>
+        </div>
+
+        <div class="tab-panel" id="db-searches">
+          <h3>Журнал поисков</h3>
+          <p>История запросов через /search: что искали, сколько результатов, сколько мс заняло.
+            Полезно для расследования «откуда пользователь видел такие-то цены».</p>
+        </div>
+
+        <div class="tab-panel" id="db-inv">
+          <h3>БД parsers — inventory</h3>
+          <p>По каждому магазину: <code>products_count</code>, <code>observations_count</code>,
+            min/mean/max цена в рублях, дата первого и последнего наблюдения.
+            Per-column сортировка (клик по заголовку).</p>
+        </div>
+
+        <div class="tab-panel" id="db-prods">
+          <h3>БД parsers — товары</h3>
+          <p>Низкоуровневый browser таблицы <code>products</code> в parsers БД. Поиск по title,
+            фильтр по магазину, удаление observations (требует подтверждения).</p>
+        </div>
+
+        <div class="tab-panel" id="db-an">
+          <h3>БД parsers — аналитика</h3>
+          <ul>
+            <li><strong>Latency</strong> — p50/p95/p99 по каждому парсеру за последние сутки.</li>
+            <li><strong>Top queries</strong> — самые частые запросы + cache_hit_rate (0..100).</li>
+            <li><strong>Тихие сбои</strong> — empty-responses (магазин ответил 200, но 0 товаров).</li>
+          </ul>
+        </div>
+
+        <div class="tab-panel" id="db-ch">
+          <h3>БД parsers — графики</h3>
+          <p>Гистограмма распределения цен по диапазонам. Помогает увидеть «странные»
+            кластера — копейки, миллионы и т.п. (артефакты парсинга).</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 6. КАТАЛОГ                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="catalog" data-keywords="каталог games игра алиас alias bgg tesera импорт merge слияние backup dicefest промоушен">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Каталог <span class="path">/catalog</span></h2>
+        <span class="tag">основной workflow</span>
+      </header>
+      <div class="section-body">
+        <p>Главный «склад» канонических игр. 5 вкладок.</p>
+
+        <div class="tabs" data-tabs="cat">
+          <button class="active" data-tab="cat-cat">Каталог</button>
+          <button data-tab="cat-q">Очередь матчинга</button>
+          <button data-tab="cat-log">Журнал матчинга</button>
+          <button data-tab="cat-prom">Промоушен Dicefest</button>
+          <button data-tab="cat-bgg">BGG</button>
+        </div>
+
+        <div class="tab-panel active" id="cat-cat">
+          <h3>Каталог</h3>
+          <ul>
+            <li><strong>Поиск</strong> — fuzzy через <code>pg_trgm</code> (опечатки прощаются).
+              История запросов сохраняется в SuggestInput.</li>
+            <li><strong>Таблица игр</strong> — название (RU + EN), BGG ID, rating, год, кол-во алиасов.</li>
+            <li><strong>Клик по строке</strong> → GameDetailDrawer: полная карточка с BGG / Wikidata / aliases.</li>
+            <li><strong>Кнопки сверху</strong>:
+              <ul>
+                <li><em>Новая игра</em> — открывает GameEditor (ручное создание).</li>
+                <li><em>Импорт BGG / Tesera</em> — ImportWizard с polling до завершения.</li>
+                <li><em>Backup</em> — pg_dump каталога в <code>.scratch/backups/</code> (gitignored).</li>
+              </ul>
+            </li>
+          </ul>
+
+          <h4>Drawer карточки игры</h4>
+          <ul>
+            <li><strong>BggCard</strong> — рейтинг, ранги, веса (complexity), картинка.</li>
+            <li><strong>WikidataCard</strong> — русское название, описание, год, авторы (если обогащено).</li>
+            <li><strong>AliasList / AliasEditor</strong> — CRUD алиасов с <code>verified</code>-флагом.
+              Алиасы повышают score в pg_trgm матчинге.</li>
+            <li><strong>Edit</strong> — открывает GameEditor для правки полей.</li>
+            <li><strong>Merge</strong> — слить эту игру с другой (MergeDialog). Все offers переезжают на оставшуюся, дубликат удаляется.</li>
+          </ul>
+        </div>
+
+        <div class="tab-panel" id="cat-q">
+          <h3>Очередь матчинга (legacy)</h3>
+          <p>Список offers без <code>game_id</code>. Для каждого — топ-N кандидатов с
+            <code>pg_trgm score</code> в LinkPicker. Кнопки <strong>Связать</strong>,
+            <strong>Отклонить</strong>, <strong>Reassess</strong>.</p>
+          <p>Header сверху — статистика очереди (по магазинам и score-buckets).
+            Кнопка <em>Reassess all</em> прогоняет всю очередь повторно (полезно после
+            добавления алиасов).</p>
+          <div class="callout">
+            Новая admin-панель v2 живёт на <a href="#matching">/matching</a>.
+            Эта вкладка остаётся для оперативной ручной работы с конкретными offers.
+          </div>
+        </div>
+
+        <div class="tab-panel" id="cat-log">
+          <h3>Журнал матчинга</h3>
+          <p>Историческая лента <code>match_log</code>: какие offers были связаны/отклонены,
+            каким методом (T0 cache / T1 trgm / T2 ML / manual), кем (auto / оператор). С возможностью
+            <strong>revert</strong> — откатить решение и вернуть offer в очередь.</p>
+        </div>
+
+        <div class="tab-panel" id="cat-prom">
+          <h3>Промоушен Dicefest</h3>
+          <p>Workflow: source-снимок Dicefest → staging → canonical. Позволяет «промоутить»
+            подтверждённые игры из временной staging-таблицы в основную <code>games</code>.</p>
+        </div>
+
+        <div class="tab-panel" id="cat-bgg">
+          <h3>BGG (импорт)</h3>
+          <p>Дополнительная панель импорта BGG (помимо ImportWizard).</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 7. МАТЧИНГ                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="matching" data-keywords="матчинг ml ollama kill-switch warmup re-enqueue circuit breaker tier T0 T1 T2 T3 T4 pipeline">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Матчинг <span class="path">/matching</span></h2>
+        <span class="tag">admin panel</span>
+      </header>
+      <div class="section-body">
+        <p>Operator console для ML-матчинга v2. Header сверху — live-индикаторы (ML status + queue counts).
+          5 вкладок.</p>
+
+        <h3>Архитектура pipeline (вкратце)</h3>
+        <table>
+          <thead><tr><th>Tier</th><th>Что</th><th>Тип</th></tr></thead>
+          <tbody>
+            <tr><td><code>T0</code></td><td>Cache hit (нормализованный title → game_id)</td><td>sync</td></tr>
+            <tr><td><code>T1</code></td><td><code>pg_trgm</code> ≥ 0.92 — почти точное совпадение</td><td>sync</td></tr>
+            <tr><td><code>T2</code></td><td>ML embedding similarity (Ollama)</td><td>async, worker</td></tr>
+            <tr><td><code>T3</code></td><td>ML re-ranking «сложных»</td><td>async</td></tr>
+            <tr><td><code>T4</code></td><td>Manual queue (оператор)</td><td>UI</td></tr>
+          </tbody>
+        </table>
+
+        <div class="tabs" data-tabs="match">
+          <button class="active" data-tab="m-ctrl">Контроль</button>
+          <button data-tab="m-q">Очередь</button>
+          <button data-tab="m-log">Журнал</button>
+          <button data-tab="m-single">Штучный</button>
+          <button data-tab="m-help">Help</button>
+        </div>
+
+        <div class="tab-panel active" id="m-ctrl">
+          <h3>Контроль</h3>
+          <ul>
+            <li><strong>Kill-switch</strong> — глобальный выключатель ML-tier'ов. Используется при инциденте Ollama/моделей.
+              T0/T1 продолжают работать.</li>
+            <li><strong>ML-модели</strong> — список доступных моделей Ollama, текущая выбранная, кнопка <em>Warmup</em> (прогрев — первый запрос всегда медленный).</li>
+            <li><strong>Worker</strong> — статус ML-воркера, queue depth, last error.</li>
+            <li><strong>CircuitStateBadge</strong> — <em>closed</em> / <em>open</em> / <em>half-open</em>. Open = ML временно отключён из-за серии ошибок.</li>
+          </ul>
+          <div class="callout warn">
+            <strong>Когда выключать ML</strong>
+            Ollama залипла / модель отдаёт мусор / процесс жрёт RAM. После kill-switch
+            новые offers пойдут T0→T1→T4 (минуя T2/T3). После рестарта Ollama — <em>Warmup</em> и снять kill-switch.
+          </div>
+        </div>
+
+        <div class="tab-panel" id="m-q">
+          <h3>Очередь</h3>
+          <p>Таблица <code>match_queue</code>: pending / processing / skipped / failed.
+            Фильтры по магазину, score-bucket, статусу. Кнопка <strong>Re-enqueue skipped</strong> —
+            возвращает в очередь записи, которые ML пропустил (обычно после изменения порогов/моделей).</p>
+        </div>
+
+        <div class="tab-panel" id="m-log">
+          <h3>Журнал</h3>
+          <p>Тот же MatchLogTab, что на /catalog → «Журнал матчинга». Показан здесь для удобства —
+            оператор остаётся внутри admin-панели.</p>
+        </div>
+
+        <div class="tab-panel" id="m-single">
+          <h3>Штучный</h3>
+          <p>Прогон одного offer через весь pipeline с progress-drawer'ом: видно, на каком tier'е
+            offer закрепился и почему другие tier'ы не сработали. Идеально для отладки «почему этот offer не матчится».</p>
+        </div>
+
+        <div class="tab-panel" id="m-help">
+          <h3>Help (встроенная)</h3>
+          <p>Полная документация по матчингу: ASCII-схема pipeline, когда вкл/выкл ML, когда re-enqueue,
+            как читать match_log, troubleshooting, глоссарий. Sticky-навигация слева внутри самой вкладки.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 8. BGG SYNC                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="bgg-sync" data-keywords="bgg sync hotness geeklist расписание cron импорт scheduled jobs">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>BGG Sync <span class="path">/bgg-sync</span></h2>
+        <span class="tag">периодика</span>
+      </header>
+      <div class="section-body">
+        <p>Cockpit для периодической синхронизации с BoardGameGeek. 5 вкладок.</p>
+
+        <div class="tabs" data-tabs="bgg">
+          <button class="active" data-tab="bgg-sch">Расписание</button>
+          <button data-tab="bgg-hist">История</button>
+          <button data-tab="bgg-hot">Hotness</button>
+          <button data-tab="bgg-gl">GeekList</button>
+          <button data-tab="bgg-no">Без BGG ID</button>
+        </div>
+
+        <div class="tab-panel active" id="bgg-sch">
+          <h3>Расписание</h3>
+          <p>Health-блок 3 scheduled-job'ов (rank import, hotness fetch, geeklist refresh) +
+            cron editor — позволяет изменить расписание прямо из UI.</p>
+        </div>
+
+        <div class="tab-panel" id="bgg-hist">
+          <h3>История</h3>
+          <p>Таблица ImportJob'ов (manual / scheduled) с фильтрами. Видны статусы (running / done / failed),
+            сколько игр обработано, длительность.</p>
+        </div>
+
+        <div class="tab-panel" id="bgg-hot">
+          <h3>Hotness</h3>
+          <p>Текущий снимок BGG /hot + история + diff: <strong>новые</strong> (попавшие в hot)
+            и <strong>выбывшие</strong> по сравнению с прошлым снимком. Кнопка «Обновить сейчас» — ручной refresh.</p>
+        </div>
+
+        <div class="tab-panel" id="bgg-gl">
+          <h3>GeekList</h3>
+          <p>Импорт кураторских списков (Top 50 Most Played etc.) по ID GeekList'а.
+            Полезно для пополнения каталога играми, которые не лежат в hot/top.</p>
+        </div>
+
+        <div class="tab-panel" id="bgg-no">
+          <h3>Без BGG ID</h3>
+          <p>Список игр из каталога, у которых нет <code>bgg_id</code>. По каждой —
+            прямая ссылка на поиск в BGG, чтобы вручную найти и привязать.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 9. ИСТОЧНИКИ                                                    -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="sources" data-keywords="источники provider dicefest detection staging match profile threshold weights logs">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Источники <span class="path">/sources</span></h2>
+        <span class="tag">provider-agnostic</span>
+      </header>
+      <div class="section-body">
+        <p>Управление актуализацией данных из внешних источников (Dicefest сейчас, BGA / Dicebreaker позже).</p>
+
+        <p>Слева — <strong>ProviderSidebar</strong> с провайдерами. Текущий провайдер в URL:
+          <code>/sources/dicefest</code>. Deep-link работает, история back/forward сохраняется.</p>
+
+        <div class="tabs" data-tabs="src">
+          <button class="active" data-tab="src-det">Detection</button>
+          <button data-tab="src-st">Staging</button>
+          <button data-tab="src-mp">Match params</button>
+          <button data-tab="src-log">Logs</button>
+        </div>
+
+        <div class="tab-panel active" id="src-det">
+          <h3>Detection</h3>
+          <p>Сухой прогон скрапа: показывает <em>что будет</em> — diff между текущим source-снимком
+            и тем, что в БД. Кнопки <strong>Apply</strong> (применить) и <strong>Discard</strong> (отбросить).</p>
+        </div>
+
+        <div class="tab-panel" id="src-st">
+          <h3>Staging</h3>
+          <p>Та же PromotionPanel, что на /catalog → Промоушен Dicefest. Промоушен из staging-таблицы
+            (предварительно подтверждённое) в canonical <code>games</code>.</p>
+        </div>
+
+        <div class="tab-panel" id="src-mp">
+          <h3>Match params</h3>
+          <p>Настройка параметров матчинга для этого провайдера:
+            threshold, веса по полям, external-id маппинг. Поддерживает сохранённые профили —
+            переключаться без правки кода.</p>
+        </div>
+
+        <div class="tab-panel" id="src-log">
+          <h3>Logs</h3>
+          <p>Журнал промоушенов и scrape runs. Кто, когда, что промоутил.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 10. ТЕСТЫ                                                        -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="testing" data-keywords="тесты snapshot снимок suite сьют baseline regress favorites избранное preset">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Тесты (QA) <span class="path">/testing</span></h2>
+        <span class="tag">регресс</span>
+      </header>
+      <div class="section-body">
+        <p>3 вкладки.</p>
+
+        <div class="tabs" data-tabs="t">
+          <button class="active" data-tab="t-sn">Snapshots</button>
+          <button data-tab="t-su">Сьюты</button>
+          <button data-tab="t-fv">Избранное</button>
+        </div>
+
+        <div class="tab-panel active" id="t-sn">
+          <h3>Snapshots</h3>
+          <p>Сохранённые прогоны /search. Выберите два (max) и нажмите <strong>Сравнить</strong> —
+            откроется <code>DiffView</code> с категориями изменений:</p>
+          <ul>
+            <li><strong>price</strong> — цена сменилась</li>
+            <li><strong>lost</strong> — товар пропал из выдачи</li>
+            <li><strong>gained</strong> — новый товар</li>
+            <li><strong>raw</strong> — изменились сырые поля</li>
+            <li><strong>field</strong> — изменилось какое-то <code>extra.*</code> поле</li>
+          </ul>
+        </div>
+
+        <div class="tab-panel" id="t-su">
+          <h3>Сьюты</h3>
+          <p>Test-сьют = набор запросов с ожиданиями (baselines). Запускается один раз — runner
+            прогоняет все запросы и сверяет результаты с baseline (например, <code>min_count ≥ 10</code>).
+            Зелёное / красное по каждому запросу. Используется для регрессионных проверок после правок парсеров.</p>
+        </div>
+
+        <div class="tab-panel" id="t-fv">
+          <h3>Избранное (Favorites)</h3>
+          <p>Сохранённые поисковые запросы с <strong>preset</strong> (всё UI-состояние: магазины, лимит,
+            <code>show_out_of_stock</code>, конфиг лояльности). Один клик из <kbd>⌘</kbd>+<kbd>K</kbd> → восстанавливаем точное состояние.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 11. DLQ                                                         -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="dlq" data-keywords="dlq dead letter queue ingest replay catalog downtime сетевая ошибка">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>DLQ <span class="path">/dlq</span></h2>
+        <span class="tag warn">аварийный</span>
+      </header>
+      <div class="section-body">
+        <p>Dead-Letter Queue для отправки оффер'ов из <code>parsers</code> в <code>catalog</code> через
+          <code>POST /ingest/offers</code>. Если catalog был недоступен или ответил 5xx, parsers не теряет
+          данные — складывает payload в SQLite-таблицу <code>catalog_dlq</code>.</p>
+
+        <h3>Действия</h3>
+        <ul>
+          <li><strong>Replay</strong> (по одной записи) — переотправляет payload. Успех → запись удаляется.</li>
+          <li><strong>Replay all</strong> (batch 50) — заявляет всё подряд. Показывает <em>✓ N успешно, ✗ M провалено</em>.</li>
+          <li><strong>Delete</strong> — удаляет запись без повторной отправки (если payload корявый).</li>
+        </ul>
+
+        <div class="callout warn">
+          <strong>Когда сюда смотреть</strong>
+          После downtime catalog'а. Если на странице висит «N зависших батчей» — нажать <strong>Replay all</strong>.
+          Если payload broken (старый формат) — посмотреть конкретный JSON и решить:
+          replay или delete.
+        </div>
+
+        <p>Список обновляется автоматически каждые 30 сек. Подтверждение требуется на destructive
+          операции (delete, replay-all).</p>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 12. СТАТУС                                                      -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="status" data-keywords="статус график pings history timeline unmatched_offers total_games">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Статус <span class="path">/status</span></h2>
+        <span class="tag">мониторинг</span>
+      </header>
+      <div class="section-body">
+        <p>История пингов обоих сервисов для ретроспектив. При входе на страницу — автопинг,
+          далее каждые 30 сек записывается точка в <code>ping_history</code>.</p>
+
+        <h3>Что видно</h3>
+        <ul>
+          <li><strong>График unmatched_offers</strong> во времени — основная метрика прогресса матчинга.</li>
+          <li><strong>График total_games</strong> на вторичной оси — рост каталога.</li>
+          <li><strong>Timeline-лента</strong> статусов parsers / catalog (зелёный/красный).</li>
+          <li><strong>Текущий статус</strong> (последний пинг).</li>
+        </ul>
+
+        <h3>Окна</h3>
+        <p>Селектор периода: <strong>1ч / 6ч / 24ч / 7д</strong>.</p>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 13. ГОРЯЧИЕ КЛАВИШИ                                             -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="hotkeys" data-keywords="горячие клавиши hotkeys shortcuts keyboard cmd ctrl">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Горячие клавиши</h2>
+        <span class="tag good">ускорители</span>
+      </header>
+      <div class="section-body">
+        <table>
+          <thead><tr><th>Сочетание</th><th>Действие</th><th>Где работает</th></tr></thead>
+          <tbody>
+            <tr><td><kbd>⌘</kbd>+<kbd>K</kbd></td><td>Командная палитра</td><td>везде</td></tr>
+            <tr><td><kbd>⌘</kbd>+<kbd>/</kbd></td><td>Фокус на поле поиска</td><td>везде → на /</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Закрыть Drawer / палитру / снять фокус</td><td>везде</td></tr>
+            <tr><td><kbd>/</kbd></td><td>Поиск в этой инструкции</td><td>на этой странице</td></tr>
+          </tbody>
+        </table>
+        <p>На macOS — <kbd>⌘</kbd>, на Win/Linux — <kbd>Ctrl</kbd>.</p>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 14. РЕЦЕПТЫ                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="recipes" data-keywords="workflow рецепты сценарии быстрый старт типовые задачи">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Рецепты — типовые workflow</h2>
+        <span class="tag">шпаргалка</span>
+      </header>
+      <div class="section-body">
+
+        <div class="recipe">
+          <div class="recipe-title">🔎 Проверить цену игры быстро</div>
+          <ol>
+            <li>На любой странице → <kbd>⌘</kbd>+<kbd>/</kbd> (попадаешь на /).</li>
+            <li>Ввести название, нажать <em>Найти</em>.</li>
+            <li>В таблице видишь цены с Min 30д и Δ. Клик по строке → ProductDrawer с историей.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">🆕 Добавить новую игру в каталог</div>
+          <ol>
+            <li>/catalog → <em>Импорт BGG / Tesera</em> (ImportWizard).</li>
+            <li>Ввести BGG ID или название, дождаться job (polling).</li>
+            <li>Или вручную: <em>Новая игра</em> → GameEditor.</li>
+            <li>Если есть оффер'ы без матча — /catalog → Очередь матчинга → <em>Reassess all</em>.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">🔗 Связать offer вручную</div>
+          <ol>
+            <li>/catalog → Очередь матчинга.</li>
+            <li>Найти offer в списке. Слева видны топ-N кандидатов с pg_trgm score.</li>
+            <li>Если правильная игра среди кандидатов — <em>Связать</em>.</li>
+            <li>Если нет — <em>Отклонить</em> (offer уйдёт в фильтр «не игра»).</li>
+            <li>Альтернативно — добавить алиас к нужной игре в /catalog и нажать <em>Reassess</em> на этом offer.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">🩺 Понять, почему парсер не работает</div>
+          <ol>
+            <li>/parsers — посмотреть, доступен ли. Если красный — проблема в API parsers.</li>
+            <li>/debug → <em>Live Test</em> — запустить парсер мимо кеша по тестовому запросу.</li>
+            <li>/debug → <em>Сравнить</em> — увидеть, отличается ли live от cache.</li>
+            <li>/debug → <em>Raw HTTP</em> — посмотреть, что магазин реально отдаёт.</li>
+            <li>/database → <em>parsers: аналитика</em> — latency, error rate, empty-responses.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">⚙️ ML-матчер «залип» / отдаёт мусор</div>
+          <ol>
+            <li>/matching → Контроль.</li>
+            <li>Нажать <strong>Kill-switch</strong> — выключить ML-tier'ы. T0/T1 продолжают работать.</li>
+            <li>Перезапустить Ollama / проверить модели.</li>
+            <li>Нажать <em>Warmup</em>, дождаться готовности.</li>
+            <li>Снять kill-switch.</li>
+            <li>/matching → Очередь → <em>Re-enqueue skipped</em> — вернуть в обработку то, что ML пропустил.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">📨 После downtime catalog</div>
+          <ol>
+            <li>/dlq — если висят зависшие батчи, нажать <strong>Replay all</strong>.</li>
+            <li>Проверить, что число падает к нулю.</li>
+            <li>Если payload сломан (старый формат) — посмотреть конкретный JSON и решить delete vs replay.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">🧪 Регрессия после правок парсера</div>
+          <ol>
+            <li>До правок: /search прогон → <strong>Сохранить snapshot</strong>.</li>
+            <li>Деплой парсера.</li>
+            <li>После: повторить /search с force-refresh → второй snapshot.</li>
+            <li>/testing → выбрать оба → <em>Сравнить</em>. Видно: цены поменялись, товары потерялись/появились.</li>
+          </ol>
+        </div>
+
+        <div class="recipe">
+          <div class="recipe-title">📊 Backup каталога перед опасной операцией</div>
+          <ol>
+            <li>/catalog → кнопка <strong>Backup</strong> в шапке.</li>
+            <li>pg_dump попадает в <code>.scratch/backups/</code> (gitignored, ротация — 10 свежих).</li>
+            <li>Restore: <code>bin/backup-catalog.sh restore &lt;file&gt;</code>.</li>
+          </ol>
+        </div>
+
+      </div>
+    </section>
+
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <!-- 15. FAQ / TROUBLESHOOTING                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════ -->
+    <section class="section" id="faq" data-keywords="faq troubleshooting проблема ошибка чёрный экран 502 cors недоступен">
+      <header class="section-head">
+        <span class="chev">▾</span>
+        <h2>Troubleshooting</h2>
+        <span class="tag danger">когда сломалось</span>
+      </header>
+      <div class="section-body">
+
+        <h3>Health-бейдж в сайдбаре красный</h3>
+        <p>Один из соседей (<code>parsers</code> / <code>catalog</code>) недоступен. Проверить:</p>
+        <ul>
+          <li><code>docker compose ps</code> — все 4 контейнера healthy.</li>
+          <li><code>docker logs bg-parsers</code> / <code>bg-catalog</code> — что в логах.</li>
+          <li>Health-popover в сайдбаре — какая именно метрика красная.</li>
+        </ul>
+
+        <h3>Чёрный экран на /database</h3>
+        <p>Исторически было: фронт обращался к несуществующим полям ответа parsers. Если воспроизводится снова —
+          проверить DevTools console и сравнить с реальным ответом <code>GET /api/parsers-db/*</code>.</p>
+
+        <h3>«Cache hit» при force-refresh</h3>
+        <p>Force-refresh идёт мимо кеша parsers, но не мимо кеша браузера. Hard reload
+          (<kbd>⌘</kbd>+<kbd>⇧</kbd>+<kbd>R</kbd>) или <em>Очистить кеш</em> в /parsers.</p>
+
+        <h3>Поиск отдаёт 0 результатов</h3>
+        <ul>
+          <li>Выключен ли фильтр <em>Показать товары не в наличии</em>?</li>
+          <li>Все ли магазины выбраны?</li>
+          <li>/parsers — все ли парсеры зелёные?</li>
+          <li>/debug → Live Test по одному магазину — отвечает ли он вообще.</li>
+        </ul>
+
+        <h3>Замёрзший offer в очереди матчинга</h3>
+        <p>Если оффер «застрял» в pending много часов:</p>
+        <ul>
+          <li>/matching → Контроль — жив ли worker, нет ли open circuit breaker.</li>
+          <li>/matching → Очередь → Re-enqueue skipped.</li>
+          <li>/matching → Штучный — прогнать конкретный offer и посмотреть, на каком tier'е затыкается.</li>
+        </ul>
+
+        <h3>DLQ растёт</h3>
+        <p>Если /dlq показывает много зависших батчей и число растёт — значит catalog не принимает
+          ingest. Скорее всего поломка контракта (POST /ingest/offers).
+          Проверить: <code>docker logs bg-catalog | grep ingest</code>.</p>
+
+        <h3>Импорт BGG висит «running»</h3>
+        <p>ImportWizard polling'ит job. Если статус не меняется &gt; 5 мин — посмотреть
+          логи catalog. Иногда BGG отдаёт 202 (rate-limit) — ждать. Polling auto-stop'ится по статусу done/failed.</p>
+
+      </div>
+    </section>
+
+    <!-- ── Footer ───────────────────────────────────────────────────── -->
+    <p style="text-align: center; color: var(--fg-dim); margin-top: 40px; font-size: 12px;">
+      Parser Debug Portal · документация для оператора ·
+      <a href="/" style="color: var(--accent);">вернуться в портал</a>
+    </p>
+
+  </main>
+</div>
+
+<!--
+  Behaviors:
+  - Search: фильтрует секции по тексту (полное вхождение + data-keywords)
+  - Section collapse: клик по header.section-head раскрывает/сворачивает
+  - Tabs: data-tabs="..." + data-tab="..." внутри
+  - Active TOC: IntersectionObserver на h2 (внутри .section)
+  - Hotkeys: "/" — фокус поиска, Esc — снять фокус
+-->
+<script>
+(function() {
+  'use strict';
+
+  /* ── 1. Collapse секций ───────────────────────────────────────────── */
+  document.querySelectorAll('.section').forEach(sec => {
+    const head = sec.querySelector('.section-head');
+    if (!head) return;
+    head.addEventListener('click', (e) => {
+      // не сворачивать, если кликнули по ссылке/копированию
+      if (e.target.closest('a, button, code')) return;
+      sec.classList.toggle('closed');
+    });
+  });
+
+  /* ── 2. Tabs внутри секций ────────────────────────────────────────── */
+  document.querySelectorAll('.tabs').forEach(tabs => {
+    const buttons = tabs.querySelectorAll('button[data-tab]');
+    buttons.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const target = btn.dataset.tab;
+        // Найти соседние panel'и в той же section
+        const section = tabs.closest('.section') || document;
+        section.querySelectorAll('.tabs button').forEach(b => b.classList.remove('active'));
+        section.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+        btn.classList.add('active');
+        const panel = section.querySelector('#' + target);
+        if (panel) panel.classList.add('active');
+      });
+    });
+  });
+
+  /* ── 3. Поиск по содержимому ──────────────────────────────────────── */
+  const searchInput = document.getElementById('search');
+  const sections = Array.from(document.querySelectorAll('.section'));
+  const noMatch = (() => {
+    const el = document.createElement('div');
+    el.className = 'empty';
+    el.textContent = 'По запросу ничего не найдено. Попробуйте другую формулировку.';
+    el.style.display = 'none';
+    document.querySelector('main').appendChild(el);
+    return el;
+  })();
+
+  // Индекс: для каждой секции — нижний регистр всего текста + keywords
+  const index = sections.map(sec => ({
+    el: sec,
+    text: (sec.textContent + ' ' + (sec.dataset.keywords || '')).toLowerCase(),
+  }));
+
+  searchInput.addEventListener('input', (e) => {
+    const q = e.target.value.trim().toLowerCase();
+    if (!q) {
+      sections.forEach(s => s.style.display = '');
+      noMatch.style.display = 'none';
+      return;
+    }
+    // токены — все слова из запроса должны встречаться (AND)
+    const tokens = q.split(/\s+/).filter(Boolean);
+    let visible = 0;
+    index.forEach(({ el, text }) => {
+      const hit = tokens.every(tok => text.includes(tok));
+      el.style.display = hit ? '' : 'none';
+      if (hit) {
+        // раскрыть найденную секцию
+        el.classList.remove('closed');
+        visible++;
+      }
+    });
+    noMatch.style.display = visible === 0 ? '' : 'none';
+  });
+
+  /* ── 4. Hotkey "/" → фокус на поиск, Esc → blur ───────────────────── */
+  document.addEventListener('keydown', (e) => {
+    if (e.key === '/' && document.activeElement !== searchInput) {
+      // не перехватывать если пользователь печатает в другом инпуте
+      const a = document.activeElement;
+      if (a && (a.tagName === 'INPUT' || a.tagName === 'TEXTAREA')) return;
+      e.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+    }
+    if (e.key === 'Escape') {
+      if (document.activeElement === searchInput) {
+        if (searchInput.value) {
+          searchInput.value = '';
+          searchInput.dispatchEvent(new Event('input'));
+        } else {
+          searchInput.blur();
+        }
+      }
+    }
+  });
+
+  /* ── 5. Активный пункт TOC при скролле ────────────────────────────── */
+  const tocLinks = Array.from(document.querySelectorAll('aside.toc a'));
+  const tocMap = new Map(tocLinks.map(a => [a.getAttribute('href').slice(1), a]));
+
+  // IntersectionObserver: подсвечиваем секцию, чей topOffset ближе к верху viewport
+  // rootMargin сдвигает «триггер» к верхней четверти экрана для стабильного хайлайта
+  const obs = new IntersectionObserver((entries) => {
+    // Берём первую видимую сверху
+    const visible = entries.filter(e => e.isIntersecting)
+      .sort((a, b) => a.target.offsetTop - b.target.offsetTop);
+    if (visible[0]) {
+      const id = visible[0].target.id;
+      tocLinks.forEach(a => a.classList.remove('active'));
+      const link = tocMap.get(id);
+      if (link) link.classList.add('active');
+    }
+  }, { rootMargin: '-80px 0px -70% 0px', threshold: 0 });
+
+  sections.forEach(s => obs.observe(s));
+
+  /* ── 6. Плавный скролл на якоря ───────────────────────────────────── */
+  tocLinks.forEach(a => {
+    a.addEventListener('click', (e) => {
+      const id = a.getAttribute('href').slice(1);
+      const target = document.getElementById(id);
+      if (target) {
+        e.preventDefault();
+        // Раскрыть если свёрнута
+        target.classList.remove('closed');
+        // Сдвинуть с учётом sticky topbar
+        const top = target.getBoundingClientRect().top + window.pageYOffset - 70;
+        window.scrollTo({ top, behavior: 'smooth' });
+        history.replaceState(null, '', '#' + id);
+      }
+    });
+  });
+
+  /* ── 7. Открывать секцию из URL hash ──────────────────────────────── */
+  if (window.location.hash) {
+    const id = window.location.hash.slice(1);
+    const target = document.getElementById(id);
+    if (target) target.classList.remove('closed');
+  }
+})();
+</script>
+
+</body>
+</html>

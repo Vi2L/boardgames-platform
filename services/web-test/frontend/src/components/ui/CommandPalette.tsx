@@ -120,6 +120,8 @@ export interface NavCommandItem {
   to: string
   label: string
   icon: LucideIcon
+  /** Если true — открывать в новой вкладке (внешняя HTML страница, не SPA-роут). */
+  external?: boolean
 }
 
 interface CommandPaletteProps {
@@ -235,7 +237,15 @@ export function CommandPalette({ navItems = [] }: CommandPaletteProps) {
               {navItems.map((n) => (
                 <Command.Item
                   key={n.to}
-                  onSelect={() => handleNav(n.to)}
+                  onSelect={() => {
+                    // external — открываем в новой вкладке вместо SPA-навигации.
+                    if (n.external) {
+                      close()
+                      window.open(n.to, '_blank', 'noopener,noreferrer')
+                    } else {
+                      handleNav(n.to)
+                    }
+                  }}
                   className={ITEM_CLS}
                 >
                   <n.icon size={14} className="text-zinc-500" />

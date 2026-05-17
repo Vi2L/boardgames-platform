@@ -26,6 +26,13 @@ export interface NavItem {
   badge?: number | string
   /** Если задан — показывается StatusDot слева в collapsed mode. */
   badgeTone?: 'warn' | 'danger' | 'info'
+  /**
+   * Если true — пункт рендерится как обычный <a target="_blank">, минуя
+   * React Router. Используется для self-contained HTML-страниц (например,
+   * `/help.html` в `public/`), которые живут отдельно от SPA-бандла.
+   * Такой пункт никогда не isActive — справка открывается в новой вкладке.
+   */
+  external?: boolean
 }
 
 export interface SidebarProps {
@@ -72,52 +79,88 @@ export function Sidebar({ items, collapsed, onToggle, footer, version = 'v0.1.0'
         aria-label="Основная навигация"
         className={clsx('flex-1 py-2 space-y-0.5', collapsed ? 'px-1.5' : 'px-2')}
       >
-        {items.map(({ to, label, icon: Icon, badge }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            title={collapsed ? label : undefined}
-            className={({ isActive }) => clsx(
-              'group relative flex items-center rounded text-xs transition-colors',
-              collapsed ? 'justify-center h-8' : 'h-8 px-2.5 gap-2.5',
-              isActive
-                ? 'bg-indigo-500/10 text-zinc-100 font-medium'
-                : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
-            )}
-          >
-            {({ isActive }) => (
-              <>
-                {isActive && (
-                  <span
-                    aria-hidden
-                    className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-indigo-400"
-                  />
+        {items.map(({ to, label, icon: Icon, badge, external }) => {
+          // Внешние пункты (например, /help.html) — обычный <a target="_blank">,
+          // без isActive, рендерятся в том же визуальном стиле, что и неактивный NavLink.
+          if (external) {
+            return (
+              <a
+                key={to}
+                href={to}
+                target="_blank"
+                rel="noopener noreferrer"
+                title={collapsed ? label : undefined}
+                className={clsx(
+                  'group relative flex items-center rounded text-xs transition-colors',
+                  collapsed ? 'justify-center h-8' : 'h-8 px-2.5 gap-2.5',
+                  'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
                 )}
-                <Icon size={14} className={clsx(isActive ? 'text-indigo-300' : 'text-zinc-500 group-hover:text-zinc-300')} />
+              >
+                <Icon
+                  size={14}
+                  className="text-zinc-500 group-hover:text-zinc-300"
+                />
                 {!collapsed && (
                   <>
                     <span className="flex-1 truncate">{label}</span>
                     {badge !== undefined && badge !== 0 && (
-                      <span className={clsx(
-                        'text-xxs font-mono tabular-nums',
-                        isActive ? 'text-indigo-300' : 'text-zinc-500',
-                      )}>
+                      <span className="text-xxs font-mono tabular-nums text-zinc-500">
                         {badge}
                       </span>
                     )}
                   </>
                 )}
-                {collapsed && badge !== undefined && badge !== 0 && (
-                  <span
-                    className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400"
-                    aria-label={`${badge} новых`}
-                  />
-                )}
-              </>
-            )}
-          </NavLink>
-        ))}
+              </a>
+            )
+          }
+
+          return (
+            <NavLink
+              key={to}
+              to={to}
+              end={to === '/'}
+              title={collapsed ? label : undefined}
+              className={({ isActive }) => clsx(
+                'group relative flex items-center rounded text-xs transition-colors',
+                collapsed ? 'justify-center h-8' : 'h-8 px-2.5 gap-2.5',
+                isActive
+                  ? 'bg-indigo-500/10 text-zinc-100 font-medium'
+                  : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800/60',
+              )}
+            >
+              {({ isActive }) => (
+                <>
+                  {isActive && (
+                    <span
+                      aria-hidden
+                      className="absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-indigo-400"
+                    />
+                  )}
+                  <Icon size={14} className={clsx(isActive ? 'text-indigo-300' : 'text-zinc-500 group-hover:text-zinc-300')} />
+                  {!collapsed && (
+                    <>
+                      <span className="flex-1 truncate">{label}</span>
+                      {badge !== undefined && badge !== 0 && (
+                        <span className={clsx(
+                          'text-xxs font-mono tabular-nums',
+                          isActive ? 'text-indigo-300' : 'text-zinc-500',
+                        )}>
+                          {badge}
+                        </span>
+                      )}
+                    </>
+                  )}
+                  {collapsed && badge !== undefined && badge !== 0 && (
+                    <span
+                      className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-amber-400"
+                      aria-label={`${badge} новых`}
+                    />
+                  )}
+                </>
+              )}
+            </NavLink>
+          )
+        })}
       </nav>
 
       <footer
