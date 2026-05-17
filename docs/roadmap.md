@@ -35,13 +35,19 @@ PRS (parsers), INFRA (общее).
     - 3c — гигиена 51 sub-компонента (`components/*` — violet→indigo,
       эмодзи `✓`/`✗`/`⚡` → CheckCircle2/XCircle).
     Сделано, см. devlog `WT-DESIGN-PR3`.
-  - [ ] **PR 4 · Job UI (`pages/04-jobui.md`)** — extract `components/jobs/JobView.tsx`
-    + `JobHistoryTable` + `PhaseStrip` + reuse в `BggSyncPage`, `TestingPage`
-    (suite-runs), `CatalogPage` (reassess-all/promotion).
-  - [ ] **PR 5 · Search WT-F11 (`pages/05-search.md`)** — Master DataTable
-    с группировкой по `game_id` + drawer (Офферы/История/Матчинг/Raw) +
-    Unmatched-секция. Fallback на frontend-агрегацию до backend group-by-game
-    endpoint.
+  - [x] **WT-DESIGN-PR4 · Job UI** — `components/jobs/` (JobView + PhaseStrip
+    + adapters), интегрирован в `bgg-sync/JobHistoryTable` и `catalog/
+    BggImportPanel`. Сделано (commit `820af0d`, devlog WT-DESIGN-PR4/PR5).
+  - [x] **WT-DESIGN-PR5 · Search WT-F11 (frontend-fallback)** — Master-таблица
+    группировка через `titleSimilarity` clustering + UnmatchedSection.
+    Toggle group/flat в `useSearchStore`. Backend group-by-game endpoint
+    — не блокирующая зависимость. Сделано (commit `a481da2`).
+  - [ ] **WT-F11-DRAWER** — `<GameGroupDrawer>` с табами Офферы/История/
+    Матчинг/Raw для grouped-режима. Сейчас drawer reuses `ProductDrawer`
+    (открывает min-offer группы) — UX-приемлемо, но не полный спек §05.
+  - [ ] **WT-DESIGN-SUITERUN** — `suiteRunToJobLike()` adapter +
+    использование `<JobView>` в `components/testing/SuiteRunner`. Сейчас
+    SuiteRunner с собственной inline-вёрсткой.
 
   Merge в main — после PR 2 проверки на проде. До этого ветка отдельная.
 
