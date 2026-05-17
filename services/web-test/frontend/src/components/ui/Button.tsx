@@ -60,15 +60,32 @@ export interface ButtonProps
 
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
   ({ className, variant, size, icon: Icon, iconRight: IconRight, loading, asChild, disabled, children, ...rest }, ref) => {
-    const Comp = asChild ? Slot : 'button'
     // Размеры иконок согласованы с size: xs=10px, sm=12px, md=14px — чтобы не
     // ломали height строки. Стандартный шаг lucide.
     const iconSize = size === 'md' ? 14 : size === 'xs' ? 10 : 12
+    const classes = clsx(buttonVariants({ variant, size }), className)
+
+    // asChild-режим (Radix Slot): требует РОВНО один React-элемент в children.
+    // Несколько слотов (icon + text + iconRight) ломают `React.Children.only`
+    // внутри Slot — этот баг ронял /search в белый экран при появлении
+    // <Button asChild><Link>…</Link></Button> в UnmatchedSection. Поэтому
+    // в asChild-ветке прокидываем только children как есть.
+    if (asChild) {
+      return (
+        <Slot
+          ref={ref as never}
+          className={classes}
+          {...rest}
+        >
+          {children}
+        </Slot>
+      )
+    }
 
     return (
-      <Comp
-        ref={ref as never}
-        className={clsx(buttonVariants({ variant, size }), className)}
+      <button
+        ref={ref}
+        className={classes}
         disabled={disabled || loading}
         {...rest}
       >
@@ -79,7 +96,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(
         ) : null}
         {children}
         {IconRight && !loading && <IconRight size={iconSize} />}
-      </Comp>
+      </button>
     )
   },
 )
