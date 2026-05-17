@@ -66,9 +66,12 @@ async def test_ingest_auto_matches_existing_game(client: AsyncClient):
     assert body["items"][0]["match_score"] >= 0.9
 
 
-async def test_ingest_typo_still_matches(client: AsyncClient):
-    """Опечатка 'Каркасон' (одна 'с') должна попасть в auto."""
-    gid = await _seed_carcassonne(client)
+async def test_ingest_typo_goes_to_async_queue(client: AsyncClient):
+    """Опечатка 'Каркасон' (одна 'с') даёт trgm ~0.73 — это НИЖЕ T1
+    auto-порога 0.92 (matcher v2). Раньше тест ожидал auto при пороге
+    0.6, теперь — `unmatched` + push в `match_queue` для T2/T3 разбора.
+    """
+    await _seed_carcassonne(client)
     r = await client.post(
         "/ingest/offers",
         json={
@@ -85,9 +88,13 @@ async def test_ingest_typo_still_matches(client: AsyncClient):
     )
     body = r.json()
     item = body["items"][0]
-    # Trgm даёт ~0.73 — выше порога 0.6.
-    assert item["match_status"] == "auto"
-    assert item["game_id"] == gid
+    # T1 trgm не дотянул — оффер ждёт async-обработки (T2/T3) или manual
+    assert item["match_status"] == "unmatched"
+    assert item["game_id"] is None
+    # И появился в очереди матчинга
+    queue = (await client.get("/matching/queue")).json()
+    assert queue["total"] == 1
+    assert queue["items"][0]["title_raw"] == "Каркасон"
 
 
 async def test_ingest_unknown_goes_to_unmatched(client: AsyncClient):
@@ -142,9 +149,9 @@ async def test_ingest_idempotent_and_records_price_history(client: AsyncClient):
 
 
 async def test_auto_match_adds_alias(client: AsyncClient):
-    """Опечатка 'Каркасон' (одна 'с') матчится автоматом, и магазинное
-    написание сохраняется как alias — чтобы при следующем ingest score'у
-    не нужно было снова доказывать через триграммы.
+    """Точное совпадение по title даёт T1 score ≥ 0.92 → auto-match
+    и title_raw сохраняется как alias с source='auto-match'. Следующий
+    ingest того же title попадёт в T0 cache hit, минуя trgm.
     """
     gid = await _seed_carcassonne(client)
     await client.post(
@@ -152,13 +159,14 @@ async def test_auto_match_adds_alias(client: AsyncClient):
         json={
             "store_slug": "hobbygames",
             "products": [
-                {"external_id": "1", "title": "Каркасон", "url": "https://h.ru/1"}
+                # Идентичный title — гарантирует score 1.0 в T1.
+                {"external_id": "1", "title": "Каркассон", "url": "https://h.ru/1"}
             ],
         },
     )
     detail = (await client.get(f"/games/{gid}")).json()
     aliases = [a["alias"] for a in detail["aliases"]]
-    assert "Каркасон" in aliases
+    assert "Каркассон" in aliases
 
 
 async def test_matching_queue_shows_unmatched(client: AsyncClient):
