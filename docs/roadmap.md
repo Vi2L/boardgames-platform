@@ -25,10 +25,23 @@ PRS (parsers), INFRA (общее).
   - [ ] **PR 2 · Proof: Matching на zinc/indigo** — переписать `MatchingSection`
     из `CatalogPage.tsx` на новый ui. Это main proof из ТЗ §7.2. Спека —
     `.scratch/admin-panel-design/pages/01-matching.md` (three-pane + drawer
-    + keyboard).
-  - [ ] **PR 3+ · Раскатка** — Games (`/catalog`), Search WT-F11 group-by-game,
-    Job UI (`/bgg-sync`), `/sources`, `/debug`, `/testing`, `/dlq`, `/status`,
-    `/parsers`, `/database` — по одному PR на страницу.
+    + keyboard). MatchingSection — legacy, заменена `/matching` (WT-MATCH-UX);
+    глубокий переход на zinc/indigo откладывается до отдельной задачи.
+  - [x] **WT-DESIGN-PR3a/b/c · Раскатка дизайна** (ветка `feat/wt-redesign-rollout`):
+    - 3a — гигиена 11 страниц (табы → `ui/Tabs`, эмодзи → lucide, ad-hoc
+      статусы → `<Badge status="…">`, gray→zinc).
+    - 3b — `CatalogPage` Games по `pages/03-games.md` (sticky thead, indigo
+      accent, SourceBadge через token-cls, Button-обёртки, columns picker).
+    - 3c — гигиена 51 sub-компонента (`components/*` — violet→indigo,
+      эмодзи `✓`/`✗`/`⚡` → CheckCircle2/XCircle).
+    Сделано, см. devlog `WT-DESIGN-PR3`.
+  - [ ] **PR 4 · Job UI (`pages/04-jobui.md`)** — extract `components/jobs/JobView.tsx`
+    + `JobHistoryTable` + `PhaseStrip` + reuse в `BggSyncPage`, `TestingPage`
+    (suite-runs), `CatalogPage` (reassess-all/promotion).
+  - [ ] **PR 5 · Search WT-F11 (`pages/05-search.md`)** — Master DataTable
+    с группировкой по `game_id` + drawer (Офферы/История/Матчинг/Raw) +
+    Unmatched-секция. Fallback на frontend-агрегацию до backend group-by-game
+    endpoint.
 
   Merge в main — после PR 2 проверки на проде. До этого ветка отдельная.
 

@@ -8,6 +8,55 @@
 
 ---
 
+## 2026-05-17 · [WT-DESIGN-PR3] Раскатка дизайн-системы на весь портал
+
+**Что сделано:** Ветка `feat/wt-redesign-rollout` — 3 коммита, раскатка
+новой `ui/*` + `design-tokens` на все страницы `web-test/frontend` и 51
+sub-компонент. Без структурной перестройки (cache-keys, store-схемы,
+backend-контракты не тронуты).
+
+- **3a · 11 страниц** (`728b705`) — inline-табы повсюду заменены на
+  `<Tabs>` из ui/ (Radix-based, единый focus-ring); эмодзи `✓ ⭐ 💾 ⚡ 🌐`
+  → lucide-иконки; ad-hoc status-цвета (`bg-yellow-950 text-yellow-400`)
+  → `<Badge status="…">` / `<Tag tone="…">` через `statusSystem`; plain
+  `<button>` → `<Button variant="…">` / `<IconButton>`; `gray-*` → `zinc-*`
+  (нейтральный undertone — handoff §5); custom StatusDot на StatusPage
+  → `<StatusDot>` из ui/; числа в колонках получили `tabular-nums`.
+- **3b · CatalogPage Games** (`0541209`) — Sticky thead z-10, активная
+  строка `bg-indigo-500/10`, hover `zinc-800/30`, resize-handle indigo
+  (был violet), SourceBadge через alpha-tokens (`bg-orange-500/15` для
+  BGG, `bg-blue-500/15` для tesera), ColumnsPicker через Button-обёртки,
+  «Показать ещё» как `<Button variant="ghost" loading>`. Глубокая
+  переделка по `pages/03-games.md`. MatchingSection (legacy, заменена
+  `/matching`) обновлена только по цвету (violet → indigo).
+- **3c · 51 sub-компонент** (`1cfa168`) — violet → indigo по 50 файлам;
+  status-pills `bg-green-900/40` → `bg-emerald-500/15` из tokens; эмодзи
+  в UI рендеринге (`✓ done`, `✗ Ошибка`, `✓ да`, `✓ в каталоге`) →
+  `<CheckCircle2 />` / `<XCircle />`. Затронуто: `parsers/`, `catalog/`,
+  `matching/`, `database/parsers/`, `bgg-sync/`, `sources/`, `testing/`.
+
+`/matching` сознательно осталась в gray/violet — это решение из
+`pages/06-matching-v2-improvements.md` (дельта-апгрейд WT-MATCH-UX
+поверх существующего стиля, не путать с proof из §01).
+
+**Как пользоваться:** `git checkout feat/wt-redesign-rollout` → `npm run
+dev` в `services/web-test/frontend/` → http://localhost:5173. Обход
+страниц: /, /parsers, /debug, /database, /catalog, /matching, /bgg-sync,
+/sources, /testing, /dlq, /status. Проверь визуально — табы везде с
+indigo underline, никаких эмодзи в UI (только в toast-сообщениях
+осталось — handoff не запрещает), статусы единообразно через Badge.
+
+**Не сделано (отложено в roadmap):**
+- PR 4 Job UI (`components/jobs/JobView.tsx` + reuse в BggSync/Testing/
+  Catalog) — `pages/04-jobui.md`.
+- PR 5 Search WT-F11 group-by-game — `pages/05-search.md` (требует
+  либо backend endpoint, либо frontend-fallback агрегации).
+
+**Затронутые файлы:**
+- `services/web-test/frontend/src/pages/*` — 11 страниц.
+- `services/web-test/frontend/src/components/*` — 51 файл.
+- Build: `1366 KB → 1367 KB` (изменения чисто визуальные).
+
 ## 2026-05-17 · [WT-HELP] Раздел «Помощь» с интерактивной HTML-инструкцией
 
 **Что сделано:** Self-contained HTML-страница `frontend/public/help.html` (~79 КБ)
