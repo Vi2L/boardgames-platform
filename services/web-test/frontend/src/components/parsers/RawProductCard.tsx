@@ -130,7 +130,7 @@ function Field({
           href={value}
           target="_blank"
           rel="noreferrer"
-          className={clsx('text-violet-300 hover:underline truncate', mono && 'font-mono')}
+          className={clsx('text-indigo-300 hover:underline truncate', mono && 'font-mono')}
           title={value}
         >
           {value}

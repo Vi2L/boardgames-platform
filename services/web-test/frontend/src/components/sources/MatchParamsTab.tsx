@@ -99,7 +99,7 @@ export function MatchParamsTab({ provider }: Props) {
             type="button"
             onClick={() => setDraft(EMPTY_DRAFT)}
             title="Новый профиль"
-            className="p-1 text-gray-400 hover:text-violet-300"
+            className="p-1 text-gray-400 hover:text-indigo-300"
           >
             <Plus size={16} />
           </button>
@@ -119,13 +119,13 @@ export function MatchParamsTab({ provider }: Props) {
                 className={clsx(
                   'w-full text-left px-2.5 py-1.5 rounded-md text-sm flex items-center justify-between',
                   draft.id === p.id
-                    ? 'bg-violet-900/40 text-violet-200'
+                    ? 'bg-indigo-900/40 text-indigo-200'
                     : 'text-gray-300 hover:bg-gray-800/60',
                 )}
               >
                 <span className="truncate">{p.name}</span>
                 {p.is_default && (
-                  <span className="text-[10px] uppercase tracking-wide text-violet-400 ml-2 flex-shrink-0">
+                  <span className="text-[10px] uppercase tracking-wide text-indigo-400 ml-2 flex-shrink-0">
                     default
                   </span>
                 )}
@@ -193,7 +193,7 @@ export function MatchParamsTab({ provider }: Props) {
             type="button"
             disabled={!canSave}
             onClick={() => saveMutation.mutate()}
-            className="px-3 py-1.5 text-sm rounded-md bg-violet-700 text-white hover:bg-violet-600 disabled:opacity-50"
+            className="px-3 py-1.5 text-sm rounded-md bg-indigo-700 text-white hover:bg-indigo-600 disabled:opacity-50"
           >
             {saveMutation.isPending
               ? 'Сохраняем…'

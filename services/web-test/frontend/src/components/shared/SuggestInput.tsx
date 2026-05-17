@@ -161,7 +161,7 @@ export function SuggestInput({
         disabled={disabled}
         autoFocus={autoFocus}
         autoComplete="off"
-        className="w-full pl-9 pr-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-violet-500 focus:ring-1 focus:ring-violet-500/30 disabled:opacity-50"
+        className="w-full pl-9 pr-4 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500/30 disabled:opacity-50"
       />
       {showDropdown && (
         <div className="absolute z-30 left-0 right-0 mt-1 bg-gray-900 border border-gray-700 rounded-lg shadow-xl max-h-80 overflow-y-auto">
@@ -179,7 +179,7 @@ export function SuggestInput({
           {value.trim() !== '' && (
             <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-gray-500 flex items-center gap-1">
               <span>Каталог</span>
-              {loading && <span className="text-violet-400">·  загрузка</span>}
+              {loading && <span className="text-indigo-400">·  загрузка</span>}
               {!loading && suggestions.length === 0 && <span>·  ничего не найдено</span>}
             </div>
           )}
@@ -215,7 +215,7 @@ function SuggestRow({
       onMouseEnter={onMouseEnter}
       className={clsx(
         'flex items-center gap-2 px-3 py-1.5 text-sm cursor-pointer',
-        active ? 'bg-violet-900/40 text-gray-100' : 'text-gray-200 hover:bg-gray-800',
+        active ? 'bg-indigo-900/40 text-gray-100' : 'text-gray-200 hover:bg-gray-800',
       )}
     >
       {row.kind === 'history' ? (

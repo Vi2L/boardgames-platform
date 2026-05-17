@@ -50,7 +50,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
             'flex items-center gap-2 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors whitespace-nowrap',
             isSearching
               ? 'bg-red-900 hover:bg-red-800 text-red-300'
-              : 'bg-violet-600 hover:bg-violet-500 text-white disabled:opacity-40 disabled:cursor-not-allowed',
+              : 'bg-indigo-600 hover:bg-indigo-500 text-white disabled:opacity-40 disabled:cursor-not-allowed',
           )}
           disabled={!isSearching && !query.trim()}
         >
@@ -67,7 +67,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
           <button
             type="button"
             onClick={() => setAllStores(stores.map(s => s.slug))}
-            className="text-xs text-violet-400 hover:text-violet-300"
+            className="text-xs text-indigo-400 hover:text-indigo-300"
           >
             Все
           </button>
@@ -89,7 +89,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
                   }
                   toggleStore(s.slug)
                 }}
-                className="accent-violet-500 w-3.5 h-3.5"
+                className="accent-indigo-500 w-3.5 h-3.5"
               />
               <span className="text-xs text-gray-300">{s.name}</span>
             </label>
@@ -103,7 +103,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
             type="checkbox"
             checked={refresh}
             onChange={e => setRefresh(e.target.checked)}
-            className="accent-violet-500 w-3.5 h-3.5"
+            className="accent-indigo-500 w-3.5 h-3.5"
           />
           <span className="text-xs text-gray-400 flex items-center gap-1">
             <RotateCcw size={11} /> Принудительное обновление
@@ -114,7 +114,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
             type="checkbox"
             checked={showOutOfStock}
             onChange={e => setShowOutOfStock(e.target.checked)}
-            className="accent-violet-500 w-3.5 h-3.5"
+            className="accent-indigo-500 w-3.5 h-3.5"
           />
           <span className="text-xs text-gray-400 flex items-center gap-1">
             <PackageX size={11} /> Показать товары не в наличии
@@ -128,7 +128,7 @@ export function SearchForm({ stores, onSearch, onStop }: Props) {
             onChange={e => setLimit(Math.max(1, Math.min(500, Number(e.target.value))))}
             min={1}
             max={500}
-            className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-300 focus:outline-none focus:border-violet-500"
+            className="w-16 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-xs text-gray-300 focus:outline-none focus:border-indigo-500"
           />
         </label>
       </div>

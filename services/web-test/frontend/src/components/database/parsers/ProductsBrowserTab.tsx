@@ -49,7 +49,7 @@ export function ProductsBrowserTab() {
   return (
     <div className="space-y-3">
       <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
+        <Info size={13} className="text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="flex-1">
           <strong className="text-gray-300">Browser БД parsers с управлением observations.</strong>
           {' '}Клик по строке раскрывает все точки истории цен товара. Удаление наблюдения нужно,
@@ -146,7 +146,7 @@ function ProductRow({
         </td>
         <td className="px-3 py-2 text-gray-200 truncate max-w-md" title={p.title}>
           <a href={p.url} target="_blank" rel="noreferrer" onClick={e => e.stopPropagation()}
-             className="hover:text-violet-300 inline-flex items-center gap-1">
+             className="hover:text-indigo-300 inline-flex items-center gap-1">
             {p.title} <ExternalLink size={10} className="opacity-50" />
           </a>
         </td>

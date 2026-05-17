@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router-dom'
-import { Trash2, GitCompare, Star, Play, FlaskConical } from 'lucide-react'
+import { Trash2, GitCompare, Star, Play, FlaskConical, Save } from 'lucide-react'
 import clsx from 'clsx'
 import {
   fetchSnapshots, deleteSnapshot, fetchSuites, createSuite,
@@ -11,6 +11,7 @@ import { useSearchStore } from '../store/search'
 import { useLoyaltyStore } from '../store/loyalty'
 import { SuiteRunner } from '../components/testing/SuiteRunner'
 import type { FavoriteOut, SnapshotMeta, SuiteOut, SuiteQuery } from '../types/api'
+import { Tabs, Tag, Button, IconButton, EmptyState, Badge } from '../components/ui'
 
 type Tab = 'snapshots' | 'suites' | 'favorites'
 
@@ -18,43 +19,31 @@ export function TestingPage() {
   const [tab, setTab] = useState<Tab>('snapshots')
 
   return (
-    <div className="space-y-4 max-w-6xl">
+    <div className="p-4 space-y-4 max-w-6xl">
       <div>
-        <h1 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
+        <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
           <FlaskConical size={18} /> Тестирование
         </h1>
-        <p className="text-xs text-gray-500 mt-0.5">
+        <p className="text-xs text-zinc-500 mt-0.5">
           Snapshots, регрессионный diff, test-сьюты, избранное
         </p>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-        <div className="flex border-b border-gray-800">
-          <TabButton active={tab === 'snapshots'} onClick={() => setTab('snapshots')}>Snapshots</TabButton>
-          <TabButton active={tab === 'suites'} onClick={() => setTab('suites')}>Сьюты</TabButton>
-          <TabButton active={tab === 'favorites'} onClick={() => setTab('favorites')}>Избранное</TabButton>
-        </div>
-        <div className="p-4">
-          {tab === 'snapshots' && <SnapshotsTab />}
-          {tab === 'suites' && <SuitesTab />}
-          {tab === 'favorites' && <FavoritesTab />}
-        </div>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+          <Tabs.List className="px-3">
+            <Tabs.Trigger value="snapshots">Snapshots</Tabs.Trigger>
+            <Tabs.Trigger value="suites">Сьюты</Tabs.Trigger>
+            <Tabs.Trigger value="favorites">Избранное</Tabs.Trigger>
+          </Tabs.List>
+          <div className="p-4">
+            <Tabs.Content value="snapshots"><SnapshotsTab /></Tabs.Content>
+            <Tabs.Content value="suites"><SuitesTab /></Tabs.Content>
+            <Tabs.Content value="favorites"><FavoritesTab /></Tabs.Content>
+          </div>
+        </Tabs>
       </div>
     </div>
-  )
-}
-
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={clsx(
-        'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-        active ? 'border-violet-500 text-violet-400' : 'border-transparent text-gray-500 hover:text-gray-300',
-      )}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -85,27 +74,26 @@ function SnapshotsTab() {
     void queryClient.invalidateQueries({ queryKey: ['snapshots'] })
   }
 
-  if (isLoading) return <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>
+  if (isLoading) return <div className="text-sm text-zinc-500 py-8 text-center">Загрузка…</div>
 
   if (items.length === 0) {
     return (
-      <div className="text-sm text-gray-500 py-12 text-center">
-        Snapshots пока нет. Запусти поиск и нажми «💾 Snapshot» на странице поиска.
-      </div>
+      <EmptyState
+        icon={Save}
+        title="Snapshots пока нет"
+        description="Запусти поиск и нажми «Snapshot» на странице поиска."
+      />
     )
   }
 
   return (
     <div className="space-y-3">
       {selected.length === 2 && (
-        <div className="flex items-center gap-2 bg-violet-950/30 border border-violet-800 rounded p-2.5">
-          <span className="text-xs text-violet-300">Выбрано 2 snapshot-а</span>
-          <Link
-            to={`/testing/diff?a=${selected[0]}&b=${selected[1]}`}
-            className="ml-auto flex items-center gap-1.5 px-3 py-1 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs font-medium"
-          >
-            <GitCompare size={12} /> Сравнить
-          </Link>
+        <div className="flex items-center gap-2 bg-indigo-500/10 border border-indigo-500/30 rounded p-2.5">
+          <span className="text-xs text-indigo-200">Выбрано 2 snapshot-а</span>
+          <Button asChild variant="primary" size="sm" icon={GitCompare} className="ml-auto">
+            <Link to={`/testing/diff?a=${selected[0]}&b=${selected[1]}`}>Сравнить</Link>
+          </Button>
         </div>
       )}
 
@@ -123,38 +111,36 @@ function SnapshotRow({
   snap: SnapshotMeta; selected: boolean
   onToggle: () => void; onDelete: () => void
 }) {
+  // source — это не статус пайплайна, а origin записи. Используем Tag,
+  // а не Badge через statusSystem (см. tokens/status-system.md).
+  const sourceTone =
+    snap.source === 'cache' ? 'warn' :
+    snap.source === 'network' ? 'ok' :
+    'neutral'
+
   return (
     <div className={clsx(
       'flex items-center gap-3 px-3 py-2 rounded border',
-      selected ? 'border-violet-700 bg-violet-950/20' : 'border-gray-800 bg-gray-950/40',
+      selected ? 'border-indigo-500/50 bg-indigo-500/10' : 'border-zinc-800 bg-zinc-950/40',
     )}>
       <input type="checkbox" checked={selected} onChange={onToggle} className="cursor-pointer" />
-      <span className="font-mono text-xs text-gray-500 w-12">#{snap.id}</span>
-      <span className="font-medium text-gray-200 truncate flex-1" title={snap.name ?? snap.query}>
+      <span className="font-mono text-xs text-zinc-500 w-12">#{snap.id}</span>
+      <span className="font-medium text-zinc-200 truncate flex-1" title={snap.name ?? snap.query}>
         {snap.name ?? snap.query}
       </span>
-      <span className="text-xs text-gray-500">{snap.summary.products_count ?? 0} товаров</span>
-      {snap.source && (
-        <span className={clsx(
-          'px-1.5 py-0.5 rounded text-xs font-mono',
-          snap.source === 'cache' ? 'bg-yellow-950 text-yellow-400'
-            : snap.source === 'network' ? 'bg-green-950 text-green-400'
-            : 'bg-gray-800 text-gray-400',
-        )}>
-          {snap.source}
-        </span>
-      )}
-      {snap.total_ms != null && <span className="text-xs text-gray-500 font-mono">{snap.total_ms}ms</span>}
-      <span className="text-xs text-gray-600 hidden md:inline">
+      <span className="text-xs text-zinc-500 tabular-nums">{snap.summary.products_count ?? 0} товаров</span>
+      {snap.source && <Tag tone={sourceTone}>{snap.source}</Tag>}
+      {snap.total_ms != null && <span className="text-xs text-zinc-500 font-mono tabular-nums">{snap.total_ms}ms</span>}
+      <span className="text-xs text-zinc-600 hidden md:inline">
         {new Date(snap.created_at).toLocaleString('ru-RU')}
       </span>
-      <button
-        type="button"
+      <IconButton
+        icon={Trash2}
+        size="xs"
+        variant="ghost"
+        aria-label={`Удалить snapshot #${snap.id}`}
         onClick={onDelete}
-        className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/30"
-      >
-        <Trash2 size={13} />
-      </button>
+      />
     </div>
   )
 }
@@ -167,7 +153,7 @@ function SuitesTab() {
   const [selected, setSelected] = useState<number | null>(null)
   const [creating, setCreating] = useState(false)
 
-  if (isLoading) return <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>
+  if (isLoading) return <div className="text-sm text-zinc-500 py-8 text-center">Загрузка…</div>
 
   const current = suites.find(s => s.id === selected) ?? null
 
@@ -177,18 +163,18 @@ function SuitesTab() {
         <select
           value={selected ?? ''}
           onChange={e => setSelected(e.target.value ? Number(e.target.value) : null)}
-          className="flex-1 px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200"
+          className="flex-1 h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
         >
           <option value="">Выбери сьют…</option>
           {suites.map(s => <option key={s.id} value={s.id}>{s.name} ({s.queries.length})</option>)}
         </select>
-        <button
-          type="button"
+        <Button
+          variant={creating ? 'ghost' : 'secondary'}
+          size="sm"
           onClick={() => setCreating(c => !c)}
-          className="px-3 py-1.5 rounded bg-gray-800 hover:bg-gray-700 text-xs text-gray-200"
         >
           {creating ? 'Отмена' : '+ Создать'}
-        </button>
+        </Button>
       </div>
 
       {creating && (
@@ -244,36 +230,32 @@ function SuiteEditor({ onCreated }: { onCreated: (s: SuiteOut) => void }) {
   }
 
   return (
-    <div className="bg-gray-950/40 border border-gray-800 rounded p-3 space-y-2">
+    <div className="bg-zinc-950/40 border border-zinc-800 rounded p-3 space-y-2">
       <input
         type="text"
         placeholder="Имя сьюта"
         value={name}
         onChange={e => setName(e.target.value)}
-        className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200"
+        className="w-full h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
       />
       <input
         type="text"
         placeholder="Описание (опц.)"
         value={description}
         onChange={e => setDescription(e.target.value)}
-        className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200"
+        className="w-full h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
       />
       <textarea
         rows={5}
         placeholder="Запросы — по одному на строку"
         value={queriesText}
         onChange={e => setQueriesText(e.target.value)}
-        className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 font-mono"
+        className="w-full px-2.5 py-1.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 font-mono focus:outline-none focus:border-indigo-500"
       />
-      {error && <div className="text-xs text-red-400">{error}</div>}
-      <button
-        type="button"
-        onClick={submit}
-        className="px-3 py-1.5 rounded bg-violet-700 hover:bg-violet-600 text-white text-xs font-medium"
-      >
+      {error && <div className="text-xs text-rose-400">{error}</div>}
+      <Button variant="primary" size="sm" onClick={submit}>
         Сохранить
-      </button>
+      </Button>
     </div>
   )
 }
@@ -312,37 +294,35 @@ function FavoritesTab() {
     }
   }
 
-  if (isLoading) return <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>
+  if (isLoading) return <div className="text-sm text-zinc-500 py-8 text-center">Загрузка…</div>
   if (items.length === 0) {
     return (
-      <div className="text-sm text-gray-500 py-12 text-center">
-        Избранного нет. На странице поиска нажми ⭐ рядом с результатами.
-      </div>
+      <EmptyState
+        icon={Star}
+        title="Избранного нет"
+        description="На странице поиска нажми иконку звезды рядом с результатами."
+      />
     )
   }
 
   return (
     <div className="space-y-1.5">
       {items.map(f => (
-        <div key={f.id} className="flex items-center gap-3 px-3 py-2 rounded bg-gray-950/40 border border-gray-800">
-          <Star size={13} className="text-yellow-400" fill="currentColor" />
-          <span className="font-medium text-gray-200 truncate flex-1">{f.query}</span>
-          {f.stores && <span className="text-xs text-gray-500">{f.stores}</span>}
-          {f.refresh && <span className="text-xs text-orange-400">refresh</span>}
-          <Link
-            to="/"
-            onClick={() => handleRun(f)}
-            className="flex items-center gap-1 px-2 py-0.5 rounded bg-violet-900/40 hover:bg-violet-900/60 text-violet-300 text-xs"
-          >
-            <Play size={10} /> Запустить
-          </Link>
-          <button
-            type="button"
+        <div key={f.id} className="flex items-center gap-3 px-3 py-2 rounded bg-zinc-950/40 border border-zinc-800">
+          <Star size={13} className="text-amber-400" fill="currentColor" />
+          <span className="font-medium text-zinc-200 truncate flex-1">{f.query}</span>
+          {f.stores && <span className="text-xs text-zinc-500">{f.stores}</span>}
+          {f.refresh && <Badge tone="warn" size="xs" dot={false}>refresh</Badge>}
+          <Button asChild variant="primary" size="xs" icon={Play}>
+            <Link to="/" onClick={() => handleRun(f)}>Запустить</Link>
+          </Button>
+          <IconButton
+            icon={Trash2}
+            size="xs"
+            variant="ghost"
+            aria-label={`Удалить избранное #${f.id}`}
             onClick={() => handleDelete(f.id)}
-            className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/30"
-          >
-            <Trash2 size={13} />
-          </button>
+          />
         </div>
       ))}
     </div>

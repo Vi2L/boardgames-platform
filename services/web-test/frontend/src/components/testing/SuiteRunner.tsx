@@ -146,7 +146,7 @@ export function SuiteRunner({ suite, onDeleted }: Props) {
               'flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium',
               isRunning
                 ? 'bg-gray-800 text-gray-500 cursor-not-allowed'
-                : 'bg-violet-700 hover:bg-violet-600 text-white',
+                : 'bg-indigo-700 hover:bg-indigo-600 text-white',
             )}
           >
             {isRunning ? <Loader2 size={11} className="animate-spin" /> : <Play size={11} />}
@@ -302,7 +302,7 @@ function BaselineRow({
               }
               onSetBaseline(item.query, { min_count: minCount })
             }}
-            className="p-1 text-gray-500 hover:text-violet-300 hover:bg-violet-950/40 rounded"
+            className="p-1 text-gray-500 hover:text-indigo-300 hover:bg-indigo-950/40 rounded"
             title={item.product_count != null
               ? `Зафиксировать как baseline (сейчас ${item.product_count} товаров)`
               : 'Зафиксировать как baseline'}
@@ -328,7 +328,7 @@ function BaselineBadge({
     ? 'bg-emerald-900/60 text-emerald-200'
     : verdict === 'fail'
       ? 'bg-red-900/60 text-red-200'
-      : 'bg-violet-900/40 text-violet-200'
+      : 'bg-indigo-900/40 text-indigo-200'
 
   const label = minCount != null
     ? item.product_count != null

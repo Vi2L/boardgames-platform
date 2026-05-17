@@ -127,7 +127,7 @@ function HealthPopover({
                   value={data.catalog.unmatched_offers?.toLocaleString() ?? '—'} />
             {data.catalog.unmatched_good != null && data.catalog.unmatched_good > 0 && (
               <Stat label="из них good ≥0.6"
-                    value={`${data.catalog.unmatched_good} ⚡`}
+                    value={`${data.catalog.unmatched_good}`}
                     color="text-emerald-400" />
             )}
           </div>

@@ -23,7 +23,7 @@ export function InfoTip({ text, side = 'top', className }: InfoTipProps) {
     <span className={clsx('relative inline-flex group align-middle', className)}>
       <Info
         size={12}
-        className="text-gray-600 group-hover:text-violet-400 transition-colors cursor-help"
+        className="text-gray-600 group-hover:text-indigo-400 transition-colors cursor-help"
         aria-label={text}
       />
       <span
@@ -31,7 +31,7 @@ export function InfoTip({ text, side = 'top', className }: InfoTipProps) {
         className={clsx(
           'pointer-events-none absolute z-50 hidden group-hover:block',
           'whitespace-pre-line text-[11px] leading-snug',
-          'bg-gray-950 border border-violet-900/50 text-gray-300',
+          'bg-gray-950 border border-indigo-900/50 text-gray-300',
           'px-2.5 py-1.5 rounded shadow-xl shadow-black/60',
           'min-w-[180px] max-w-[280px]',
           side === 'top'    && 'bottom-full left-1/2 -translate-x-1/2 mb-1.5',

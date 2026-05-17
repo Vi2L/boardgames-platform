@@ -32,7 +32,7 @@ export function ProviderSidebar({ current, onSelect }: Props) {
               'w-full flex items-start gap-2.5 px-2.5 py-2 rounded-md text-left text-sm transition-colors',
               !p.enabled && 'opacity-40 cursor-not-allowed',
               p.enabled && !isCurrent && 'text-gray-300 hover:bg-gray-800/60',
-              p.enabled && isCurrent && 'bg-violet-900/40 text-violet-200',
+              p.enabled && isCurrent && 'bg-indigo-900/40 text-indigo-200',
             )}
           >
             <Icon size={15} className="mt-0.5 flex-shrink-0" />

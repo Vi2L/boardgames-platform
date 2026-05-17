@@ -43,7 +43,7 @@ export function HttpLogEntry({ log }: Props) {
         <span className={clsx('font-mono font-bold w-16 flex-shrink-0', log.type === 'request' ? 'text-blue-400' : statusColor(log.status))}>
           {label}
         </span>
-        <span className="text-violet-400 font-medium px-1.5 py-0.5 bg-gray-800 rounded text-xs flex-shrink-0">
+        <span className="text-indigo-400 font-medium px-1.5 py-0.5 bg-gray-800 rounded text-xs flex-shrink-0">
           {log.slug}
         </span>
         <span className="text-gray-400 truncate flex-1 font-mono">{detail}</span>
@@ -79,7 +79,7 @@ export function HttpLogEntry({ log }: Props) {
           {log.url && log.type === 'request' && (
             <div>
               <div className="text-gray-500 mb-1 text-xs">URL</div>
-              <div className="text-violet-300 font-mono break-all bg-gray-950 p-2 rounded text-xs border border-gray-800">
+              <div className="text-indigo-300 font-mono break-all bg-gray-950 p-2 rounded text-xs border border-gray-800">
                 {log.url}
               </div>
             </div>

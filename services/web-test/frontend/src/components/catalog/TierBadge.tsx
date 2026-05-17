@@ -21,7 +21,7 @@ interface Props {
 const TIER_INFO: Record<string, { label: string; bg: string; fg: string }> = {
   '0': { label: 'T0 cache', bg: 'bg-gray-800', fg: 'text-gray-300' },
   '1': { label: 'T1 trgm',  bg: 'bg-blue-900/50', fg: 'text-blue-300' },
-  '2': { label: 'T2 vec',   bg: 'bg-violet-900/50', fg: 'text-violet-300' },
+  '2': { label: 'T2 vec',   bg: 'bg-indigo-900/50', fg: 'text-indigo-300' },
   '3': { label: 'T3 llm',   bg: 'bg-amber-900/50', fg: 'text-amber-300' },
   manual: { label: 'manual', bg: 'bg-emerald-900/50', fg: 'text-emerald-300' },
 }

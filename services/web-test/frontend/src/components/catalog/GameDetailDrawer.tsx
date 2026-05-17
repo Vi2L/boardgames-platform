@@ -20,7 +20,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
   X, Loader2, ExternalLink, Pencil, GitMerge, Copy, AlertTriangle,
-  RefreshCw, ChevronDown, ChevronRight, Check,
+  RefreshCw, ChevronDown, ChevronRight, Check, CheckCircle2, XCircle,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -106,7 +106,7 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
                   <GitMerge size={14} />
                 </button>
                 <button onClick={() => setEditing(true)} title="Редактировать (полная форма)"
-                        className="p-1 text-gray-400 hover:text-violet-300 hover:bg-violet-950/40 rounded">
+                        className="p-1 text-gray-400 hover:text-indigo-300 hover:bg-indigo-950/40 rounded">
                   <Pencil size={14} />
                 </button>
               </>
@@ -133,7 +133,7 @@ export function GameDetailDrawer({ gameId, onClose }: Props) {
               className={clsx(
                 'px-3 py-2 text-xs font-medium border-b-2 transition-colors whitespace-nowrap',
                 tab === t.id
-                  ? 'border-violet-500 text-violet-200'
+                  ? 'border-indigo-500 text-indigo-200'
                   : 'border-transparent text-gray-400 hover:text-gray-200',
               )}
             >
@@ -400,7 +400,7 @@ function AliasesContent({ game }: { game: CatalogGameDetail }) {
                     className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-gray-800 text-gray-200">
                 {a.alias}
                 <span className={clsx('text-[10px] px-1 rounded',
-                  a.source === 'manual' ? 'bg-violet-900/60 text-violet-200' :
+                  a.source === 'manual' ? 'bg-indigo-900/60 text-indigo-200' :
                   a.source === 'wikidata' ? 'bg-blue-900/60 text-blue-200' :
                   a.source === 'bgg' ? 'bg-orange-900/60 text-orange-200' :
                   a.source === 'dicefest' ? 'bg-purple-900/60 text-purple-200' :
@@ -462,7 +462,7 @@ function OffersTab({ gameId }: { gameId: number }) {
         <button
           onClick={() => reassess.mutate()}
           disabled={reassess.isPending}
-          className="text-xs flex items-center gap-1 px-2 py-1 rounded bg-violet-900/40 text-violet-200 hover:bg-violet-900/60 disabled:opacity-50"
+          className="text-xs flex items-center gap-1 px-2 py-1 rounded bg-indigo-900/40 text-indigo-200 hover:bg-indigo-900/60 disabled:opacity-50"
           title="Пересчитать матчинг для всех unmatched offers (глобально)"
         >
           <RefreshCw size={11} className={reassess.isPending ? 'animate-spin' : ''} />
@@ -555,15 +555,15 @@ function OfferRow({ offer, gameId }: { offer: CatalogOffer; gameId: number }) {
           ) : <span className="text-gray-500">—</span>}
         </td>
         <td className="px-2 py-1">
-          {offer.in_stock === true && <span className="text-emerald-400">✓</span>}
-          {offer.in_stock === false && <span className="text-red-400">✗</span>}
-          {offer.in_stock === null && <span className="text-gray-500">?</span>}
-          {offer.is_preorder && <span className="ml-1 text-[10px] px-1 rounded bg-blue-900/40 text-blue-200">preord</span>}
+          {offer.in_stock === true && <CheckCircle2 size={12} className="text-emerald-400 inline" />}
+          {offer.in_stock === false && <XCircle size={12} className="text-rose-400 inline" />}
+          {offer.in_stock === null && <span className="text-zinc-500">?</span>}
+          {offer.is_preorder && <span className="ml-1 text-xxs px-1 rounded bg-blue-500/15 text-blue-300 border border-blue-500/30">preord</span>}
         </td>
         <td className="px-2 py-1">
           <span className={clsx('text-[10px] px-1 rounded',
             offer.match_status === 'auto' ? 'bg-emerald-900/40 text-emerald-200' :
-            offer.match_status === 'manual' ? 'bg-violet-900/40 text-violet-200' :
+            offer.match_status === 'manual' ? 'bg-indigo-900/40 text-indigo-200' :
             offer.match_status === 'rejected' ? 'bg-red-900/40 text-red-200' :
             'bg-gray-800 text-gray-400',
           )}>{offer.match_status}{offer.match_score != null ? ` ${offer.match_score.toFixed(2)}` : ''}</span>
@@ -584,8 +584,8 @@ function OfferRow({ offer, gameId }: { offer: CatalogOffer; gameId: number }) {
                   className={clsx(
                     'text-[10px] px-1 py-0.5 rounded transition-colors',
                     showReassign
-                      ? 'bg-violet-700/60 text-violet-100'
-                      : 'text-gray-400 hover:text-violet-300 hover:bg-violet-900/30',
+                      ? 'bg-indigo-700/60 text-indigo-100'
+                      : 'text-gray-400 hover:text-indigo-300 hover:bg-indigo-900/30',
                   )}
                   title="Переназначить на другую игру"
                 >
@@ -609,7 +609,7 @@ function OfferRow({ offer, gameId }: { offer: CatalogOffer; gameId: number }) {
       </tr>
       {showReassign && (
         <tr className="bg-gray-950/40">
-          <td colSpan={colSpan} className="px-3 py-2 border-t border-violet-900/30">
+          <td colSpan={colSpan} className="px-3 py-2 border-t border-indigo-900/30">
             <InlineReassignPicker
               offer={offer}
               gameId={gameId}
@@ -676,11 +676,11 @@ function InlineReassignPicker({
 
   return (
     <div className="space-y-1.5">
-      <div className="text-[10px] text-violet-400 uppercase tracking-wide">Переназначить на другую игру</div>
+      <div className="text-[10px] text-indigo-400 uppercase tracking-wide">Переназначить на другую игру</div>
       <input
         value={q}
         onChange={e => setQ(e.target.value)}
-        className="w-full px-2 py-1 text-xs bg-gray-900 border border-gray-700 rounded text-gray-200 focus:border-violet-500 outline-none"
+        className="w-full px-2 py-1 text-xs bg-gray-900 border border-gray-700 rounded text-gray-200 focus:border-indigo-500 outline-none"
         placeholder="Поиск по каталогу..."
         autoFocus
       />

@@ -44,9 +44,18 @@ import { MatchLogTab } from '../components/catalog/MatchLogTab'
 import { useCatalogTableStore } from '../store/catalog'
 import { SuggestInput } from '../components/shared/SuggestInput'
 import { useSearchHistory } from '../lib/searchHistory'
-import { Download, Plus, Settings2 } from 'lucide-react'
+import { Download, Plus, Settings2, CheckCircle2 } from 'lucide-react'
+import { Tabs, Button, Badge } from '../components/ui'
 
 type Tab = 'catalog' | 'matching' | 'match-log' | 'promotion' | 'bgg'
+
+const TAB_LABELS: Record<Tab, string> = {
+  'catalog':    'Каталог',
+  'matching':   'Очередь матчинга',
+  'match-log':  'Журнал матчинга',
+  'promotion':  'Промоушен Dicefest',
+  'bgg':        'BGG',
+}
 
 export function CatalogPage() {
   const [tab, setTab] = useState<Tab>('catalog')
@@ -60,28 +69,21 @@ export function CatalogPage() {
   })
 
   return (
-    <div className="space-y-4">
+    <div className="p-4 space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-gray-100">Каталог настольных игр</h1>
+        <h1 className="text-lg font-semibold text-zinc-100">Каталог настольных игр</h1>
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setShowCreate(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-emerald-700 hover:bg-emerald-600 text-white rounded"
-          >
-            <Plus size={12} /> Новая игра
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowImport(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded"
-          >
-            <Download size={12} /> Импорт BGG / Tesera
-          </button>
+          <Button variant="success" size="sm" icon={Plus} onClick={() => setShowCreate(true)}>
+            Новая игра
+          </Button>
+          <Button variant="primary" size="sm" icon={Download} onClick={() => setShowImport(true)}>
+            Импорт BGG / Tesera
+          </Button>
           <BackupButton />
-          <div className="text-xs text-gray-400">
-            catalog: {health.isError ? <span className="text-red-400">недоступен</span> :
-              health.data ? <span className="text-emerald-400">{health.data.status}</span> :
+          <div className="text-xs text-zinc-400 flex items-center gap-1.5">
+            catalog:
+            {health.isError ? <Badge status="failed" size="xs">недоступен</Badge> :
+              health.data ? <Badge status="done" size="xs">{health.data.status}</Badge> :
               <span>...</span>}
           </div>
         </div>
@@ -89,32 +91,19 @@ export function CatalogPage() {
       {showImport && <ImportWizard onClose={() => setShowImport(false)} />}
       {showCreate && <GameEditor mode="create" onClose={() => setShowCreate(false)} />}
 
-      <div className="flex gap-2 border-b border-gray-800">
-        {(['catalog', 'matching', 'match-log', 'promotion', 'bgg'] as Tab[]).map(t => (
-          <button
-            key={t}
-            type="button"
-            onClick={() => setTab(t)}
-            className={`px-3 py-2 text-sm transition-colors ${
-              tab === t
-                ? 'text-violet-300 border-b-2 border-violet-500'
-                : 'text-gray-400 hover:text-gray-200'
-            }`}
-          >
-            {t === 'catalog' ? 'Каталог'
-              : t === 'matching' ? 'Очередь матчинга'
-              : t === 'match-log' ? 'Журнал матчинга'
-              : t === 'promotion' ? 'Промоушен Dicefest'
-              : 'BGG'}
-          </button>
-        ))}
-      </div>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+        <Tabs.List>
+          {(['catalog', 'matching', 'match-log', 'promotion', 'bgg'] as Tab[]).map(t => (
+            <Tabs.Trigger key={t} value={t}>{TAB_LABELS[t]}</Tabs.Trigger>
+          ))}
+        </Tabs.List>
 
-      {tab === 'catalog'  ? <CatalogSection />
-        : tab === 'matching' ? <MatchingSection />
-        : tab === 'match-log' ? <MatchLogTab />
-        : tab === 'promotion' ? <PromotionPanel provider="dicefest" />
-        : <BggImportPanel />}
+        <Tabs.Content value="catalog" className="pt-4"><CatalogSection /></Tabs.Content>
+        <Tabs.Content value="matching" className="pt-4"><MatchingSection /></Tabs.Content>
+        <Tabs.Content value="match-log" className="pt-4"><MatchLogTab /></Tabs.Content>
+        <Tabs.Content value="promotion" className="pt-4"><PromotionPanel provider="dicefest" /></Tabs.Content>
+        <Tabs.Content value="bgg" className="pt-4"><BggImportPanel /></Tabs.Content>
+      </Tabs>
     </div>
   )
 }
@@ -146,27 +135,27 @@ type LocalColumnDef = {
 const COLUMNS: LocalColumnDef[] = [
   {
     id: 'id', label: 'id', defaultVisible: true, defaultSize: 60,
-    cellClass: 'font-mono text-xs text-gray-500',
+    cellClass: 'font-mono text-xs text-zinc-500',
     render: g => g.id,
   },
   {
     id: 'slug', label: 'slug', defaultVisible: true, defaultSize: 180,
-    cellClass: 'font-mono text-xs text-gray-400 truncate',
+    cellClass: 'font-mono text-xs text-zinc-400 truncate',
     render: g => g.slug,
   },
   {
     id: 'title', label: 'title', defaultVisible: true, defaultSize: 280,
-    cellClass: 'text-gray-100 truncate',
+    cellClass: 'text-zinc-100 truncate',
     render: g => g.title,
   },
   {
     id: 'title_ru', label: 'RU название', defaultVisible: true, defaultSize: 240,
-    cellClass: 'text-gray-200 truncate',
-    render: g => g.title_ru ?? <span className="text-gray-600">—</span>,
+    cellClass: 'text-zinc-200 truncate',
+    render: g => g.title_ru ?? <span className="text-zinc-600">—</span>,
   },
   {
     id: 'year', label: 'year', defaultVisible: true, defaultSize: 70,
-    cellClass: 'text-gray-300',
+    cellClass: 'text-zinc-300',
     render: g => g.year ?? '—',
   },
   {
@@ -175,7 +164,7 @@ const COLUMNS: LocalColumnDef[] = [
   },
   {
     id: 'bgg_tesera', label: 'BGG / Tesera', defaultVisible: true, defaultSize: 160,
-    cellClass: 'text-xs text-gray-400',
+    cellClass: 'text-xs text-zinc-400',
     render: g => (
       <>
         {g.bgg_id && <span title="BGG">BGG#{g.bgg_id}</span>}
@@ -187,58 +176,58 @@ const COLUMNS: LocalColumnDef[] = [
   },
   {
     id: 'kind', label: 'kind', defaultVisible: false, defaultSize: 100,
-    cellClass: 'text-xs text-gray-300',
+    cellClass: 'text-xs text-zinc-300',
     render: g => g.kind,
   },
   {
     id: 'parent_game_id', label: 'parent', defaultVisible: false, defaultSize: 80,
-    cellClass: 'font-mono text-xs text-gray-400',
+    cellClass: 'font-mono text-xs text-zinc-400',
     render: g => g.parent_game_id ?? '—',
   },
   {
     id: 'ru_publisher', label: 'ru_publisher', defaultVisible: false, defaultSize: 160,
-    cellClass: 'text-xs text-gray-300 truncate',
+    cellClass: 'text-xs text-zinc-300 truncate',
     render: g => g.ru_publisher ?? '—',
   },
   {
     id: 'ru_release_year', label: 'ru_year', defaultVisible: false, defaultSize: 80,
-    cellClass: 'text-xs text-gray-300',
+    cellClass: 'text-xs text-zinc-300',
     render: g => g.ru_release_year ?? '—',
   },
   {
     id: 'is_localized_ru', label: 'RU?', defaultVisible: false, defaultSize: 60,
     cellClass: 'text-center text-xs',
     render: g => g.is_localized_ru
-      ? <span className="text-emerald-400">✓</span>
-      : <span className="text-gray-600">—</span>,
+      ? <CheckCircle2 size={12} className="text-emerald-400" />
+      : <span className="text-zinc-600">—</span>,
   },
   {
     id: 'preorder_price', label: 'preorder', defaultVisible: false, defaultSize: 100,
-    cellClass: 'text-xs text-gray-300 text-right',
+    cellClass: 'text-xs text-zinc-300 text-right',
     // preorder_price хранится в копейках — конвертим в рубли для отображения,
     // как и везде в UI портала (см. правило в корневом CLAUDE.md).
     render: g => g.preorder_price != null ? `${(g.preorder_price / 100).toFixed(0)} ₽` : '—',
   },
   {
     id: 'status', label: 'status', defaultVisible: false, defaultSize: 100,
-    cellClass: 'text-xs text-gray-400',
+    cellClass: 'text-xs text-zinc-400',
     render: g => g.status,
   },
   {
     id: 'dicefest_id', label: 'dicefest', defaultVisible: false, defaultSize: 90,
-    cellClass: 'font-mono text-xs text-gray-400',
+    cellClass: 'font-mono text-xs text-zinc-400',
     render: g => g.dicefest_id ?? '—',
   },
   {
     id: 'nastolio_id', label: 'nastolio', defaultVisible: false, defaultSize: 100,
-    cellClass: 'font-mono text-xs text-gray-400',
+    cellClass: 'font-mono text-xs text-zinc-400',
     render: g => g.nastolio_id ?? '—',
   },
   {
     id: 'cover_url', label: 'cover', defaultVisible: false, defaultSize: 64,
     render: g => g.cover_url
       ? <img src={g.cover_url} alt="" className="w-8 h-8 object-cover rounded" />
-      : <span className="text-gray-600 text-xs">—</span>,
+      : <span className="text-zinc-600 text-xs">—</span>,
   },
 ]
 
@@ -320,51 +309,58 @@ function CatalogSection() {
     onColumnSizingChange: handleSizingChange,
   })
 
+  // Selected row (для подсветки в split-view) — синхронизирован с drawer-id.
+  const selectedRowId = openId
+
   return (
     <div className="space-y-3">
+      {/* Toolbar: search + counter + columns */}
       <div className="flex items-center gap-2">
         <SuggestInput
           value={q}
           onChange={setQ}
           onSubmit={() => { if (q.trim()) pushHistory(q) }}
           historyKey="catalog"
-          placeholder="Поиск по названиям (RU/EN aliases + fuzzy)"
+          placeholder="Поиск: title · alias · slug · BGG# · T#"
           className="flex-1"
         />
+        <div className="text-xs text-zinc-500 font-mono tabular-nums whitespace-nowrap">
+          {games.isLoading
+            ? 'загрузка…'
+            : <><span className="text-zinc-300">{items.length}</span> / {total}</>}
+        </div>
         <ColumnsPicker />
       </div>
+
       {games.isError && (
-        <div className="text-sm text-red-400">Не удалось получить каталог: {String(games.error)}</div>
+        <div className="text-sm text-rose-300 bg-rose-500/10 border border-rose-500/30 rounded px-3 py-2">
+          Не удалось получить каталог: {String(games.error)}
+        </div>
       )}
-      <div className="text-xs text-gray-500">
-        {games.isLoading
-          ? 'загрузка...'
-          : `показано ${items.length} из ${total} игр`}
-      </div>
-      <div className="border border-gray-800 rounded overflow-x-auto">
+
+      <div className="border border-zinc-800 rounded overflow-x-auto">
         <table
           className="text-sm"
           style={{ width: table.getCenterTotalSize(), tableLayout: 'fixed' }}
         >
-          <thead className="bg-gray-900 text-gray-400 text-left select-none">
+          <thead className="bg-zinc-900 text-zinc-400 text-left select-none sticky top-0 z-10">
             {table.getHeaderGroups().map(hg => (
               <tr key={hg.id}>
                 {hg.headers.map(header => (
                   <th
                     key={header.id}
                     style={{ width: header.getSize() }}
-                    className="relative px-3 py-2 truncate"
+                    className="relative px-3 py-2 truncate text-xs font-normal border-b border-zinc-800"
                   >
                     {flexRender(header.column.columnDef.header, header.getContext())}
-                    {/* Resize-handle: 4px полоска у правого края, drag меняет ширину
-                        в реальном времени (columnResizeMode='onChange'). */}
+                    {/* Resize-handle: indigo accent (handoff §5) */}
                     <div
                       onMouseDown={header.getResizeHandler()}
                       onTouchStart={header.getResizeHandler()}
                       className={`absolute top-0 right-0 h-full w-1 cursor-col-resize select-none touch-none ${
                         header.column.getIsResizing()
-                          ? 'bg-violet-500'
-                          : 'bg-transparent hover:bg-violet-700/60'
+                          ? 'bg-indigo-500'
+                          : 'bg-transparent hover:bg-indigo-500/40'
                       }`}
                     />
                   </th>
@@ -372,48 +368,55 @@ function CatalogSection() {
               </tr>
             ))}
           </thead>
-          <tbody className="divide-y divide-gray-800">
-            {table.getRowModel().rows.map(row => (
-              <tr
-                key={row.id}
-                className="hover:bg-gray-900 cursor-pointer"
-                onClick={() => setOpenId(row.original.id)}
-              >
-                {row.getVisibleCells().map(cell => {
-                  const meta = cell.column.columnDef.meta as
-                    | { cellClass?: string } | undefined
-                  return (
-                    <td
-                      key={cell.id}
-                      style={{ width: cell.column.getSize() }}
-                      className={`px-3 py-2 truncate ${meta?.cellClass ?? ''}`}
-                    >
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </td>
-                  )
-                })}
-              </tr>
-            ))}
+          <tbody className="divide-y divide-zinc-800/60">
+            {table.getRowModel().rows.map(row => {
+              const isActive = selectedRowId === row.original.id
+              return (
+                <tr
+                  key={row.id}
+                  className={`cursor-pointer ${isActive ? 'bg-indigo-500/10' : 'hover:bg-zinc-800/30'}`}
+                  onClick={() => setOpenId(row.original.id)}
+                >
+                  {row.getVisibleCells().map(cell => {
+                    const meta = cell.column.columnDef.meta as
+                      | { cellClass?: string } | undefined
+                    return (
+                      <td
+                        key={cell.id}
+                        style={{ width: cell.column.getSize() }}
+                        className={`px-3 py-1.5 truncate ${meta?.cellClass ?? ''}`}
+                      >
+                        {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                      </td>
+                    )
+                  })}
+                </tr>
+              )
+            })}
             {!games.isLoading && items.length === 0 && (
-              <tr><td colSpan={renderedColumns.length} className="px-3 py-6 text-center text-gray-500">
-                Нет игр {q && <>по запросу «{q}»</>}
-              </td></tr>
+              <tr>
+                <td colSpan={renderedColumns.length} className="px-3 py-12 text-center">
+                  <div className="text-sm text-zinc-400">Нет игр {q && <>по запросу «{q}»</>}</div>
+                  <div className="text-xs text-zinc-500 mt-1">Попробуй другой запрос или импортируй из BGG/Tesera</div>
+                </td>
+              </tr>
             )}
           </tbody>
         </table>
       </div>
 
       {games.hasNextPage && (
-        <button
-          type="button"
+        <Button
+          variant="ghost"
+          size="md"
+          loading={games.isFetchingNextPage}
           onClick={() => games.fetchNextPage()}
-          disabled={games.isFetchingNextPage}
-          className="w-full px-3 py-2 text-sm bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded text-gray-300 disabled:opacity-50"
+          className="w-full justify-center"
         >
           {games.isFetchingNextPage
             ? 'загрузка…'
             : `Показать ещё (осталось ${remaining})`}
-        </button>
+        </Button>
       )}
 
       {openId !== null && (
@@ -437,63 +440,57 @@ function ColumnsPicker() {
 
   return (
     <div className="relative">
-      <button
-        type="button"
+      <Button
+        variant="secondary"
+        size="sm"
+        icon={Settings2}
         onClick={() => setOpen(o => !o)}
         title="Выбрать видимые колонки"
-        className="flex items-center gap-1 px-2 py-1 text-xs bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded text-gray-200"
       >
-        <Settings2 size={12} /> Колонки
-      </button>
+        Колонки
+      </Button>
       {open && (
         <>
           <div
             className="fixed inset-0 z-40"
             onClick={() => setOpen(false)}
           />
-          <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-gray-900 border border-gray-700 rounded shadow-lg p-2 max-h-96 overflow-y-auto">
-            <div className="text-xs text-gray-500 px-2 py-1 mb-1">
+          <div className="absolute right-0 top-full mt-1 z-50 w-64 bg-zinc-900 border border-zinc-700 rounded shadow-lg p-2 max-h-96 overflow-y-auto">
+            <div className="text-xs text-zinc-500 px-2 py-1 mb-1">
               Видимые колонки таблицы
             </div>
             {COLUMNS.map(c => (
               <label
                 key={c.id}
-                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-gray-800 cursor-pointer"
+                className="flex items-center gap-2 px-2 py-1 rounded hover:bg-zinc-800 cursor-pointer"
               >
                 <input
                   type="checkbox"
                   checked={visible.includes(c.id)}
                   onChange={() => toggle(c.id)}
-                  className="accent-violet-500"
+                  className="accent-indigo-500"
                 />
-                <span className="text-sm text-gray-200">{c.label}</span>
-                <span className="ml-auto text-[10px] font-mono text-gray-500">{c.id}</span>
+                <span className="text-sm text-zinc-200">{c.label}</span>
+                <span className="ml-auto text-xxs font-mono text-zinc-500">{c.id}</span>
               </label>
             ))}
-            <div className="flex gap-2 mt-2 pt-2 border-t border-gray-800 px-2">
-              <button
-                type="button"
-                onClick={() => reset()}
-                className="flex-1 px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 rounded"
-              >
+            <div className="flex gap-2 mt-2 pt-2 border-t border-zinc-800 px-2">
+              <Button variant="secondary" size="xs" onClick={() => reset()} className="flex-1 justify-center">
                 Сбросить
-              </button>
-              <button
-                type="button"
-                onClick={() => showAll(ALL_COLUMN_IDS)}
-                className="flex-1 px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 rounded"
-              >
+              </Button>
+              <Button variant="secondary" size="xs" onClick={() => showAll(ALL_COLUMN_IDS)} className="flex-1 justify-center">
                 Все
-              </button>
+              </Button>
             </div>
-            <button
-              type="button"
+            <Button
+              variant="ghost"
+              size="xs"
               onClick={() => resetSizes()}
-              className="w-full mt-2 px-2 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded"
               title="Вернуть стандартные ширины колонок"
+              className="w-full mt-2 justify-center"
             >
               Сбросить ширины
-            </button>
+            </Button>
           </div>
         </>
       )}
@@ -502,13 +499,16 @@ function ColumnsPicker() {
 }
 
 function SourceBadge({ source }: { source: string }) {
-  const colors: Record<string, string> = {
-    manual: 'bg-gray-800 text-gray-300',
-    bgg: 'bg-orange-900/50 text-orange-300',
-    tesera: 'bg-blue-900/50 text-blue-300',
-  }
+  // source — origin записи (bgg/tesera/manual), не статус pipeline.
+  // Используем Tag через tone-map, цвета — кастомные классы (нет
+  // подходящего tone в statusSystem для «BGG orange» и «Tesera blue»).
+  const cls = source === 'bgg'
+    ? 'bg-orange-500/15 text-orange-300 border-orange-500/30'
+    : source === 'tesera'
+      ? 'bg-blue-500/15 text-blue-300 border-blue-500/30'
+      : 'bg-zinc-800/80 text-zinc-300 border-zinc-700'
   return (
-    <span className={`text-xs px-1.5 py-0.5 rounded ${colors[source] || 'bg-gray-800 text-gray-300'}`}>
+    <span className={`inline-flex items-center h-4 px-1.5 text-xxs font-mono uppercase tracking-wider rounded border ${cls}`}>
       {source}
     </span>
   )
@@ -608,7 +608,7 @@ function MatchingSection() {
           <div className="flex flex-wrap gap-1">
             <button
               onClick={() => { setStoreFilter(undefined); setSelectedId(null) }}
-              className={`px-2 py-0.5 text-xs rounded ${!storeFilter ? 'bg-violet-700 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+              className={`px-2 py-0.5 text-xs rounded ${!storeFilter ? 'bg-indigo-700 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}
             >
               все
             </button>
@@ -616,7 +616,7 @@ function MatchingSection() {
               <button
                 key={s.store_slug}
                 onClick={() => { setStoreFilter(s.store_slug); setSelectedId(null) }}
-                className={`px-2 py-0.5 text-xs rounded ${storeFilter === s.store_slug ? 'bg-violet-700 text-white' : 'bg-gray-800 text-gray-300 hover:bg-gray-700'}`}
+                className={`px-2 py-0.5 text-xs rounded ${storeFilter === s.store_slug ? 'bg-indigo-700 text-white' : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'}`}
               >
                 {s.store_slug} <span className="opacity-60">{s.total}</span>
               </button>
@@ -632,8 +632,8 @@ function MatchingSection() {
                 className={`px-2 py-0.5 text-xs rounded ${bucketFilter === b
                   ? b === 'good' ? 'bg-emerald-700 text-white'
                     : b === 'candidate' ? 'bg-amber-700 text-white'
-                    : 'bg-gray-600 text-white'
-                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'}`}
+                    : 'bg-zinc-600 text-white'
+                  : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'}`}
               >
                 {b} {stats.data?.by_bucket[b] ?? ''}
               </button>
@@ -641,7 +641,7 @@ function MatchingSection() {
           </div>
 
           {/* Offer list */}
-          <div className="flex-1 border border-gray-800 rounded overflow-y-auto">
+          <div className="flex-1 border border-zinc-800 rounded overflow-y-auto">
             {/* Группа «Возвращены» */}
             {returnedItems.length > 0 && (
               <div>
@@ -659,7 +659,7 @@ function MatchingSection() {
                     autoThreshold={AUTO}
                   />
                 ))}
-                <div className="border-t border-gray-800" />
+                <div className="border-t border-zinc-800" />
               </div>
             )}
 
@@ -677,7 +677,7 @@ function MatchingSection() {
             ))}
 
             {filteredItems.length === 0 && !queue.isLoading && (
-              <div className="px-3 py-8 text-center text-xs text-gray-500">
+              <div className="px-3 py-8 text-center text-xs text-zinc-500">
                 {queue.data?.total === 0
                   ? 'Очередь пуста — все офферы сматчены.'
                   : 'Нет офферов по текущему фильтру.'}
@@ -685,7 +685,7 @@ function MatchingSection() {
             )}
 
             {queue.isLoading && (
-              <div className="px-3 py-4 text-center text-xs text-gray-500">загрузка…</div>
+              <div className="px-3 py-4 text-center text-xs text-zinc-500">загрузка…</div>
             )}
           </div>
 
@@ -694,7 +694,7 @@ function MatchingSection() {
             {queue.data && queue.data.total > limit && (
               <button
                 onClick={() => setLimit(l => l + 50)}
-                className="px-2 py-1 text-xs bg-gray-800 text-gray-300 rounded hover:bg-gray-700"
+                className="px-2 py-1 text-xs bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700"
               >
                 Загрузить ещё ({queue.data.total - filteredItems.length} скрыто)
               </button>
@@ -718,7 +718,7 @@ function MatchingSection() {
                 )) reassessBatch.mutate()
               }}
               disabled={reassessBatch.isPending}
-              className="ml-auto px-2 py-1 text-xs bg-violet-800/60 text-violet-200 rounded hover:bg-violet-700 disabled:opacity-40"
+              className="ml-auto px-2 py-1 text-xs bg-indigo-800/60 text-indigo-200 rounded hover:bg-indigo-700 disabled:opacity-40"
             >
               {reassessBatch.isPending ? 'Пересчёт…' : 'Reassess всё'}
             </button>
@@ -726,7 +726,7 @@ function MatchingSection() {
         </div>
 
         {/* ── Правая панель ────────────────────────────── */}
-        <div className="flex-1 min-w-0 border border-gray-800 rounded">
+        <div className="flex-1 min-w-0 border border-zinc-800 rounded">
           {selectedOffer
             ? (
               <MatchingOfferDetail
@@ -740,7 +740,7 @@ function MatchingSection() {
               />
             )
             : (
-              <div className="h-full flex items-center justify-center text-sm text-gray-500">
+              <div className="h-full flex items-center justify-center text-sm text-zinc-500">
                 Выбери оффер слева для матчинга
               </div>
             )}
@@ -762,16 +762,16 @@ function QueueOfferRow({
   onToggleCheck: () => void
   autoThreshold: number
 }) {
-  const scoreColor = offer.match_score == null ? 'text-gray-600'
+  const scoreColor = offer.match_score == null ? 'text-zinc-600'
     : offer.match_score >= autoThreshold ? 'text-emerald-400'
     : offer.match_score >= 0.3 ? 'text-amber-400'
-    : 'text-gray-500'
+    : 'text-zinc-500'
 
   return (
     <div
       onClick={onSelect}
-      className={`flex items-start gap-2 px-2 py-1.5 border-b border-gray-800/60 cursor-pointer transition-colors ${
-        selected ? 'bg-violet-900/30' : 'hover:bg-gray-900'
+      className={`flex items-start gap-2 px-2 py-1.5 border-b border-zinc-800/60 cursor-pointer transition-colors ${
+        selected ? 'bg-indigo-900/30' : 'hover:bg-zinc-900'
       }`}
     >
       <input
@@ -779,16 +779,16 @@ function QueueOfferRow({
         checked={checked}
         onClick={e => e.stopPropagation()}
         onChange={onToggleCheck}
-        className="mt-0.5 shrink-0 accent-violet-500"
+        className="mt-0.5 shrink-0 accent-indigo-500"
       />
       <div className="flex-1 min-w-0">
-        <div className="text-xs text-gray-200 truncate" title={offer.title_raw}>
+        <div className="text-xs text-zinc-200 truncate" title={offer.title_raw}>
           {offer.title_raw}
         </div>
         <div className="flex items-center gap-2 mt-0.5">
-          <span className="text-[10px] font-mono text-gray-500">{offer.store_slug}</span>
+          <span className="text-[10px] font-mono text-zinc-500">{offer.store_slug}</span>
           {offer.last_price != null && (
-            <span className="text-[10px] text-gray-400">
+            <span className="text-[10px] text-zinc-400">
               {(offer.last_price / 100).toFixed(0)} ₽
             </span>
           )}
@@ -865,13 +865,13 @@ function MatchingOfferDetail({
       {/* Хедер оффера */}
       <div className="space-y-1">
         <div className="flex items-start justify-between gap-2">
-          <div className="text-sm text-gray-100 font-medium leading-tight">{offer.title_raw}</div>
+          <div className="text-sm text-zinc-100 font-medium leading-tight">{offer.title_raw}</div>
           <a href={offer.url} target="_blank" rel="noreferrer"
-             className="text-gray-500 hover:text-gray-200 shrink-0 mt-0.5">
+             className="text-zinc-500 hover:text-zinc-200 shrink-0 mt-0.5">
             <span className="text-[10px]">↗</span>
           </a>
         </div>
-        <div className="flex flex-wrap items-center gap-2 text-[10px] text-gray-500">
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-zinc-500">
           <span className="font-mono">{offer.store_slug}</span>
           {offer.last_price != null && (
             <span>{(offer.last_price / 100).toFixed(0)} ₽</span>
@@ -880,7 +880,7 @@ function MatchingOfferDetail({
             <span className={
               offer.match_score >= autoThreshold ? 'text-emerald-400'
               : offer.match_score >= candidateThreshold ? 'text-amber-400'
-              : 'text-gray-500'
+              : 'text-zinc-500'
             }>
               score {offer.match_score.toFixed(2)}
             </span>
@@ -893,11 +893,11 @@ function MatchingOfferDetail({
 
       {/* Поиск кандидатов */}
       <div className="space-y-1.5">
-        <div className="text-[10px] uppercase tracking-wide text-gray-500">Поиск по каталогу</div>
+        <div className="text-[10px] uppercase tracking-wide text-zinc-500">Поиск по каталогу</div>
         <input
           value={q}
           onChange={e => setQ(e.target.value)}
-          className="w-full px-2 py-1.5 text-xs bg-gray-900 border border-gray-700 rounded text-gray-200 focus:border-violet-500 outline-none"
+          className="w-full px-2 py-1.5 text-xs bg-zinc-900 border border-zinc-700 rounded text-zinc-200 focus:border-indigo-500 outline-none"
           placeholder="Название для поиска..."
         />
       </div>
@@ -905,7 +905,7 @@ function MatchingOfferDetail({
       {/* Кандидаты */}
       <div className="flex-1 overflow-y-auto space-y-0.5 min-h-0">
         {candidates.isLoading && (
-          <div className="text-xs text-gray-500 text-center py-2">поиск…</div>
+          <div className="text-xs text-zinc-500 text-center py-2">поиск…</div>
         )}
         {items.map(c => (
           <button
@@ -913,32 +913,32 @@ function MatchingOfferDetail({
             type="button"
             disabled={isPending}
             onClick={() => link.mutate(c.game_id)}
-            className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-800 disabled:opacity-50 transition-colors"
+            className="w-full text-left flex items-center gap-2 px-2 py-1.5 rounded hover:bg-zinc-800 disabled:opacity-50 transition-colors"
           >
             <ScoreBadge score={c.score} auto={autoThreshold} via={c.via} />
-            <span className="text-xs text-gray-200 truncate flex-1">{c.title}</span>
-            {c.year != null && <span className="text-[10px] text-gray-500 shrink-0">{c.year}</span>}
+            <span className="text-xs text-zinc-200 truncate flex-1">{c.title}</span>
+            {c.year != null && <span className="text-[10px] text-zinc-500 shrink-0">{c.year}</span>}
             {c.bgg_id && (
               <span className="text-[10px] text-orange-300/70 shrink-0 font-mono">BGG#{c.bgg_id}</span>
             )}
           </button>
         ))}
         {!candidates.isLoading && items.length === 0 && debouncedQ.trim() && (
-          <div className="text-xs text-gray-500 italic px-2 py-2">
+          <div className="text-xs text-zinc-500 italic px-2 py-2">
             Кандидатов нет. Импортируй из BGG/Tesera или создай вручную.
           </div>
         )}
       </div>
 
       {/* Действия */}
-      <div className="flex gap-2 pt-2 border-t border-gray-800">
+      <div className="flex gap-2 pt-2 border-t border-zinc-800">
         <button
           type="button"
           onClick={() => {
             if (window.confirm(`Отклонить «${offer.title_raw}»?`)) reject.mutate()
           }}
           disabled={isPending}
-          className="px-3 py-1 text-xs bg-gray-800 text-gray-300 rounded hover:bg-gray-700 disabled:opacity-40"
+          className="px-3 py-1 text-xs bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 disabled:opacity-40"
         >
           Отклонить
         </button>
@@ -961,7 +961,7 @@ function ScoreBadge({ score, auto, via }: { score: number; auto: number; via: 't
     ? 'bg-emerald-900/60 text-emerald-200'
     : score >= 0.5
       ? 'bg-amber-900/60 text-amber-200'
-      : 'bg-gray-800 text-gray-400'
+      : 'bg-zinc-800 text-zinc-400'
   return (
     <span
       className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-mono shrink-0 ${cls}`}

@@ -43,7 +43,7 @@ export function BggCard({ bgg }: { bgg: CatalogGameBgg }) {
       )}
 
       {/* Tags */}
-      <Tags label="дизайнеры" items={bgg.designers} color="bg-violet-900/40 text-violet-200" />
+      <Tags label="дизайнеры" items={bgg.designers} color="bg-indigo-900/40 text-indigo-200" />
       <Tags label="механики"  items={bgg.mechanics}  color="bg-emerald-900/40 text-emerald-200" />
       <Tags label="категории" items={bgg.categories} color="bg-blue-900/40 text-blue-200" />
       <Tags label="артисты"   items={bgg.artists}    color="bg-pink-900/40 text-pink-200" />

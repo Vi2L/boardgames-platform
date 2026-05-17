@@ -61,7 +61,7 @@ export function RawHttpDrawer({ snapshotId, onClose }: Props) {
               </div>
               {data.url && (
                 <a href={data.url} target="_blank" rel="noreferrer"
-                   className="flex items-center gap-1 text-xs text-violet-300 hover:underline truncate"
+                   className="flex items-center gap-1 text-xs text-indigo-300 hover:underline truncate"
                    title={data.url}>
                   <ExternalLink size={10} /> {data.url}
                 </a>

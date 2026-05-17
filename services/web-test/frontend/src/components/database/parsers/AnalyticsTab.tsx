@@ -8,7 +8,7 @@
  */
 import { useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Activity, AlertCircle, TrendingUp, Info, RefreshCw } from 'lucide-react'
+import { Loader2, Activity, AlertCircle, TrendingUp, Info, RefreshCw, CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
 import {
   fetchParsersTopQueries, fetchParsersLatency, fetchParsersEmptyResponses,
@@ -43,7 +43,7 @@ export function AnalyticsTab() {
   return (
     <div className="space-y-4">
       <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
+        <Info size={13} className="text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="flex-1">
           <strong className="text-gray-300">Аналитика API парсеров.</strong>
           {' '}<strong>Latency</strong> — перцентили времени поиска (p50 — медиана, p99 — 1% самых медленных).
@@ -71,7 +71,7 @@ export function AnalyticsTab() {
             title={`Показывать данные за последние ${h < 24 ? `${h} час(ов)` : `${h / 24} дн.`}`}
             className={clsx(
               'px-2 py-0.5 rounded',
-              hours === h ? 'bg-violet-900/60 text-violet-200'
+              hours === h ? 'bg-indigo-900/60 text-indigo-200'
                           : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800',
             )}
           >
@@ -183,8 +183,8 @@ export function AnalyticsTab() {
             </table>
           </div>
         ) : (
-          <div className="text-xs text-emerald-400 bg-emerald-950/20 border border-emerald-900/30 rounded p-3">
-            ✓ Тихих сбоев нет за выбранный период.
+          <div className="text-xs text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 rounded p-3 inline-flex items-center gap-1.5">
+            <CheckCircle2 size={12} /> Тихих сбоев нет за выбранный период.
           </div>
         )}
       </Section>

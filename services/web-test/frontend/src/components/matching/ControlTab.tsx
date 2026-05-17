@@ -77,7 +77,7 @@ function PipelineExplainer() {
   return (
     <>
       <p>
-        Каждый поступивший offer (от парсеров через <code className="text-violet-300">/ingest/offers</code>)
+        Каждый поступивший offer (от парсеров через <code className="text-indigo-300">/ingest/offers</code>)
         проходит цепочку tier'ов. Первый, который даёт уверенный матч, выигрывает —
         дальше не идём.
       </p>
@@ -95,7 +95,7 @@ function PipelineExplainer() {
       <p>
         <span className="text-gray-400">T0+T1</span> работают <span className="text-green-300">синхронно</span>
         прямо в ingest-запросе. <span className="text-gray-400">T2+T3</span> — <span className="text-amber-300">асинхронно</span>
-        : оффер кладётся в очередь <code className="text-violet-300">match_queue</code>, воркер берёт батч и обрабатывает.
+        : оффер кладётся в очередь <code className="text-indigo-300">match_queue</code>, воркер берёт батч и обрабатывает.
       </p>
       <p>
         <span className="text-red-300">Kill-switch</span> ниже отключает <strong>только T2+T3</strong> — T0/T1
@@ -386,7 +386,7 @@ function ModelsCard() {
                   disabled={probe.isPending}
                   className={clsx(
                     'mt-1 inline-flex items-center gap-1 px-2 py-1 rounded',
-                    'bg-violet-700/80 hover:bg-violet-600 disabled:opacity-50',
+                    'bg-indigo-700/80 hover:bg-indigo-600 disabled:opacity-50',
                     'text-[10px] font-mono text-white',
                   )}
                 >
@@ -478,7 +478,7 @@ function WorkerCard() {
         <div className="space-y-1.5">
           <div className="flex items-baseline justify-between gap-2">
             <div className="flex items-baseline gap-1.5">
-              <span className="text-2xl font-mono tabular-nums text-violet-300 leading-none">
+              <span className="text-2xl font-mono tabular-nums text-indigo-300 leading-none">
                 {secondsLeft}
               </span>
               <span className="text-[10px] uppercase tracking-wider text-gray-600">
@@ -491,7 +491,7 @@ function WorkerCard() {
           </div>
           <div className="h-1.5 bg-gray-800/60 rounded-full overflow-hidden">
             <div
-              className="h-full bg-violet-500/80 transition-[width] duration-150"
+              className="h-full bg-indigo-500/80 transition-[width] duration-150"
               style={{ width: `${progress * 100}%` }}
             />
           </div>
@@ -563,7 +563,7 @@ function WorkerCard() {
                   className={clsx(
                     'px-2.5 py-1 text-[11px] font-mono transition-colors',
                     sec === intervalSec
-                      ? 'bg-violet-700/80 text-white'
+                      ? 'bg-indigo-700/80 text-white'
                       : 'text-gray-400 hover:bg-gray-800 hover:text-gray-200',
                   )}
                 >
@@ -579,7 +579,7 @@ function WorkerCard() {
             disabled={trigger.isPending}
             className={clsx(
               'inline-flex items-center gap-1.5 px-3 py-1.5 rounded',
-              'bg-violet-700 hover:bg-violet-600 disabled:opacity-50',
+              'bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50',
               'text-white text-xs font-medium',
               'shadow-[inset_0_1px_0_0_rgba(255,255,255,0.15)]',
             )}
@@ -621,14 +621,14 @@ function JobStatusPill({ job }: { job: SchedulerJobInfoWithHistory | undefined }
   const status = job.last_run_status
   const enabled = job.enabled
   if (!enabled) {
-    return <Pill className="bg-gray-800/50 text-gray-500 border-gray-700/50">disabled</Pill>
+    return <Pill className="bg-zinc-800/50 text-zinc-500 border-zinc-700/50">disabled</Pill>
   }
-  if (!status) return <Pill className="bg-gray-800/40 text-gray-500 border-gray-700/50">не запускался</Pill>
-  if (status === 'done')    return <Pill className="bg-green-900/40 text-green-300 border-green-800/50">✓ done</Pill>
-  if (status === 'running') return <Pill className="bg-violet-900/40 text-violet-300 border-violet-800/50">⏳ running</Pill>
-  if (status === 'pending') return <Pill className="bg-amber-900/40 text-amber-300 border-amber-800/50">… pending</Pill>
-  if (status === 'failed')  return <Pill className="bg-red-950/40 text-red-300 border-red-900/50">× failed</Pill>
-  return <Pill className="bg-gray-800/40 text-gray-400 border-gray-700/50">{status}</Pill>
+  if (!status) return <Pill className="bg-zinc-800/40 text-zinc-500 border-zinc-700/50">не запускался</Pill>
+  if (status === 'done')    return <Pill className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30">done</Pill>
+  if (status === 'running') return <Pill className="bg-indigo-500/15 text-indigo-300 border-indigo-500/30">running</Pill>
+  if (status === 'pending') return <Pill className="bg-amber-500/15 text-amber-300 border-amber-500/30">pending</Pill>
+  if (status === 'failed')  return <Pill className="bg-rose-500/15 text-rose-300 border-rose-500/30">failed</Pill>
+  return <Pill className="bg-zinc-800/40 text-zinc-400 border-zinc-700/50">{status}</Pill>
 }
 
 // ── Warmup card ────────────────────────────────────────────────────────────
@@ -657,7 +657,7 @@ function WarmupCard() {
     >
       <div className="flex items-center justify-between gap-4">
         <p className="text-xs text-gray-400 leading-relaxed">
-          Запускай после <code className="text-violet-300">ollama pull bge-m3</code>, после массового импорта BGG,
+          Запускай после <code className="text-indigo-300">ollama pull bge-m3</code>, после массового импорта BGG,
           или периодически (раз в месяц) чтобы покрыть новые алиасы.
         </p>
         <button

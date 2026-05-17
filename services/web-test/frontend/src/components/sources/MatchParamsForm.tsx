@@ -110,7 +110,7 @@ function Slider({
     <label className="block">
       <div className="flex items-center justify-between text-sm">
         <span className="text-gray-300">{label}</span>
-        <span className="font-mono text-violet-300 tabular-nums">
+        <span className="font-mono text-indigo-300 tabular-nums">
           {value.toFixed(2)}
         </span>
       </div>
@@ -122,7 +122,7 @@ function Slider({
         step={step}
         value={value}
         onChange={e => onChange(parseFloat(e.target.value))}
-        className="w-full mt-1 accent-violet-500"
+        className="w-full mt-1 accent-indigo-500"
       />
     </label>
   )

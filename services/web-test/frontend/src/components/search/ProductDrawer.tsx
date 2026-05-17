@@ -52,7 +52,7 @@ export function ProductDrawer({ product, pool = [], onClose, onSelect }: Props) 
           <div className="flex items-center gap-2">
             <Link
               to={`/products/${product.id}`}
-              className="text-xs text-violet-400 hover:text-violet-300 flex items-center gap-1"
+              className="text-xs text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
               title="Открыть как страницу"
               onClick={onClose}
             >

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Clock, Zap, AlertCircle, CheckCircle2, Save, Star, Eye, EyeOff, Download } from 'lucide-react'
-import clsx from 'clsx'
+import {
+  Clock, Zap, AlertCircle, Save, Star, Eye, EyeOff, Download, ArrowUp, ArrowDown,
+} from 'lucide-react'
 import { toast } from 'sonner'
 import {
   createFavorite, createSnapshot, fetchPriceStats, fetchRecentDeltas, fetchStores,
@@ -16,8 +17,13 @@ import { useLoyaltyStore } from '../store/loyalty'
 import { SearchForm } from '../components/search/SearchForm'
 import { StoreProgressBadge } from '../components/search/StoreProgressBadge'
 import { ResultsTable } from '../components/search/ResultsTable'
+import { ResultsTableGrouped } from '../components/search/ResultsTableGrouped'
+import { UnmatchedSection } from '../components/search/UnmatchedSection'
 import { ProductDrawer } from '../components/search/ProductDrawer'
 import type { PriceDeltaOut, PriceStatsOut, ProductOut } from '../types/api'
+import { Tabs, Button, Tag, Badge } from '../components/ui'
+import { groupProducts, type ProductGroup } from '../lib/searchGrouping'
+import { Layers, List } from 'lucide-react'
 
 type Tab = 'results' | 'api-log'
 
@@ -33,16 +39,19 @@ export function SearchPage() {
   const queryClient = useQueryClient()
 
   const {
-    query, selectedStores, refresh, limit, showOutOfStock,
+    query, selectedStores, refresh, limit, showOutOfStock, groupMode,
     sseUrl, storeProgress, results, apiLogs, totalMs, source,
-    setQuery, setAllStores, setRefresh, setLimit, setShowOutOfStock,
+    setQuery, setAllStores, setRefresh, setLimit, setShowOutOfStock, setGroupMode,
     startSearch, stopSearch, handleSSEEvent, isSearching,
   } = useSearchStore()
 
+  // Group-mode: выбранная группа для drawer'а (пока показываем первый
+  // оффер группы через существующий ProductDrawer; полноценный
+  // `<GameGroupDrawer>` с табами Офферы/История/Матчинг/Raw — отдельная
+  // задача, см. roadmap WT-F11-DRAWER).
+  const [selectedGroupKey, setSelectedGroupKey] = useState<string | null>(null)
+
   // ── URL sync (deep-link) ──────────────────────────────────────────────
-  // Параметры в URL: q, stores (csv), limit, refresh, auto (1=автозапуск),
-  // product (id открытого Drawer-а). Pattern: на маунте читаем URL и
-  // заполняем стор; на изменение ключевых полей формы пишем replaceState.
   const [searchParams, setSearchParams] = useSearchParams()
   const initialUrlAppliedRef = useRef(false)
   useEffect(() => {
@@ -64,25 +73,20 @@ export function SearchPage() {
     }
     if (ref !== null) setRefresh(ref === '1' || ref === 'true')
 
-    // ?auto=1 — автозапуск; полезно для shareable-ссылок и Cmd+K «Запустить»
     if (auto === '1' && q && q.trim()) {
-      // даём React успеть применить setQuery/setAllStores
       setTimeout(() => startSearch([]), 50)
     }
 
-    // ?product=N — открыть Drawer (но без pool — данные подтянутся через ProductPage-маршрут)
     if (productId) {
       const id = Number(productId)
       if (Number.isFinite(id) && id > 0) {
         // selectedProduct ставим заглушкой по id — настоящие данные подтянутся
         // когда найдёт в results, иначе пользователь должен открыть /products/:id
-        // (Drawer без полного product не рендерится, поэтому здесь noop-fallback)
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Обратная синхронизация: при изменении формы обновляем URL без перезагрузки.
   useEffect(() => {
     if (!initialUrlAppliedRef.current) return
     const sp = new URLSearchParams()
@@ -95,28 +99,18 @@ export function SearchPage() {
 
   const { data: stores = [] } = useQuery({ queryKey: ['stores'], queryFn: fetchStores })
 
-  // Видимые результаты — после фильтра «Показать товары не в наличии».
-  // Скрытыми считаем те, у которых магазин явно отдал признак отсутствия
-  // (HobbyGames availability=false, CrowdGames in_stock=false). Магазины
-  // без признака (Лавка, GaGa) всегда показаны.
   const visibleResults = useMemo(
     () => showOutOfStock ? results : results.filter(isInStock),
     [results, showOutOfStock],
   )
   const hiddenCount = results.length - visibleResults.length
 
-  // Скидки лояльности — пересчитываются из конфига и видимых результатов.
-  // Конфиг отдельным стором, чтобы persist не делил места с search:form.
   const loyaltyCfg = useLoyaltyStore()
   const adjusted = useMemo(
     () => applyLoyalty(visibleResults, loyaltyCfg),
     [visibleResults, loyaltyCfg],
   )
 
-  // Δ-цена: грузим пакетом для всех id из текущих результатов. Ключ —
-  // сортированный список id, чтобы кэш переиспользовался между ре-рендерами
-  // и сбрасывался при новом поиске. Достаточно id видимых, чтобы не
-  // запрашивать историю для скрытых строк.
   const productIds = useMemo(() => visibleResults.map(p => p.id).sort((a, b) => a - b), [visibleResults])
   const { data: deltasArray = [] } = useQuery({
     queryKey: ['recent-deltas', productIds.join(',')],
@@ -129,9 +123,6 @@ export function SearchPage() {
     [deltasArray],
   )
 
-  // Min цена за 30д / всё время — отдельным запросом параллельно delta.
-  // Делим запросы, чтобы 1) кеш TanStack по разным ключам, 2) дельта
-  // часто требуется в hot-path-е, статистика — реже.
   const { data: priceStatsArray = [] } = useQuery({
     queryKey: ['price-stats', productIds.join(',')],
     queryFn: () => fetchPriceStats(productIds),
@@ -143,9 +134,24 @@ export function SearchPage() {
     [priceStatsArray],
   )
 
-  // Параметры для кнопок «Snapshot» и «В избранное» — берём напрямую из стора.
-  // Snapshot не нуждается в showOutOfStock/loyalty (это локальные пресеты UI),
-  // но Favorite — да: пользователь хочет восстановить весь сетап одной кнопкой.
+  // WT-F11: frontend-fallback группировка по titleSimilarity.
+  // Дешёво (O(n×k), n≤500 — ≤10мс), greedy-clustering ≥ 0.6 Jaccard.
+  // Когда backend выкатит /search/grouped с game_id — заменим на прямой group-by-id.
+  const grouped = useMemo(
+    () => groupMode === 'group' ? groupProducts(visibleResults) : null,
+    [groupMode, visibleResults],
+  )
+
+  const handleSelectGroup = (g: ProductGroup) => {
+    setSelectedGroupKey(g.canonicalTitle)
+    // Минимальный UX: открываем drawer с min-price offer'ом группы.
+    const minOffer = g.offers.reduce((best, o) =>
+      best == null || o.price_rub < best.price_rub ? o : best,
+      null as ProductOut | null,
+    )
+    if (minOffer) setSelectedProduct(minOffer)
+  }
+
   const buildPayload = () => ({
     query: query.trim(),
     stores: selectedStores.length > 0 ? selectedStores : undefined,
@@ -196,9 +202,6 @@ export function SearchPage() {
     }
   }
 
-  // Watch-режим: интервал N минут → автозапуск snapshot.
-  // Простой опрос на стороне клиента; уважает Page Visibility API чтобы
-  // не дёргать parsers, когда вкладка скрыта.
   useEffect(() => {
     if (watchTimerRef.current) {
       clearInterval(watchTimerRef.current)
@@ -229,10 +232,12 @@ export function SearchPage() {
 
   const hasActivity = Object.keys(storeProgress).length > 0
   const progressList = Object.values(storeProgress)
-  const tabCls = (t: Tab) =>
-    `px-3 py-2 text-xs font-medium border-b-2 transition-colors ${tab === t
-      ? 'border-violet-500 text-violet-400'
-      : 'border-transparent text-gray-500 hover:text-gray-300'}`
+
+  // source — origin записи (не статус); используем Tag с tone, а не Badge через statusSystem.
+  const sourceTone =
+    source === 'cache' ? 'warn' :
+    source === 'network' ? 'ok' :
+    'neutral'
 
   // Единственный api-request лог для отображения
   const apiReq = apiLogs.find(l => l.type === 'request')
@@ -240,15 +245,15 @@ export function SearchPage() {
   const apiErr = apiLogs.find(l => l.type === 'error')
 
   return (
-    <div className="space-y-4 max-w-5xl">
+    <div className="p-4 space-y-4 max-w-5xl">
       <div>
-        <h1 className="text-lg font-semibold text-gray-100">Поиск</h1>
-        <p className="text-xs text-gray-500 mt-0.5">
+        <h1 className="text-lg font-semibold text-zinc-100">Поиск</h1>
+        <p className="text-xs text-zinc-500 mt-0.5">
           Поиск через parsers API с отображением прогресса по магазинам
         </p>
       </div>
 
-      <div className="bg-gray-900 border border-gray-800 rounded-lg p-4">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
         <SearchForm
           stores={stores}
           onSearch={() => startSearch(stores.map(s => s.slug))}
@@ -258,21 +263,13 @@ export function SearchPage() {
 
       {/* Прогресс парсеров */}
       {hasActivity && (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg p-4 space-y-3">
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3">
           <div className="flex items-center justify-between">
-            <span className="text-xs font-medium text-gray-400 uppercase tracking-wide">Прогресс</span>
+            <span className="text-xxs font-medium text-zinc-400 uppercase tracking-wider">Прогресс</span>
             {totalMs != null && (
-              <span className="text-xs text-gray-500 flex items-center gap-1">
-                <Clock size={11} /> {totalMs}ms
-                {source && (
-                  <span className={clsx('ml-2 px-1.5 py-0.5 rounded text-xs',
-                    source === 'cache' ? 'bg-yellow-950 text-yellow-400' :
-                    source === 'network' ? 'bg-green-950 text-green-400' :
-                    'bg-gray-800 text-gray-400'
-                  )}>
-                    {source === 'cache' ? '⚡ кэш' : source === 'network' ? '🌐 сеть' : source}
-                  </span>
-                )}
+              <span className="text-xs text-zinc-500 flex items-center gap-2">
+                <Clock size={11} /> <span className="font-mono tabular-nums">{totalMs}ms</span>
+                {source && <Tag tone={sourceTone}>{source}</Tag>}
               </span>
             )}
           </div>
@@ -284,205 +281,270 @@ export function SearchPage() {
 
       {/* Результаты и API Log */}
       {(hasActivity || results.length > 0) && (
-        <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-          <div className="flex items-center px-4 border-b border-gray-800 bg-gray-900/50 gap-2 flex-wrap">
-            <button className={tabCls('results')} onClick={() => setTab('results')}>
-              Результаты{visibleResults.length > 0 && ` (${visibleResults.length}${hiddenCount > 0 ? `/${results.length}` : ''})`}
-            </button>
-            <button className={tabCls('api-log')} onClick={() => setTab('api-log')}>
-              API Log{apiLogs.length > 0 && ` (${apiLogs.length})`}
-            </button>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+            <div className="flex items-center px-4 gap-2 flex-wrap">
+              <Tabs.List className="border-b-0">
+                <Tabs.Trigger value="results">
+                  Результаты
+                  {visibleResults.length > 0 && (
+                    <span className="ml-1 font-mono text-xxs tabular-nums text-zinc-500">
+                      {visibleResults.length}
+                      {hiddenCount > 0 && `/${results.length}`}
+                    </span>
+                  )}
+                </Tabs.Trigger>
+                <Tabs.Trigger value="api-log">
+                  API Log
+                  {apiLogs.length > 0 && (
+                    <span className="ml-1 font-mono text-xxs tabular-nums text-zinc-500">{apiLogs.length}</span>
+                  )}
+                </Tabs.Trigger>
+              </Tabs.List>
 
-            {/* Action-кнопки для snapshot/favorite/watch */}
-            <div className="ml-auto flex items-center gap-2 py-1.5">
-              <button
-                type="button"
-                onClick={handleSaveSnapshot}
-                disabled={savingSnap || !query.trim()}
-                title="Сохранить snapshot этого запроса"
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Save size={11} />
-                {savingSnap ? '…' : 'Snapshot'}
-              </button>
-              {savedSnapshotId !== null && (
-                <Link
-                  to={`/testing`}
-                  className="text-xs text-violet-400 hover:text-violet-300"
-                  title={`Snapshot #${savedSnapshotId} сохранён`}
+              {/* Action-кнопки */}
+              <div className="ml-auto flex items-center gap-2 py-1.5">
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={Save}
+                  disabled={savingSnap || !query.trim()}
+                  loading={savingSnap}
+                  onClick={handleSaveSnapshot}
+                  title="Сохранить snapshot этого запроса"
                 >
-                  #{savedSnapshotId}
-                </Link>
-              )}
-
-              <button
-                type="button"
-                onClick={handleSaveFavorite}
-                disabled={savingFav || !query.trim()}
-                title="Сохранить запрос в избранное"
-                className={clsx(
-                  'flex items-center gap-1 px-2 py-1 rounded text-xs',
-                  favSaved
-                    ? 'bg-yellow-950 text-yellow-400'
-                    : 'bg-gray-800 hover:bg-gray-700 text-gray-200',
-                  'disabled:opacity-50 disabled:cursor-not-allowed',
+                  Snapshot
+                </Button>
+                {savedSnapshotId !== null && (
+                  <Link
+                    to={`/testing`}
+                    className="text-xs text-indigo-300 hover:text-indigo-200 font-mono"
+                    title={`Snapshot #${savedSnapshotId} сохранён`}
+                  >
+                    #{savedSnapshotId}
+                  </Link>
                 )}
-              >
-                <Star size={11} fill={favSaved ? 'currentColor' : 'none'} />
-                {favSaved ? 'Сохр.' : 'Избр.'}
-              </button>
 
-              {/* Экспорт */}
-              <button
-                type="button"
-                disabled={results.length === 0}
-                onClick={() => downloadJson(results, `search-${query.trim() || 'results'}.json`)}
-                title="Экспорт результатов в JSON"
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50"
-              >
-                <Download size={11} /> JSON
-              </button>
-              <button
-                type="button"
-                disabled={results.length === 0}
-                onClick={() => downloadCsv(
-                  results as unknown as Array<Record<string, unknown>>,
-                  [
-                    { key: 'id', label: 'id' },
-                    { key: 'store_slug', label: 'store' },
-                    { key: 'title', label: 'title' },
-                    { key: 'price_rub', label: 'price_rub' },
-                    { key: 'url', label: 'url' },
-                    { key: 'players', label: 'players' },
-                    { key: 'age_min', label: 'age_min' },
-                    { key: 'playtime', label: 'playtime' },
-                  ],
-                  `search-${query.trim() || 'results'}.csv`,
-                )}
-                title="Экспорт результатов в CSV"
-                className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200 disabled:opacity-50"
-              >
-                <Download size={11} /> CSV
-              </button>
+                <Button
+                  variant={favSaved ? 'warn' : 'secondary'}
+                  size="xs"
+                  icon={Star}
+                  disabled={savingFav || !query.trim()}
+                  onClick={handleSaveFavorite}
+                  title="Сохранить запрос в избранное"
+                >
+                  {favSaved ? 'Сохр.' : 'Избр.'}
+                </Button>
 
-              {/* Watch-режим */}
-              <select
-                value={watchMin}
-                onChange={e => setWatchMin(Number(e.target.value))}
-                className="px-2 py-1 rounded text-xs bg-gray-800 border border-gray-700 text-gray-200"
-                title={watchMin > 0 ? `Watch включён: snapshot каждые ${watchMin} мин` : 'Watch — авто-snapshot по интервалу'}
-              >
-                <option value={0}>Watch: off</option>
-                <option value={5}>каждые 5 мин</option>
-                <option value={15}>каждые 15 мин</option>
-                <option value={30}>каждые 30 мин</option>
-                <option value={60}>каждый час</option>
-              </select>
-              {watchMin > 0
-                ? <Eye size={12} className="text-green-400" />
-                : <EyeOff size={12} className="text-gray-600" />
-              }
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={Download}
+                  disabled={results.length === 0}
+                  onClick={() => downloadJson(results, `search-${query.trim() || 'results'}.json`)}
+                  title="Экспорт результатов в JSON"
+                >
+                  JSON
+                </Button>
+                <Button
+                  variant="secondary"
+                  size="xs"
+                  icon={Download}
+                  disabled={results.length === 0}
+                  onClick={() => downloadCsv(
+                    results as unknown as Array<Record<string, unknown>>,
+                    [
+                      { key: 'id', label: 'id' },
+                      { key: 'store_slug', label: 'store' },
+                      { key: 'title', label: 'title' },
+                      { key: 'price_rub', label: 'price_rub' },
+                      { key: 'url', label: 'url' },
+                      { key: 'players', label: 'players' },
+                      { key: 'age_min', label: 'age_min' },
+                      { key: 'playtime', label: 'playtime' },
+                    ],
+                    `search-${query.trim() || 'results'}.csv`,
+                  )}
+                  title="Экспорт результатов в CSV"
+                >
+                  CSV
+                </Button>
+
+                <select
+                  value={watchMin}
+                  onChange={e => setWatchMin(Number(e.target.value))}
+                  className="h-6 px-2 rounded text-xxs bg-zinc-900 border border-zinc-800 text-zinc-200 focus:outline-none focus:border-indigo-500"
+                  title={watchMin > 0 ? `Watch включён: snapshot каждые ${watchMin} мин` : 'Watch — авто-snapshot по интервалу'}
+                >
+                  <option value={0}>Watch: off</option>
+                  <option value={5}>каждые 5 мин</option>
+                  <option value={15}>каждые 15 мин</option>
+                  <option value={30}>каждые 30 мин</option>
+                  <option value={60}>каждый час</option>
+                </select>
+                {watchMin > 0
+                  ? <Eye size={12} className="text-emerald-400" />
+                  : <EyeOff size={12} className="text-zinc-600" />
+                }
+              </div>
             </div>
-          </div>
 
-          <div className="p-4">
-            {tab === 'results' && (
-              <>
-                {hiddenCount > 0 && (
-                  <div className="mb-3 text-xs text-gray-500 flex items-center gap-2">
-                    <span>Скрыто {hiddenCount} товаров не в наличии.</span>
+            <div className="p-4 border-t border-zinc-800">
+              <Tabs.Content value="results">
+                {/* Header-bar: toggle group/flat + skipped-stock note */}
+                <div className="flex items-center gap-2 mb-3 flex-wrap">
+                  <div className="inline-flex rounded border border-zinc-800 overflow-hidden">
                     <button
                       type="button"
-                      onClick={() => setShowOutOfStock(true)}
-                      className="text-violet-400 hover:text-violet-300 underline"
+                      onClick={() => setGroupMode('group')}
+                      className={`inline-flex items-center gap-1 h-7 px-2.5 text-xs ${
+                        groupMode === 'group'
+                          ? 'bg-indigo-500/15 text-indigo-200'
+                          : 'bg-transparent text-zinc-400 hover:bg-zinc-800/40'
+                      }`}
+                      title="По канонической игре (frontend-clustering)"
                     >
-                      Показать
+                      <Layers size={12} />
+                      По игре
+                      {grouped && (
+                        <span className="ml-1 font-mono text-xxs tabular-nums text-zinc-500">
+                          {grouped.stats.totalGroups}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setGroupMode('flat')}
+                      className={`inline-flex items-center gap-1 h-7 px-2.5 text-xs border-l border-zinc-800 ${
+                        groupMode === 'flat'
+                          ? 'bg-indigo-500/15 text-indigo-200'
+                          : 'bg-transparent text-zinc-400 hover:bg-zinc-800/40'
+                      }`}
+                      title="Плоский список (debug)"
+                    >
+                      <List size={12} />
+                      Плоский
+                      <span className="ml-1 font-mono text-xxs tabular-nums text-zinc-500">
+                        {visibleResults.length}
+                      </span>
                     </button>
                   </div>
-                )}
-                <ResultsTable
-                  products={visibleResults}
-                  deltas={deltas}
-                  adjusted={adjusted}
-                  priceStats={priceStats}
-                  showOutOfStock={showOutOfStock}
-                  onSelect={setSelectedProduct}
-                />
-              </>
-            )}
 
-            {tab === 'api-log' && (
-              <div className="space-y-3">
-                {apiLogs.length === 0 && (
-                  <div className="text-sm text-gray-500 text-center py-8">
-                    {isSearching ? 'Ожидание ответа от parsers API…' : 'Нет запросов'}
-                  </div>
-                )}
+                  {hiddenCount > 0 && (
+                    <span className="text-xs text-zinc-500">
+                      Скрыто {hiddenCount}.
+                      <button
+                        type="button"
+                        onClick={() => setShowOutOfStock(true)}
+                        className="text-indigo-300 hover:text-indigo-200 underline ml-1"
+                      >
+                        Показать
+                      </button>
+                    </span>
+                  )}
 
-                {/* Запрос */}
-                {apiReq && (
-                  <div className="bg-gray-950 border border-gray-800 rounded p-3 space-y-1.5">
-                    <div className="flex items-center gap-2 text-xs">
-                      <span className="text-blue-400 font-mono font-bold">↑ GET</span>
-                      <span className="text-gray-300 font-mono truncate">{apiReq.url}</span>
-                    </div>
-                    <div className="text-xs text-gray-500 font-mono">
-                      q={apiReq.q}
-                      {apiReq.stores && ` stores=${apiReq.stores.join(',')}`}
-                    </div>
-                  </div>
-                )}
-
-                {/* Ответ */}
-                {apiResp && (
-                  <div className="bg-gray-950 border border-gray-800 rounded p-3 space-y-2">
-                    <div className="flex items-center gap-3 text-xs">
-                      <CheckCircle2 size={13} className="text-green-400" />
-                      <span className="text-green-400 font-mono font-bold">↓ {apiResp.status}</span>
-                      <span className="text-gray-400">{apiResp.elapsed_ms}ms</span>
-                      <span className={clsx('px-1.5 py-0.5 rounded',
-                        apiResp.source === 'cache' ? 'bg-yellow-950 text-yellow-400' :
-                        'bg-green-950 text-green-400'
-                      )}>
-                        {apiResp.source}
-                      </span>
-                    </div>
-                    <div className="flex gap-4 text-xs text-gray-400">
-                      <span>Продуктов: <span className="text-gray-200">{apiResp.products_count}</span></span>
-                      {(apiResp.error_count ?? 0) > 0 && (
-                        <span className="text-red-400">Ошибок магазинов: {apiResp.error_count}</span>
+                  {grouped && (
+                    <span className="ml-auto text-xxs text-zinc-500 font-mono tabular-nums">
+                      {grouped.stats.totalGroups} игр · {grouped.stats.totalOffers} офферов
+                      {grouped.stats.totalOrphans > 0 && (
+                        <> · <span className="text-amber-300">{grouped.stats.totalOrphans} unmatched</span></>
                       )}
-                    </div>
-                  </div>
-                )}
+                    </span>
+                  )}
+                </div>
 
-                {/* Ошибка */}
-                {apiErr && (
-                  <div className="bg-red-950/30 border border-red-900 rounded p-3 text-xs">
-                    <div className="flex items-center gap-2 text-red-400 mb-1">
-                      <AlertCircle size={13} /> parsers API недоступен
-                    </div>
-                    <div className="text-red-300 font-mono">{apiErr.error}</div>
-                    <div className="text-gray-500 mt-1">{apiErr.elapsed_ms}ms</div>
-                  </div>
+                {groupMode === 'group' && grouped ? (
+                  <>
+                    <ResultsTableGrouped
+                      data={grouped}
+                      selectedId={selectedGroupKey}
+                      onSelectGroup={handleSelectGroup}
+                    />
+                    <UnmatchedSection
+                      orphans={grouped.orphans}
+                      onSelectOrphan={setSelectedProduct}
+                    />
+                  </>
+                ) : (
+                  <ResultsTable
+                    products={visibleResults}
+                    deltas={deltas}
+                    adjusted={adjusted}
+                    priceStats={priceStats}
+                    showOutOfStock={showOutOfStock}
+                    onSelect={setSelectedProduct}
+                  />
                 )}
+              </Tabs.Content>
 
-                {/* Ошибки магазинов из store-done */}
-                {progressList.filter(p => p.status === 'error').map(p => (
-                  <div key={p.slug} className="bg-yellow-950/20 border border-yellow-900/50 rounded p-2.5 text-xs">
-                    <div className="flex items-center gap-2 text-yellow-400">
-                      <Zap size={11} /> Частичная ошибка: {p.name}
+              <Tabs.Content value="api-log">
+                <div className="space-y-3">
+                  {apiLogs.length === 0 && (
+                    <div className="text-sm text-zinc-500 text-center py-8">
+                      {isSearching ? 'Ожидание ответа от parsers API…' : 'Нет запросов'}
                     </div>
-                    <div className="text-gray-400 mt-0.5 font-mono">{p.error}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+                  )}
+
+                  {apiReq && (
+                    <div className="bg-zinc-950 border border-zinc-800 rounded p-3 space-y-1.5">
+                      <div className="flex items-center gap-2 text-xs">
+                        <ArrowUp size={11} className="text-indigo-400" />
+                        <span className="text-indigo-300 font-mono font-bold">GET</span>
+                        <span className="text-zinc-300 font-mono truncate">{apiReq.url}</span>
+                      </div>
+                      <div className="text-xs text-zinc-500 font-mono">
+                        q={apiReq.q}
+                        {apiReq.stores && ` stores=${apiReq.stores.join(',')}`}
+                      </div>
+                    </div>
+                  )}
+
+                  {apiResp && (
+                    <div className="bg-zinc-950 border border-zinc-800 rounded p-3 space-y-2">
+                      <div className="flex items-center gap-3 text-xs">
+                        <ArrowDown size={11} className="text-emerald-400" />
+                        <span className="text-emerald-300 font-mono font-bold">{apiResp.status}</span>
+                        <span className="text-zinc-400 font-mono tabular-nums">{apiResp.elapsed_ms}ms</span>
+                        <Tag tone={apiResp.source === 'cache' ? 'warn' : 'ok'}>
+                          {apiResp.source}
+                        </Tag>
+                      </div>
+                      <div className="flex gap-4 text-xs text-zinc-400">
+                        <span>Продуктов: <span className="text-zinc-200 font-mono tabular-nums">{apiResp.products_count}</span></span>
+                        {(apiResp.error_count ?? 0) > 0 && (
+                          <Badge tone="danger" size="xs" dot={false}>
+                            Ошибок магазинов: {apiResp.error_count}
+                          </Badge>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {apiErr && (
+                    <div className="bg-rose-500/10 border border-rose-500/30 rounded p-3 text-xs">
+                      <div className="flex items-center gap-2 text-rose-300 mb-1">
+                        <AlertCircle size={13} /> parsers API недоступен
+                      </div>
+                      <div className="text-rose-200 font-mono">{apiErr.error}</div>
+                      <div className="text-zinc-500 mt-1">{apiErr.elapsed_ms}ms</div>
+                    </div>
+                  )}
+
+                  {progressList.filter(p => p.status === 'error').map(p => (
+                    <div key={p.slug} className="bg-amber-500/10 border border-amber-500/30 rounded p-2.5 text-xs">
+                      <div className="flex items-center gap-2 text-amber-300">
+                        <Zap size={11} /> Частичная ошибка: {p.name}
+                      </div>
+                      <div className="text-zinc-400 mt-0.5 font-mono">{p.error}</div>
+                    </div>
+                  ))}
+                </div>
+              </Tabs.Content>
+            </div>
+          </Tabs>
         </div>
       )}
 
-      {/* Drawer с деталями товара */}
       <ProductDrawer
         product={selectedProduct}
         pool={visibleResults}

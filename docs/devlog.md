@@ -8,6 +8,114 @@
 
 ---
 
+## 2026-05-17 · [WT-DESIGN-PR4/PR5] Job UI shared + Search WT-F11 grouping
+
+**Что сделано:** Финальные коммиты ветки `feat/wt-redesign-rollout` —
+два глубоких feature-PR'а поверх hygiene PR3.
+
+**PR4 — Job UI** (`pages/04-jobui.md`, commit `820af0d`):
+- Новый каталог `components/jobs/` (468 строк):
+  - `JobView.tsx` — generic-шаблон активного job'а: header (status badge
+    из statusSystem + name + phase + elapsed/ETA), `<ProgressBar>` из ui/
+    с meta `ok/skip/fail`, 4-col stats grid (rate/elapsed/eta/ok-fail),
+    `<PhaseStrip>`, `<JobLogPanel>` из ui/.
+  - `PhaseStrip.tsx` — phase pills (done emerald / current indigo+pulse
+    / pending neutral) с ChevronRight-разделителями.
+  - `adapters.ts` — `importJobToJobLike()` маппит `ImportJob` (BGG/Tesera/
+    Dicefest) на унифицированный `JobLike`. ETA — linear extrapolation
+    если backend не отдаёт rate.
+- Интегрировано: `bgg-sync/JobHistoryTable` (expanded row), `catalog/
+  BggImportPanel` (две секции активного job'а).
+
+**PR5 — Search WT-F11** (`pages/05-search.md`, commit `a481da2`):
+- `lib/searchGrouping.ts` (180 строк) — greedy-clustering по
+  `titleSimilarity` ≥ 0.6. O(n×k) на ≤500 results = ~5-10 мс. Группы
+  с 1 оффером → `orphans[]`. Backend пока не возвращает `game_id`,
+  поэтому frontend-fallback (var. B из спеки).
+- `components/search/ResultsTableGrouped.tsx` — Master-таблица:
+  canonical_title · stores in-stock/total · min · spread (±X% amber
+  если >30%) + stores-pills.
+- `components/search/UnmatchedSection.tsx` — collapsible секция с
+  amber-border, ссылка «Сматчить» → /matching.
+- `store/search.ts` — `groupMode: 'group' | 'flat'` (persist v2 partialize).
+- `pages/SearchPage.tsx` — toggle group/flat (segmented control),
+  условный рендеринг.
+
+**Как пользоваться:**
+1. `git checkout feat/wt-redesign-rollout && cd services/web-test/frontend && npm run dev`.
+2. /bgg-sync → таб «История» → клик по любой строке job → видишь
+   новый JobView (status badge + progress + phase strip + log).
+3. /catalog → таб «BGG» → запусти BGG-import → JobView показывает
+   живой прогресс в едином UI.
+4. / (Поиск) → введи запрос → результаты по умолчанию группируются
+   («По игре»). Toggle справа от tabs `По игре / Плоский`. Под основной
+   таблицей — секция «Не сматчено» (orphans).
+
+**Затронутые файлы:**
+- `services/web-test/frontend/src/components/jobs/*` — новые (4 файла).
+- `services/web-test/frontend/src/components/search/{ResultsTableGrouped,UnmatchedSection}.tsx` — новые.
+- `services/web-test/frontend/src/lib/searchGrouping.ts` — новый.
+- `services/web-test/frontend/src/store/search.ts` — расширен `groupMode`.
+- `services/web-test/frontend/src/pages/SearchPage.tsx` — toggle + grouped рендеринг.
+- `services/web-test/frontend/src/components/bgg-sync/JobHistoryTable.tsx` — JobView в expanded row.
+- `services/web-test/frontend/src/components/catalog/BggImportPanel.tsx` — JobView вместо inline progress.
+
+**Что отложено:**
+- `<GameGroupDrawer>` с табами Офферы/История/Матчинг/Raw для grouped-режима —
+  пока drawer reuses `ProductDrawer` (открывает min-offer группы). Roadmap
+  `WT-F11-DRAWER`.
+- `suiteRunToJobLike()` adapter для SuiteRunner (testing) — отдельная итерация.
+- `JobView.canCancel` — backend пока не поддерживает (CLAUDE.md handoff §11).
+
+## 2026-05-17 · [WT-DESIGN-PR3] Раскатка дизайн-системы на весь портал
+
+**Что сделано:** Ветка `feat/wt-redesign-rollout` — 3 коммита, раскатка
+новой `ui/*` + `design-tokens` на все страницы `web-test/frontend` и 51
+sub-компонент. Без структурной перестройки (cache-keys, store-схемы,
+backend-контракты не тронуты).
+
+- **3a · 11 страниц** (`728b705`) — inline-табы повсюду заменены на
+  `<Tabs>` из ui/ (Radix-based, единый focus-ring); эмодзи `✓ ⭐ 💾 ⚡ 🌐`
+  → lucide-иконки; ad-hoc status-цвета (`bg-yellow-950 text-yellow-400`)
+  → `<Badge status="…">` / `<Tag tone="…">` через `statusSystem`; plain
+  `<button>` → `<Button variant="…">` / `<IconButton>`; `gray-*` → `zinc-*`
+  (нейтральный undertone — handoff §5); custom StatusDot на StatusPage
+  → `<StatusDot>` из ui/; числа в колонках получили `tabular-nums`.
+- **3b · CatalogPage Games** (`0541209`) — Sticky thead z-10, активная
+  строка `bg-indigo-500/10`, hover `zinc-800/30`, resize-handle indigo
+  (был violet), SourceBadge через alpha-tokens (`bg-orange-500/15` для
+  BGG, `bg-blue-500/15` для tesera), ColumnsPicker через Button-обёртки,
+  «Показать ещё» как `<Button variant="ghost" loading>`. Глубокая
+  переделка по `pages/03-games.md`. MatchingSection (legacy, заменена
+  `/matching`) обновлена только по цвету (violet → indigo).
+- **3c · 51 sub-компонент** (`1cfa168`) — violet → indigo по 50 файлам;
+  status-pills `bg-green-900/40` → `bg-emerald-500/15` из tokens; эмодзи
+  в UI рендеринге (`✓ done`, `✗ Ошибка`, `✓ да`, `✓ в каталоге`) →
+  `<CheckCircle2 />` / `<XCircle />`. Затронуто: `parsers/`, `catalog/`,
+  `matching/`, `database/parsers/`, `bgg-sync/`, `sources/`, `testing/`.
+
+`/matching` сознательно осталась в gray/violet — это решение из
+`pages/06-matching-v2-improvements.md` (дельта-апгрейд WT-MATCH-UX
+поверх существующего стиля, не путать с proof из §01).
+
+**Как пользоваться:** `git checkout feat/wt-redesign-rollout` → `npm run
+dev` в `services/web-test/frontend/` → http://localhost:5173. Обход
+страниц: /, /parsers, /debug, /database, /catalog, /matching, /bgg-sync,
+/sources, /testing, /dlq, /status. Проверь визуально — табы везде с
+indigo underline, никаких эмодзи в UI (только в toast-сообщениях
+осталось — handoff не запрещает), статусы единообразно через Badge.
+
+**Не сделано (отложено в roadmap):**
+- PR 4 Job UI (`components/jobs/JobView.tsx` + reuse в BggSync/Testing/
+  Catalog) — `pages/04-jobui.md`.
+- PR 5 Search WT-F11 group-by-game — `pages/05-search.md` (требует
+  либо backend endpoint, либо frontend-fallback агрегации).
+
+**Затронутые файлы:**
+- `services/web-test/frontend/src/pages/*` — 11 страниц.
+- `services/web-test/frontend/src/components/*` — 51 файл.
+- Build: `1366 KB → 1367 KB` (изменения чисто визуальные).
+
 ## 2026-05-17 · [WT-HELP] Раздел «Помощь» с интерактивной HTML-инструкцией
 
 **Что сделано:** Self-contained HTML-страница `frontend/public/help.html` (~79 КБ)

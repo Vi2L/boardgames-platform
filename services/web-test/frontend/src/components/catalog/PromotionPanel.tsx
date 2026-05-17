@@ -39,7 +39,7 @@ const LINK_BADGE: Record<ExternalLink['kind'], string> = {
   bgg:      'bg-orange-900/50 text-orange-300 border border-orange-900/40',
   tesera:   'bg-blue-900/50 text-blue-300 border border-blue-900/40',
   nastolio: 'bg-emerald-900/50 text-emerald-300 border border-emerald-900/40',
-  shop:     'bg-violet-900/50 text-violet-300 border border-violet-900/40',
+  shop:     'bg-indigo-900/50 text-indigo-300 border border-indigo-900/40',
   other:    'bg-gray-800 text-gray-300 border border-gray-700',
 }
 
@@ -82,7 +82,7 @@ export function PromotionPanel(_props: Props = {}) {
               className={clsx(
                 'px-3 py-2 text-sm transition-colors border-b-2 -mb-px',
                 tab === t.v
-                  ? 'text-violet-300 border-violet-500'
+                  ? 'text-indigo-300 border-indigo-500'
                   : 'text-gray-400 border-transparent hover:text-gray-200',
               )}
             >
@@ -155,7 +155,7 @@ function PromotionQueue({
           <button
             type="button"
             onClick={() => setAutoLinkOpen(true)}
-            className="px-3 py-1 text-xs bg-violet-700 hover:bg-violet-600 text-white rounded flex items-center gap-1"
+            className="px-3 py-1 text-xs bg-indigo-700 hover:bg-indigo-600 text-white rounded flex items-center gap-1"
           >
             <Bot size={12} /> Auto-link
           </button>
@@ -228,7 +228,7 @@ function PromotionQueue({
 
 function StatusBadge({ status }: { status: StatusFilter }) {
   const m: Record<StatusFilter, string> = {
-    new: 'bg-violet-900/50 text-violet-300',
+    new: 'bg-indigo-900/50 text-indigo-300',
     promoted: 'bg-emerald-900/50 text-emerald-300',
     skipped: 'bg-gray-800 text-gray-400',
     rejected: 'bg-red-900/50 text-red-300',
@@ -304,7 +304,7 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
           <div className="text-xs text-gray-500 font-mono mt-1 flex items-center gap-2 flex-wrap">
             <span>id={raw.id}</span>
             <a href={raw.page_url} target="_blank" rel="noreferrer"
-               className="text-violet-300 hover:underline">{raw.slug}</a>
+               className="text-indigo-300 hover:underline">{raw.slug}</a>
             {raw.publisher && <span>· Издатель в РФ: <b>{raw.publisher}</b></span>}
             {raw.release_status && <span>· {raw.release_status}</span>}
             {raw.preorder_price != null && (
@@ -400,7 +400,7 @@ function PromotionDrawer({ rawId, onClose }: { rawId: number; onClose: () => voi
                 }
               }}
               disabled={apply.isPending}
-              className="px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded flex items-center gap-1"
+              className="px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded flex items-center gap-1"
             >
               <Plus size={12} /> Создать новую игру
             </button>
@@ -516,7 +516,7 @@ function CandidateRow({
         type="button"
         onClick={() => onLink(c.game_id)}
         disabled={disabled}
-        className="px-2 py-1 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded flex-shrink-0"
+        className="px-2 py-1 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded flex-shrink-0"
       >
         Привязать
       </button>
@@ -630,7 +630,7 @@ function LogRow({
         <span className="font-mono text-xs uppercase text-gray-300 flex items-center gap-1">
           {it.action === 'revert' ? <RotateCcw size={10} /> :
            it.action === 'link'   ? <CheckCircle2 size={10} className="text-emerald-400" /> :
-           it.action === 'create' ? <Plus size={10} className="text-violet-400" /> :
+           it.action === 'create' ? <Plus size={10} className="text-indigo-400" /> :
            null}
           {it.action}
         </span>
@@ -800,8 +800,8 @@ function LogDetailsBody({
           </DRow>
           <DRow label="satellite_created">
             {entry.satellite_created
-              ? <span className="text-emerald-400">✓ да</span>
-              : <span className="text-gray-500">— нет</span>}
+              ? <span className="text-emerald-400 inline-flex items-center gap-1"><CheckCircle2 size={12} /> да</span>
+              : <span className="text-zinc-500">— нет</span>}
           </DRow>
           <DRow label="performed_at">
             {new Date(entry.performed_at).toLocaleString('ru-RU')}
@@ -824,7 +824,7 @@ function LogDetailsBody({
                   <button
                     type="button"
                     onClick={() => onJumpToLog(reverted_by_entry_id)}
-                    className="font-mono text-violet-300 hover:underline"
+                    className="font-mono text-indigo-300 hover:underline"
                   >
                     Открыть #{reverted_by_entry_id}
                   </button>
@@ -857,7 +857,7 @@ function LogDetailsBody({
                 href={raw_game.page_url}
                 target="_blank"
                 rel="noreferrer"
-                className="font-mono text-violet-300 hover:underline break-all"
+                className="font-mono text-indigo-300 hover:underline break-all"
               >
                 {raw_game.slug}
               </a>
@@ -924,8 +924,8 @@ function LogDetailsBody({
             </DRow>
             <DRow label="verified">
               {alias.verified
-                ? <span className="text-emerald-400">✓ да</span>
-                : <span className="text-gray-500">— нет</span>}
+                ? <span className="text-emerald-400 inline-flex items-center gap-1"><CheckCircle2 size={12} /> да</span>
+                : <span className="text-zinc-500">— нет</span>}
             </DRow>
           </dl>
         )}
@@ -1021,7 +1021,7 @@ function AutoLinkModal({ onClose }: { onClose: () => void }) {
             checked={skipWithSatellite}
             onChange={e => setSkipWithSatellite(e.target.checked)}
             disabled={run.isPending}
-            className="accent-violet-500"
+            className="accent-indigo-500"
           />
           Пропускать игры с уже привязанной dicefest-страницей
         </label>
@@ -1036,7 +1036,7 @@ function AutoLinkModal({ onClose }: { onClose: () => void }) {
                 skip_with_satellite: skipWithSatellite,
               })}
               disabled={run.isPending}
-              className="flex-1 px-3 py-1.5 text-sm bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded flex items-center justify-center gap-1"
+              className="flex-1 px-3 py-1.5 text-sm bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded flex items-center justify-center gap-1"
             >
               {run.isPending
                 ? <><Loader2 size={12} className="animate-spin" /> Запускаю dry-run…</>
@@ -1060,7 +1060,7 @@ function AutoLinkModal({ onClose }: { onClose: () => void }) {
               >
                 {run.isPending
                   ? <><Loader2 size={12} className="animate-spin" /> Применяю…</>
-                  : <>✓ Применить ({result.would_link})</>}
+                  : <><CheckCircle2 size={12} /> Применить ({result.would_link})</>}
               </button>
               <button
                 type="button"
@@ -1075,7 +1075,7 @@ function AutoLinkModal({ onClose }: { onClose: () => void }) {
             <button
               type="button"
               onClick={onClose}
-              className="flex-1 px-3 py-1.5 text-sm bg-violet-700 hover:bg-violet-600 text-white rounded"
+              className="flex-1 px-3 py-1.5 text-sm bg-indigo-700 hover:bg-indigo-600 text-white rounded"
             >
               Готово, закрыть
             </button>

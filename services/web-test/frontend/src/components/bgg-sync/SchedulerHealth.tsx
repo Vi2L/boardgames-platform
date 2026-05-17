@@ -55,7 +55,7 @@ function timeAgo(iso: string | null): string {
 
 const STATUS_COLOR: Record<string, string> = {
   done:    'bg-emerald-900/50 text-emerald-300',
-  running: 'bg-violet-900/50 text-violet-300',
+  running: 'bg-indigo-900/50 text-indigo-300',
   pending: 'bg-amber-900/40 text-amber-300',
   failed:  'bg-red-950/30 text-red-300',
 }
@@ -181,7 +181,7 @@ function JobCard({ job }: { job: SchedulerJob }) {
             type="button"
             onClick={() => trigger.mutate()}
             disabled={trigger.isPending || isActive}
-            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-40 text-white rounded"
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 text-white rounded"
           >
             {trigger.isPending || isActive
               ? <Loader2 size={11} className="animate-spin" />
@@ -272,7 +272,7 @@ function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }
             type="text"
             value={cron}
             onChange={e => setCron(e.target.value)}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-indigo-500"
             placeholder="0 3 * * 1"
           />
           <div className="mt-1 text-[10px] text-gray-500">
@@ -303,7 +303,7 @@ function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }
           value={paramsText}
           onChange={e => setParamsText(e.target.value)}
           rows={3}
-          className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-violet-500"
+          className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-indigo-500"
         />
       </div>
 
@@ -312,7 +312,7 @@ function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }
           type="button"
           onClick={() => save.mutate()}
           disabled={save.isPending}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white rounded"
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white rounded"
         >
           {save.isPending && <Loader2 size={11} className="animate-spin" />}
           Сохранить

@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ProductDrawer } from '../components/search/ProductDrawer'
 import {
   Database, Trash2, RefreshCw, AlertTriangle, ChevronLeft, ChevronRight,
-  CheckCircle2, XCircle, Clock, Info,
+  Clock, Info,
 } from 'lucide-react'
 import clsx from 'clsx'
 import {
@@ -18,6 +18,7 @@ import { ProductsBrowserTab } from '../components/database/parsers/ProductsBrows
 import { ChartsTab } from '../components/database/parsers/ChartsTab'
 import { SkeletonList } from '../components/shared/Skeleton'
 import type { ProductOut, StoreHealthEntry } from '../types/api'
+import { Tabs, Button, IconButton, Tag, StatusDot, Badge } from '../components/ui'
 
 type Tab = 'products' | 'stores' | 'searches'
         | 'parsers-inventory' | 'parsers-products' | 'parsers-analytics' | 'parsers-charts'
@@ -31,70 +32,51 @@ const SORT_OPTIONS = [
 
 const PAGE_SIZE = 50
 
+const TABS: Array<{ id: Tab; label: string }> = [
+  { id: 'products', label: 'Товары портала' },
+  { id: 'stores', label: 'Магазины' },
+  { id: 'searches', label: 'Журнал' },
+  { id: 'parsers-inventory', label: 'БД парсеров: inventory' },
+  { id: 'parsers-products', label: 'БД парсеров: товары' },
+  { id: 'parsers-analytics', label: 'БД парсеров: аналитика' },
+  { id: 'parsers-charts', label: 'БД парсеров: графики' },
+]
+
 export function DatabasePage() {
   const [tab, setTab] = useState<Tab>('products')
 
   return (
-    <div className="space-y-4 max-w-6xl">
+    <div className="p-4 space-y-4 max-w-6xl">
       <div>
-        <h1 className="text-lg font-semibold text-gray-100 flex items-center gap-2">
+        <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
           <Database size={18} /> База данных
         </h1>
-        <p className="text-xs text-gray-500 mt-0.5">
+        <p className="text-xs text-zinc-500 mt-0.5">
           Локальный кеш дебаг-портала и статистика по парсерам
         </p>
       </div>
 
       <DatabaseSummary onJump={setTab} />
 
-
-      <div className="bg-gray-900 border border-gray-800 rounded-lg overflow-hidden">
-        <div className="flex border-b border-gray-800 bg-gray-900/50 overflow-x-auto">
-          <TabButton active={tab === 'products'} onClick={() => setTab('products')}>Товары портала</TabButton>
-          <TabButton active={tab === 'stores'} onClick={() => setTab('stores')}>Магазины</TabButton>
-          <TabButton active={tab === 'searches'} onClick={() => setTab('searches')}>Журнал</TabButton>
-          <div className="w-px bg-gray-800 my-2 mx-1" />
-          <TabButton active={tab === 'parsers-inventory'} onClick={() => setTab('parsers-inventory')}>
-            БД парсеров: inventory
-          </TabButton>
-          <TabButton active={tab === 'parsers-products'} onClick={() => setTab('parsers-products')}>
-            БД парсеров: товары
-          </TabButton>
-          <TabButton active={tab === 'parsers-analytics'} onClick={() => setTab('parsers-analytics')}>
-            БД парсеров: аналитика
-          </TabButton>
-          <TabButton active={tab === 'parsers-charts'} onClick={() => setTab('parsers-charts')}>
-            БД парсеров: графики
-          </TabButton>
-        </div>
-
-        <div className="p-4">
-          {tab === 'products' && <ProductsTab />}
-          {tab === 'stores' && <StoresTab />}
-          {tab === 'searches' && <SearchesTab />}
-          {tab === 'parsers-inventory' && <InventoryTab />}
-          {tab === 'parsers-products' && <ProductsBrowserTab />}
-          {tab === 'parsers-analytics' && <AnalyticsTab />}
-          {tab === 'parsers-charts' && <ChartsTab />}
-        </div>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
+          <Tabs.List className="px-2">
+            {TABS.map(t => (
+              <Tabs.Trigger key={t.id} value={t.id}>{t.label}</Tabs.Trigger>
+            ))}
+          </Tabs.List>
+          <div className="p-4">
+            <Tabs.Content value="products"><ProductsTab /></Tabs.Content>
+            <Tabs.Content value="stores"><StoresTab /></Tabs.Content>
+            <Tabs.Content value="searches"><SearchesTab /></Tabs.Content>
+            <Tabs.Content value="parsers-inventory"><InventoryTab /></Tabs.Content>
+            <Tabs.Content value="parsers-products"><ProductsBrowserTab /></Tabs.Content>
+            <Tabs.Content value="parsers-analytics"><AnalyticsTab /></Tabs.Content>
+            <Tabs.Content value="parsers-charts"><ChartsTab /></Tabs.Content>
+          </div>
+        </Tabs>
       </div>
     </div>
-  )
-}
-
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={clsx(
-        'px-4 py-2.5 text-sm font-medium border-b-2 transition-colors',
-        active
-          ? 'border-violet-500 text-violet-400'
-          : 'border-transparent text-gray-500 hover:text-gray-300',
-      )}
-    >
-      {children}
-    </button>
   )
 }
 
@@ -128,15 +110,12 @@ function ProductsTab() {
   return (
     <div className="space-y-4">
       {/* Info-блок */}
-      <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
-        <div>
-          <strong className="text-gray-300">Локальный кеш товаров портала.</strong>
-          {' '}Сюда попадает каждый товар, который пришёл в результатах поиска через web-test.
-          Это «всё что когда-либо видели» — сравните с inventory parsers (свежее состояние БД parsers).
-          Цена — в рублях, на момент последнего наблюдения. Клик по строке открывает карточку товара справа.
-        </div>
-      </div>
+      <InfoBox>
+        <strong className="text-zinc-300">Локальный кеш товаров портала.</strong>
+        {' '}Сюда попадает каждый товар, который пришёл в результатах поиска через web-test.
+        Это «всё что когда-либо видели» — сравните с inventory parsers (свежее состояние БД parsers).
+        Цена — в рублях, на момент последнего наблюдения. Клик по строке открывает карточку товара справа.
+      </InfoBox>
 
       {/* Фильтры */}
       <div className="flex flex-wrap gap-2 items-center">
@@ -146,13 +125,13 @@ function ProductsTab() {
           onChange={e => { setQ(e.target.value); setPage(1) }}
           placeholder="Поиск по названию"
           title="Поиск SQL LIKE %text% по названию товара (без учёта регистра)"
-          className="flex-1 min-w-[200px] px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-violet-500"
+          className="flex-1 min-w-[200px] h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
         />
         <select
           value={store}
           onChange={e => { setStore(e.target.value); setPage(1) }}
           title="Показывать товары только из выбранного магазина"
-          className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200"
+          className="h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
         >
           <option value="">Все магазины</option>
           {Object.entries(STORE_LABELS).map(([slug, label]) => (
@@ -163,26 +142,27 @@ function ProductsTab() {
           value={sort}
           onChange={e => setSort(e.target.value as typeof sort)}
           title="Порядок сортировки результатов"
-          className="px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200"
+          className="h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
         >
           {SORT_OPTIONS.map(o => (
             <option key={o.value} value={o.value}>{o.label}</option>
           ))}
         </select>
-        <button
-          type="button"
-          onClick={() => refetch()}
-          className="p-1.5 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800"
+        <IconButton
+          icon={RefreshCw}
+          variant="ghost"
+          size="sm"
+          aria-label="Перезагрузить страницу из БД"
           title="Перезагрузить страницу из БД"
-        >
-          <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
-        </button>
+          loading={isFetching}
+          onClick={() => refetch()}
+        />
       </div>
 
       {/* Гистограмма */}
       {prices.length >= 2 && (
-        <details className="bg-gray-950/50 border border-gray-800 rounded">
-          <summary className="px-3 py-2 text-xs text-gray-400 cursor-pointer hover:text-gray-200 select-none">
+        <details className="bg-zinc-950/50 border border-zinc-800 rounded">
+          <summary className="px-3 py-2 text-xs text-zinc-400 cursor-pointer hover:text-zinc-200 select-none">
             Распределение цен на текущей странице ({prices.length} товаров)
           </summary>
           <div className="p-3 pt-0">
@@ -193,13 +173,13 @@ function ProductsTab() {
 
       {/* Список */}
       {isError && (
-        <div className="text-sm text-red-400 py-8 text-center">Ошибка загрузки</div>
+        <div className="text-sm text-rose-400 py-8 text-center">Ошибка загрузки</div>
       )}
       {!isError && isLoading && (
         <SkeletonList rows={5} />
       )}
       {!isError && !isLoading && items.length === 0 && (
-        <div className="text-sm text-gray-500 py-12 text-center">
+        <div className="text-sm text-zinc-500 py-12 text-center">
           Пока пусто. Запусти поиск — товары попадут сюда.
         </div>
       )}
@@ -231,15 +211,15 @@ function ProductsList({
   onSelect: (p: ProductOut) => void
 }) {
   return (
-    <div className="overflow-x-auto rounded border border-gray-800">
+    <div className="overflow-x-auto rounded border border-zinc-800">
       <table className="w-full text-sm">
         <thead>
-          <tr className="border-b border-gray-800 bg-gray-900/80">
-            <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium w-10" title="Внутренний ID товара в БД parsers">#</th>
-            <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">Магазин</th>
-            <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium">Название</th>
-            <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium whitespace-nowrap" title="Цена на момент последнего наблюдения, в рублях">Цена</th>
-            <th className="px-3 py-2 text-left text-xs text-gray-500 font-medium hidden md:table-cell" title="Когда товар последний раз попадал в результаты поиска">Обновлено</th>
+          <tr className="border-b border-zinc-800 bg-zinc-900/80">
+            <th className="px-3 py-2 text-left text-xs text-zinc-500 font-medium w-10" title="Внутренний ID товара в БД parsers">#</th>
+            <th className="px-3 py-2 text-left text-xs text-zinc-500 font-medium">Магазин</th>
+            <th className="px-3 py-2 text-left text-xs text-zinc-500 font-medium">Название</th>
+            <th className="px-3 py-2 text-left text-xs text-zinc-500 font-medium whitespace-nowrap" title="Цена на момент последнего наблюдения, в рублях">Цена</th>
+            <th className="px-3 py-2 text-left text-xs text-zinc-500 font-medium hidden md:table-cell" title="Когда товар последний раз попадал в результаты поиска">Обновлено</th>
             <th className="px-3 py-2 w-10"></th>
           </tr>
         </thead>
@@ -247,38 +227,38 @@ function ProductsList({
           {items.map(p => (
             <tr
               key={p.id}
-              className="border-b border-gray-800/40 hover:bg-gray-900/60 cursor-pointer"
+              className="border-b border-zinc-800/40 hover:bg-zinc-800/30 cursor-pointer"
               onClick={() => onSelect(p)}
             >
-              <td className="px-3 py-2 text-xs text-gray-600 font-mono">#{p.id}</td>
+              <td className="px-3 py-2 text-xs text-zinc-600 font-mono">#{p.id}</td>
               <td className="px-3 py-2">
                 <span className={clsx('px-2 py-0.5 rounded text-xs font-mono', getStoreBadgeColor(p.store_slug))} title={getStoreLabel(p.store_slug)}>
                   {p.store_slug}
                 </span>
               </td>
               <td className="px-3 py-2 max-w-md">
-                <span className="font-medium text-gray-200 hover:text-violet-300 truncate block" title={p.title}>
+                <span className="font-medium text-zinc-200 hover:text-indigo-300 truncate block" title={p.title}>
                   {p.title}
                 </span>
               </td>
-              <td className="px-3 py-2 whitespace-nowrap text-green-400 font-semibold">
+              <td className="px-3 py-2 whitespace-nowrap text-emerald-400 font-semibold font-mono tabular-nums">
                 {p.price_rub.toLocaleString('ru-RU')} ₽
               </td>
               <td
-                className="px-3 py-2 text-xs text-gray-500 whitespace-nowrap hidden md:table-cell"
+                className="px-3 py-2 text-xs text-zinc-500 whitespace-nowrap hidden md:table-cell"
                 title={p.fetched_at}
               >
                 {new Date(p.fetched_at).toLocaleDateString('ru-RU')}
               </td>
               <td className="px-3 py-2 text-right">
-                <button
-                  type="button"
-                  onClick={e => { e.stopPropagation(); onDelete(p.id) }}
-                  className="p-1 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/30"
+                <IconButton
+                  icon={Trash2}
+                  size="xs"
+                  variant="ghost"
+                  aria-label="Удалить из локальной БД"
                   title="Удалить из локальной БД"
-                >
-                  <Trash2 size={14} />
-                </button>
+                  onClick={e => { e.stopPropagation(); onDelete(p.id) }}
+                />
               </td>
             </tr>
           ))}
@@ -292,26 +272,26 @@ function Pagination({
   page, totalPages, total, onChange,
 }: { page: number; totalPages: number; total: number; onChange: (p: number) => void }) {
   return (
-    <div className="flex items-center justify-between text-xs text-gray-500">
-      <span>Всего: {total}</span>
+    <div className="flex items-center justify-between text-xs text-zinc-500">
+      <span>Всего: <span className="font-mono tabular-nums text-zinc-300">{total}</span></span>
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          onClick={() => onChange(Math.max(1, page - 1))}
+        <IconButton
+          icon={ChevronLeft}
+          variant="ghost"
+          size="xs"
+          aria-label="Предыдущая страница"
           disabled={page === 1}
-          className="p-1 rounded hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          <ChevronLeft size={14} />
-        </button>
-        <span className="font-mono">{page} / {totalPages}</span>
-        <button
-          type="button"
-          onClick={() => onChange(Math.min(totalPages, page + 1))}
+          onClick={() => onChange(Math.max(1, page - 1))}
+        />
+        <span className="font-mono tabular-nums text-zinc-400">{page} / {totalPages}</span>
+        <IconButton
+          icon={ChevronRight}
+          variant="ghost"
+          size="xs"
+          aria-label="Следующая страница"
           disabled={page === totalPages}
-          className="p-1 rounded hover:text-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          <ChevronRight size={14} />
-        </button>
+          onClick={() => onChange(Math.min(totalPages, page + 1))}
+        />
       </div>
     </div>
   )
@@ -339,36 +319,31 @@ function StoresTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
-        <div className="flex-1">
-          <strong className="text-gray-300">Здоровье парсеров за последние 24 часа.</strong>
-          {' '}Ok ≥ 90% успешных запросов, иначе красный значок. Сортировка — проблемные сначала.
-          Время ответа = среднее по успешным вызовам, включая обогащение страниц товаров.
-        </div>
-        <button
-          type="button"
-          onClick={handleRefresh}
-          className="flex items-center gap-1 px-2 py-1 rounded text-xs bg-gray-800 hover:bg-gray-700 text-gray-200"
-          title="Перезагрузить статистику"
-        >
-          <RefreshCw size={11} /> Обновить
-        </button>
-      </div>
+      <InfoBox
+        action={
+          <Button variant="secondary" size="xs" icon={RefreshCw} onClick={handleRefresh}>
+            Обновить
+          </Button>
+        }
+      >
+        <strong className="text-zinc-300">Здоровье парсеров за последние 24 часа.</strong>
+        {' '}Ok ≥ 90% успешных запросов, иначе красный значок. Сортировка — проблемные сначала.
+        Время ответа = среднее по успешным вызовам, включая обогащение страниц товаров.
+      </InfoBox>
 
-      {isLoading && <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>}
+      {isLoading && <div className="text-sm text-zinc-500 py-8 text-center">Загрузка…</div>}
 
       {!isLoading && data && '_unavailable' in data && (
-        <div className="bg-yellow-950/30 border border-yellow-900/50 rounded p-4 text-sm">
-          <div className="flex items-center gap-2 text-yellow-400 mb-1">
+        <div className="bg-amber-500/10 border border-amber-500/30 rounded p-4 text-sm">
+          <div className="flex items-center gap-2 text-amber-300 mb-1">
             <AlertTriangle size={14} /> parsers stats недоступны
           </div>
-          <div className="text-gray-400 font-mono text-xs">{data._error}</div>
+          <div className="text-zinc-400 font-mono text-xs">{data._error}</div>
         </div>
       )}
 
       {!isLoading && (!data || (!('_unavailable' in data) && entries.length === 0)) && (
-        <div className="text-sm text-gray-500 py-8 text-center">
+        <div className="text-sm text-zinc-500 py-8 text-center">
           Нет данных за 24ч. Запусти любой парсер через «Поиск» или вкладку «Парсеры».
         </div>
       )}
@@ -392,45 +367,43 @@ function StoreCard({ stats }: { stats: StoreHealthEntry }) {
   const ok = successPct != null && successPct >= 90
 
   return (
-    <div className="bg-gray-950/40 border border-gray-800 rounded p-3 space-y-2">
+    <div className="bg-zinc-950/40 border border-zinc-800 rounded p-3 space-y-2">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-semibold text-gray-200">{getStoreLabel(slug)}</span>
+        <span className="text-sm font-semibold text-zinc-200">{getStoreLabel(slug)}</span>
         <span title={ok ? '≥ 90% успешных вызовов' : 'Менее 90% успешных вызовов — есть деградация'}>
-          {ok
-            ? <CheckCircle2 size={14} className="text-green-400" />
-            : <XCircle size={14} className="text-red-400" />}
+          <StatusDot status={ok ? 'done' : 'failed'} />
         </span>
       </div>
       <div className="grid grid-cols-3 gap-2 text-xs">
         <div title="Доля успешных HTTP-вызовов парсера за 24 часа">
-          <div className="text-gray-500">Успешность</div>
-          <div className={clsx('font-mono font-semibold', ok ? 'text-green-400' : 'text-red-400')}>
+          <div className="text-zinc-500">Успешность</div>
+          <div className={clsx('font-mono font-semibold tabular-nums', ok ? 'text-emerald-400' : 'text-rose-400')}>
             {successPct != null ? `${successPct.toFixed(1)}%` : '—'}
           </div>
         </div>
         <div title="Среднее время поиска (включая обогащение страниц товаров)">
-          <div className="text-gray-500 flex items-center gap-1">
+          <div className="text-zinc-500 flex items-center gap-1">
             <Clock size={10} /> Среднее
           </div>
-          <div className="font-mono text-gray-300">
+          <div className="font-mono text-zinc-300 tabular-nums">
             {avgMs != null ? formatMs(avgMs) : '—'}
           </div>
         </div>
         <div title={`Всего ${total} запросов за 24ч, из них ${failures} с ошибкой`}>
-          <div className="text-gray-500">Запросов</div>
-          <div className="font-mono text-gray-300">
+          <div className="text-zinc-500">Запросов</div>
+          <div className="font-mono text-zinc-300 tabular-nums">
             {total.toLocaleString('ru-RU')}
-            {failures > 0 && <span className="text-red-400"> / {failures}↯</span>}
+            {failures > 0 && <span className="text-rose-400"> / {failures}↯</span>}
           </div>
         </div>
       </div>
       {stats.last_seen && (
-        <div className="text-[10px] text-gray-500" title={`Последний вызов: ${stats.last_seen}`}>
+        <div className="text-xxs text-zinc-500" title={`Последний вызов: ${stats.last_seen}`}>
           last seen: {stats.last_seen.slice(0, 16).replace('T', ' ')}
         </div>
       )}
       {lastError && (
-        <div className="text-xs text-red-300/70 font-mono truncate" title={lastError}>
+        <div className="text-xs text-rose-300/70 font-mono truncate" title={lastError}>
           {lastError}
         </div>
       )}
@@ -460,15 +433,12 @@ function SearchesTab() {
 
   return (
     <div className="space-y-3">
-      <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
-        <div>
-          <strong className="text-gray-300">Журнал поисков через debug-портал.</strong>
-          {' '}Каждая строка — один запрос на /api/search. Бейдж <span className="text-yellow-400">cache</span> = взяли из кеша parsers,
-          {' '}<span className="text-green-400">network</span> = был свежий парсинг хотя бы одного магазина. Раскрывайте строки,
-          чтобы увидеть выбранные магазины и ошибки.
-        </div>
-      </div>
+      <InfoBox>
+        <strong className="text-zinc-300">Журнал поисков через debug-портал.</strong>
+        {' '}Каждая строка — один запрос на /api/search. Тег <Tag tone="warn">cache</Tag> = взяли из кеша parsers,
+        {' '}<Tag tone="ok">network</Tag> = был свежий парсинг хотя бы одного магазина. Раскрывайте строки,
+        чтобы увидеть выбранные магазины и ошибки.
+      </InfoBox>
 
       <input
         type="text"
@@ -476,44 +446,43 @@ function SearchesTab() {
         onChange={e => { setQuery(e.target.value); setPage(1) }}
         placeholder="Фильтр по запросу"
         title="LIKE %text% по сохранённой строке запроса"
-        className="w-full px-3 py-1.5 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-violet-500"
+        className="w-full h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
       />
 
-      {isLoading && <div className="text-sm text-gray-500 py-8 text-center">Загрузка…</div>}
+      {isLoading && <div className="text-sm text-zinc-500 py-8 text-center">Загрузка…</div>}
 
       {!isLoading && items.length === 0
-        ? <div className="text-sm text-gray-500 py-8 text-center">Журнал пуст. Запусти поиск на странице «Поиск».</div>
+        ? <div className="text-sm text-zinc-500 py-8 text-center">Журнал пуст. Запусти поиск на странице «Поиск».</div>
         : !isLoading && (
           <div className="space-y-1.5">
-            {items.map(s => (
-              <details key={s.id} className="bg-gray-950/40 border border-gray-800 rounded">
-                <summary className="px-3 py-2 text-sm cursor-pointer flex items-center gap-3 select-none">
-                  <span className="text-gray-200 font-medium">{s.query}</span>
-                  <span className={clsx(
-                    'px-1.5 py-0.5 rounded text-xs',
-                    s.source === 'cache' ? 'bg-yellow-950 text-yellow-400'
-                      : s.source === 'network' ? 'bg-green-950 text-green-400'
-                      : 'bg-gray-800 text-gray-400',
-                  )}>
-                    {s.source ?? 'fail'}
-                  </span>
-                  <span className="text-xs text-gray-500">{s.products_count} товаров</span>
-                  {s.error_count > 0 && (
-                    <span className="text-xs text-red-400">ошибок: {s.error_count}</span>
-                  )}
-                  <span className="ml-auto text-xs text-gray-600">
-                    {s.total_ms != null && `${s.total_ms}ms · `}
-                    {new Date(s.created_at).toLocaleString('ru-RU')}
-                  </span>
-                </summary>
-                <div className="px-3 pb-3 text-xs space-y-1 font-mono">
-                  {s.stores && <div className="text-gray-500">stores: <span className="text-gray-300">{s.stores}</span></div>}
-                  {s.errors_json && s.errors_json !== '{}' && (
-                    <pre className="text-red-300/70 whitespace-pre-wrap">{s.errors_json}</pre>
-                  )}
-                </div>
-              </details>
-            ))}
+            {items.map(s => {
+              const sourceTone =
+                s.source === 'cache' ? 'warn' :
+                s.source === 'network' ? 'ok' :
+                'neutral'
+              return (
+                <details key={s.id} className="bg-zinc-950/40 border border-zinc-800 rounded">
+                  <summary className="px-3 py-2 text-sm cursor-pointer flex items-center gap-3 select-none">
+                    <span className="text-zinc-200 font-medium">{s.query}</span>
+                    <Tag tone={sourceTone}>{s.source ?? 'fail'}</Tag>
+                    <span className="text-xs text-zinc-500 tabular-nums">{s.products_count} товаров</span>
+                    {s.error_count > 0 && (
+                      <Badge tone="danger" size="xs" dot={false}>ошибок: {s.error_count}</Badge>
+                    )}
+                    <span className="ml-auto text-xs text-zinc-600 tabular-nums">
+                      {s.total_ms != null && `${s.total_ms}ms · `}
+                      {new Date(s.created_at).toLocaleString('ru-RU')}
+                    </span>
+                  </summary>
+                  <div className="px-3 pb-3 text-xs space-y-1 font-mono">
+                    {s.stores && <div className="text-zinc-500">stores: <span className="text-zinc-300">{s.stores}</span></div>}
+                    {s.errors_json && s.errors_json !== '{}' && (
+                      <pre className="text-rose-300/70 whitespace-pre-wrap">{s.errors_json}</pre>
+                    )}
+                  </div>
+                </details>
+              )
+            })}
           </div>
         )}
 
@@ -582,21 +551,31 @@ function SummaryCard({
   onClick?: () => void
   tooltip?: string
 }) {
-  const indicator = ok == null ? null : ok
-    ? <CheckCircle2 size={12} className="text-green-400" />
-    : <XCircle size={12} className="text-red-400" />
   return (
     <button
       type="button"
       onClick={onClick}
       title={tooltip}
-      className="text-left bg-gray-950/40 border border-gray-800 rounded p-3 space-y-1 hover:bg-gray-900/60 transition-colors"
+      className="text-left bg-zinc-950/40 border border-zinc-800 rounded p-3 space-y-1 hover:bg-zinc-900/60 transition-colors"
     >
-      <div className="flex items-center gap-1.5 text-xs text-gray-500">
-        {label} {indicator}
+      <div className="flex items-center gap-1.5 text-xs text-zinc-500">
+        {label}
+        {ok != null && <StatusDot status={ok ? 'done' : 'failed'} />}
       </div>
-      <div className="text-base font-mono text-gray-100">{value}</div>
-      {hint && <div className="text-[10px] text-gray-600">{hint}</div>}
+      <div className="text-base font-mono text-zinc-100 tabular-nums">{value}</div>
+      {hint && <div className="text-xxs text-zinc-600">{hint}</div>}
     </button>
+  )
+}
+
+// ── Shared bits ───────────────────────────────────────────────────────────
+
+function InfoBox({ children, action }: { children: React.ReactNode; action?: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-2 px-3 py-2 rounded bg-zinc-950/40 border border-zinc-800 text-xs text-zinc-400">
+      <Info size={13} className="text-indigo-400 flex-shrink-0 mt-0.5" />
+      <div className="flex-1">{children}</div>
+      {action}
+    </div>
   )
 }

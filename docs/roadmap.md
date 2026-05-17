@@ -25,10 +25,29 @@ PRS (parsers), INFRA (общее).
   - [ ] **PR 2 · Proof: Matching на zinc/indigo** — переписать `MatchingSection`
     из `CatalogPage.tsx` на новый ui. Это main proof из ТЗ §7.2. Спека —
     `.scratch/admin-panel-design/pages/01-matching.md` (three-pane + drawer
-    + keyboard).
-  - [ ] **PR 3+ · Раскатка** — Games (`/catalog`), Search WT-F11 group-by-game,
-    Job UI (`/bgg-sync`), `/sources`, `/debug`, `/testing`, `/dlq`, `/status`,
-    `/parsers`, `/database` — по одному PR на страницу.
+    + keyboard). MatchingSection — legacy, заменена `/matching` (WT-MATCH-UX);
+    глубокий переход на zinc/indigo откладывается до отдельной задачи.
+  - [x] **WT-DESIGN-PR3a/b/c · Раскатка дизайна** (ветка `feat/wt-redesign-rollout`):
+    - 3a — гигиена 11 страниц (табы → `ui/Tabs`, эмодзи → lucide, ad-hoc
+      статусы → `<Badge status="…">`, gray→zinc).
+    - 3b — `CatalogPage` Games по `pages/03-games.md` (sticky thead, indigo
+      accent, SourceBadge через token-cls, Button-обёртки, columns picker).
+    - 3c — гигиена 51 sub-компонента (`components/*` — violet→indigo,
+      эмодзи `✓`/`✗`/`⚡` → CheckCircle2/XCircle).
+    Сделано, см. devlog `WT-DESIGN-PR3`.
+  - [x] **WT-DESIGN-PR4 · Job UI** — `components/jobs/` (JobView + PhaseStrip
+    + adapters), интегрирован в `bgg-sync/JobHistoryTable` и `catalog/
+    BggImportPanel`. Сделано (commit `820af0d`, devlog WT-DESIGN-PR4/PR5).
+  - [x] **WT-DESIGN-PR5 · Search WT-F11 (frontend-fallback)** — Master-таблица
+    группировка через `titleSimilarity` clustering + UnmatchedSection.
+    Toggle group/flat в `useSearchStore`. Backend group-by-game endpoint
+    — не блокирующая зависимость. Сделано (commit `a481da2`).
+  - [ ] **WT-F11-DRAWER** — `<GameGroupDrawer>` с табами Офферы/История/
+    Матчинг/Raw для grouped-режима. Сейчас drawer reuses `ProductDrawer`
+    (открывает min-offer группы) — UX-приемлемо, но не полный спек §05.
+  - [ ] **WT-DESIGN-SUITERUN** — `suiteRunToJobLike()` adapter +
+    использование `<JobView>` в `components/testing/SuiteRunner`. Сейчас
+    SuiteRunner с собственной inline-вёрсткой.
 
   Merge в main — после PR 2 проверки на проде. До этого ветка отдельная.
 

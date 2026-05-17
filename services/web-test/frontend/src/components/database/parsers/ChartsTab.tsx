@@ -62,7 +62,7 @@ export function ChartsTab() {
     <div className="space-y-6">
       {/* Шапка */}
       <div className="flex items-start gap-2 px-3 py-2 rounded-lg bg-gray-950/40 border border-gray-800 text-xs text-gray-400">
-        <Info size={13} className="text-violet-400 flex-shrink-0 mt-0.5" />
+        <Info size={13} className="text-indigo-400 flex-shrink-0 mt-0.5" />
         <div className="flex-1">
           <strong className="text-gray-300">Графики активности парсеров.</strong>
           {' '}<strong>Timeline</strong> — история запросов по cache/network/partial.
@@ -88,7 +88,7 @@ export function ChartsTab() {
           {HOURS_OPTIONS.map(h => (
             <button key={h} type="button" onClick={() => setHours(h)}
               className={clsx('px-2 py-0.5 rounded',
-                hours === h ? 'bg-violet-900/60 text-violet-200' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800')}
+                hours === h ? 'bg-indigo-900/60 text-indigo-200' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800')}
             >
               {h < 24 ? `${h}ч` : `${h / 24}д`}
             </button>
@@ -99,7 +99,7 @@ export function ChartsTab() {
           {(['hour', 'day'] as const).map(b => (
             <button key={b} type="button" onClick={() => setBucket(b)}
               className={clsx('px-2 py-0.5 rounded',
-                bucket === b ? 'bg-violet-900/60 text-violet-200' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800')}
+                bucket === b ? 'bg-indigo-900/60 text-indigo-200' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800')}
             >
               {b === 'hour' ? 'по часам' : 'по дням'}
             </button>
@@ -266,7 +266,7 @@ export function ChartsTab() {
                       <td className="px-3 py-2 text-right font-mono text-indigo-400">
                         {d.avg_search_ms != null ? Math.round(d.avg_search_ms) : '—'}
                       </td>
-                      <td className="px-3 py-2 text-right font-mono text-violet-400">
+                      <td className="px-3 py-2 text-right font-mono text-indigo-400">
                         {d.avg_enrich_ms != null ? Math.round(d.avg_enrich_ms) : '—'}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-gray-300">
@@ -295,7 +295,7 @@ export function ChartsTab() {
           {[5, 10, 20].map(n => (
             <button key={n} type="button" onClick={() => setTopN(n)}
               className={clsx('px-2 py-0.5 rounded',
-                topN === n ? 'bg-violet-900/60 text-violet-200' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800')}
+                topN === n ? 'bg-indigo-900/60 text-indigo-200' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800')}
             >
               {n}
             </button>
@@ -353,7 +353,7 @@ function InfoTip({ text }: { text: string }) {
     <span className="relative group inline-flex items-center">
       <Info
         size={13}
-        className="text-gray-600 group-hover:text-violet-400 cursor-help transition-colors"
+        className="text-gray-600 group-hover:text-indigo-400 cursor-help transition-colors"
       />
       <span className={[
         'pointer-events-none absolute left-0 top-full mt-1.5 z-50',

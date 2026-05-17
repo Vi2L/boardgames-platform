@@ -6,15 +6,16 @@
  *   - scheduled (cron-сработка) — payload.trigger='scheduled'
  *
  * Polling 3 сек если есть pending/running, иначе 30 сек. Раскрытие строки —
- * лог-строки + result в JSON-блоке.
+ * shared `<JobView>` (см. components/jobs/) с прогрессом, phase strip и log.
  */
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Loader2, ChevronRight, ChevronDown } from 'lucide-react'
-import clsx from 'clsx'
 
 import { fetchImportJobs, type ImportJobsFilter } from '../../lib/bgg-sync'
 import type { ImportJob } from '../../lib/catalog'
+import { Badge, type BadgeProps } from '../ui'
+import { JobView, importJobToJobLike } from '../jobs'
 
 const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '',                 label: 'все типы' },
@@ -31,11 +32,16 @@ const TYPE_OPTIONS: Array<{ value: string; label: string }> = [
 const STATUS_OPTIONS = ['', 'pending', 'running', 'done', 'failed']
 const TRIGGER_OPTIONS = ['', 'manual', 'scheduled', 'api']
 
-const STATUS_COLOR: Record<string, string> = {
-  done:    'bg-emerald-900/50 text-emerald-300',
-  running: 'bg-violet-900/50 text-violet-300',
-  pending: 'bg-amber-900/40 text-amber-300',
-  failed:  'bg-red-950/30 text-red-300',
+/**
+ * Mapping ImportJobStatus → Badge статус из tokens/status-system.
+ * `running` маппится на `processing` (info tone) — это семантически
+ * соответствует «job в работе» в единой системе.
+ */
+const STATUS_BADGE: Record<string, BadgeProps['status']> = {
+  done:    'done',
+  running: 'processing',
+  pending: 'pending',
+  failed:  'failed',
 }
 
 function formatDt(iso: string | null): string {
@@ -78,11 +84,11 @@ export function JobHistoryTable() {
       {/* Фильтры */}
       <div className="grid grid-cols-3 gap-3">
         <div>
-          <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">Тип</label>
+          <label className="block text-xxs uppercase tracking-widest text-zinc-500 mb-1">Тип</label>
           <select
             value={filter.type ?? ''}
             onChange={e => setFilter(f => ({ ...f, type: e.target.value || undefined }))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
           >
             {TYPE_OPTIONS.map(opt => (
               <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -90,11 +96,11 @@ export function JobHistoryTable() {
           </select>
         </div>
         <div>
-          <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">Статус</label>
+          <label className="block text-xxs uppercase tracking-widest text-zinc-500 mb-1">Статус</label>
           <select
             value={filter.status ?? ''}
             onChange={e => setFilter(f => ({ ...f, status: (e.target.value || undefined) as ImportJobsFilter['status'] }))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
           >
             {STATUS_OPTIONS.map(s => (
               <option key={s} value={s}>{s || 'все статусы'}</option>
@@ -102,11 +108,11 @@ export function JobHistoryTable() {
           </select>
         </div>
         <div>
-          <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">Источник</label>
+          <label className="block text-xxs uppercase tracking-widest text-zinc-500 mb-1">Источник</label>
           <select
             value={filter.trigger ?? ''}
             onChange={e => setFilter(f => ({ ...f, trigger: (e.target.value || undefined) as ImportJobsFilter['trigger'] }))}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="w-full h-7 px-2.5 bg-zinc-900 border border-zinc-800 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
           >
             {TRIGGER_OPTIONS.map(t => (
               <option key={t} value={t}>{t || 'любой'}</option>
@@ -117,19 +123,19 @@ export function JobHistoryTable() {
 
       {/* Таблица */}
       {jobs.isLoading ? (
-        <div className="text-xs text-gray-500 py-4 flex items-center gap-2">
+        <div className="text-xs text-zinc-500 py-4 flex items-center gap-2">
           <Loader2 size={12} className="animate-spin" /> Загружаю историю…
         </div>
       ) : jobs.isError ? (
-        <div className="text-xs text-red-400 py-4">{(jobs.error as Error).message}</div>
+        <div className="text-xs text-rose-400 py-4">{(jobs.error as Error).message}</div>
       ) : (jobs.data ?? []).length === 0 ? (
-        <div className="text-xs text-gray-500 py-6 text-center">
+        <div className="text-xs text-zinc-500 py-6 text-center">
           Нет job'ов с такими фильтрами.
         </div>
       ) : (
-        <div className="border border-gray-800 rounded overflow-hidden">
+        <div className="border border-zinc-800 rounded overflow-hidden">
           <table className="w-full text-sm">
-            <thead className="bg-gray-900 border-b border-gray-800 text-xs text-gray-400">
+            <thead className="bg-zinc-900 border-b border-zinc-800 text-xs text-zinc-400">
               <tr>
                 <th className="text-left px-3 py-2 font-normal w-8"></th>
                 <th className="text-left px-3 py-2 font-normal">ID</th>
@@ -153,100 +159,57 @@ export function JobHistoryTable() {
 function JobRow({ job }: { job: ImportJob }) {
   const [open, setOpen] = useState(false)
   const trigger = (job.payload?.trigger as string) ?? '—'
+  const badgeStatus = STATUS_BADGE[job.status]
 
   return (
     <>
       <tr
-        className="border-b border-gray-800 last:border-b-0 hover:bg-gray-900/40 cursor-pointer"
+        className="border-b border-zinc-800 last:border-b-0 hover:bg-zinc-800/30 cursor-pointer"
         onClick={() => setOpen(o => !o)}
       >
-        <td className="px-3 py-2 text-gray-500">
+        <td className="px-3 py-2 text-zinc-500">
           {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
         </td>
-        <td className="px-3 py-2 font-mono text-xs text-gray-400">#{job.id}</td>
-        <td className="px-3 py-2 text-xs text-gray-300">{job.type}</td>
-        <td className="px-3 py-2 text-xs text-gray-400">{trigger}</td>
+        <td className="px-3 py-2 font-mono text-xs text-zinc-400">#{job.id}</td>
+        <td className="px-3 py-2 text-xs text-zinc-300">{job.type}</td>
+        <td className="px-3 py-2 text-xs text-zinc-400">{trigger}</td>
         <td className="px-3 py-2">
-          <span className={clsx(
-            'text-[10px] px-1.5 py-0.5 rounded',
-            STATUS_COLOR[job.status] ?? 'bg-gray-800 text-gray-400',
-          )}>
-            {job.status}
-          </span>
+          {badgeStatus
+            ? <Badge status={badgeStatus} size="xs" />
+            : <span className="text-xs text-zinc-500">{job.status}</span>}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-500 font-mono">
+        <td className="px-3 py-2 text-xs text-zinc-500 font-mono tabular-nums">
           {formatDt(job.created_at)}
         </td>
-        <td className="px-3 py-2 text-xs text-gray-500 font-mono">
+        <td className="px-3 py-2 text-xs text-zinc-500 font-mono tabular-nums">
           {durationSec(job.started_at, job.finished_at)}
         </td>
       </tr>
       {open && (
-        <tr className="bg-gray-950/40">
-          <td colSpan={7} className="px-4 py-3 border-b border-gray-800">
-            <JobDetails job={job} />
+        <tr className="bg-zinc-950/40">
+          <td colSpan={7} className="px-4 py-3 border-b border-zinc-800">
+            <JobView job={importJobToJobLike(job)} showLog />
+            {job.error && (
+              <div className="mt-3">
+                <div className="text-xxs uppercase tracking-widest text-rose-400">Ошибка</div>
+                <pre className="mt-1 text-xxs font-mono text-rose-300 break-all whitespace-pre-wrap">
+                  {job.error}
+                </pre>
+              </div>
+            )}
+            {job.result && (
+              <details className="mt-3 text-zinc-400">
+                <summary className="cursor-pointer text-xxs hover:text-zinc-200">
+                  Результат (JSON)
+                </summary>
+                <pre className="mt-1 max-h-40 overflow-y-auto text-xxs font-mono text-zinc-500 bg-zinc-950 p-2 rounded border border-zinc-800">
+                  {JSON.stringify(job.result, null, 2)}
+                </pre>
+              </details>
+            )}
           </td>
         </tr>
       )}
     </>
-  )
-}
-
-function JobDetails({ job }: { job: ImportJob }) {
-  const progress = job.progress
-  return (
-    <div className="space-y-2 text-xs">
-      {progress && progress.total > 0 && (
-        <div>
-          <div className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-            Прогресс
-          </div>
-          <div className="text-gray-400 mb-1">
-            <span className="text-violet-300">{progress.phase}</span>
-            {' '}· {progress.current} / {progress.total}
-            {progress.current_title && (
-              <span className="ml-2 text-gray-500">— {progress.current_title}</span>
-            )}
-          </div>
-          <div className="w-full bg-gray-800 rounded-full h-1 overflow-hidden">
-            <div
-              className="bg-violet-500 h-full transition-all"
-              style={{ width: `${Math.min(100, (progress.current / progress.total) * 100)}%` }}
-            />
-          </div>
-        </div>
-      )}
-
-      {job.result && (
-        <details className="text-gray-400">
-          <summary className="cursor-pointer text-[11px] hover:text-gray-200">
-            Результат
-          </summary>
-          <pre className="mt-1 max-h-40 overflow-y-auto text-[10px] font-mono text-gray-500 bg-gray-950 p-2 rounded border border-gray-800">
-            {JSON.stringify(job.result, null, 2)}
-          </pre>
-        </details>
-      )}
-
-      {job.error && (
-        <div>
-          <div className="text-[10px] uppercase tracking-wide text-red-400">Ошибка</div>
-          <pre className="mt-1 text-[10px] font-mono text-red-300 break-all whitespace-pre-wrap">
-            {job.error}
-          </pre>
-        </div>
-      )}
-
-      {job.log_lines && job.log_lines.length > 0 && (
-        <details className="text-gray-400" open={job.status === 'running'}>
-          <summary className="cursor-pointer text-[11px] hover:text-gray-200">
-            Лог ({job.log_lines.length} строк)
-          </summary>
-          <pre className="mt-1 max-h-60 overflow-y-auto text-[10px] font-mono text-gray-500 bg-gray-950 p-2 rounded border border-gray-800 whitespace-pre-wrap">
-            {job.log_lines.slice(-100).join('\n')}
-          </pre>
-        </details>
-      )}
-    </div>
   )
 }

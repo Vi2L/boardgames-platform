@@ -14,7 +14,7 @@ const LABELS: Record<Exclude<LoyaltyKind, null>, string> = {
 }
 
 const COLORS: Record<Exclude<LoyaltyKind, null>, string> = {
-  'hg-bonus': 'bg-violet-900/60 text-violet-200 border-violet-800/60',
+  'hg-bonus': 'bg-indigo-900/60 text-indigo-200 border-indigo-800/60',
   'lavka': 'bg-sky-900/60 text-sky-200 border-sky-800/60',
 }
 

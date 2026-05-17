@@ -109,7 +109,7 @@ function QueueCell({ label, value, accent, hint }: {
       <div className={clsx(
         'font-mono text-2xl tabular-nums',
         accent === 'amber'  && 'text-amber-300',
-        accent === 'violet' && 'text-violet-300',
+        accent === 'violet' && 'text-indigo-300',
         accent === 'gray'   && 'text-gray-300',
         accent === 'red'    && 'text-red-300',
         accent === 'green'  && 'text-green-300',
@@ -281,7 +281,7 @@ function ReEnqueueSection() {
               {items.map(row => (
                 <tr key={row.id} className={clsx(
                   'hover:bg-gray-800/30 transition-colors',
-                  selected.has(row.offer_id) && 'bg-violet-950/20',
+                  selected.has(row.offer_id) && 'bg-indigo-950/20',
                 )}>
                   <td className="px-3 py-2">
                     <input
@@ -313,7 +313,7 @@ function ReEnqueueSection() {
       {/* Footer */}
       <footer className="px-4 py-3 border-t border-gray-800/60 bg-black/20 flex items-center justify-between gap-3">
         <div className="text-[11px] text-gray-400">
-          выбрано: <span className="font-mono text-violet-300">{selected.size}</span> из {items.length}
+          выбрано: <span className="font-mono text-indigo-300">{selected.size}</span> из {items.length}
           {' · '}
           page {page + 1} / {Math.max(1, Math.ceil(total / limit))}
         </div>
@@ -339,7 +339,7 @@ function ReEnqueueSection() {
             type="button"
             onClick={() => setConfirmSelected(true)}
             disabled={selected.size === 0 || reEnqueueSelected.isPending}
-            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] rounded bg-violet-700 hover:bg-violet-600 disabled:opacity-30 text-white"
+            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] rounded bg-indigo-700 hover:bg-indigo-600 disabled:opacity-30 text-white"
           >
             {reEnqueueSelected.isPending && <Loader2 size={10} className="animate-spin" />}
             re-enqueue выбранные ({selected.size})
@@ -437,7 +437,7 @@ function ChipGroup({ icon, label, options, selected, onChange }: {
               className={clsx(
                 'inline-flex items-center gap-1 px-2 py-0.5 rounded font-mono text-[10px] border transition-colors',
                 active
-                  ? 'bg-violet-700 border-violet-600 text-white'
+                  ? 'bg-indigo-700 border-indigo-600 text-white'
                   : 'bg-gray-900 border-gray-800 text-gray-400 hover:border-gray-700 hover:text-gray-200',
               )}
             >
@@ -445,7 +445,7 @@ function ChipGroup({ icon, label, options, selected, onChange }: {
               {opt.count !== undefined && (
                 <span className={clsx(
                   'text-[9px]',
-                  active ? 'text-violet-200' : 'text-gray-500',
+                  active ? 'text-indigo-200' : 'text-gray-500',
                 )}>
                   · {opt.count}
                 </span>
@@ -600,7 +600,7 @@ function ReasonBreakdownSection() {
                 </div>
                 <span className="font-mono tabular-nums text-xs text-gray-300 w-12 text-right shrink-0">{count}</span>
                 <span className="font-mono tabular-nums text-[10px] text-gray-500 w-10 text-right shrink-0">{pct.toFixed(0)}%</span>
-                <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-violet-300 shrink-0">
+                <span className="opacity-0 group-hover:opacity-100 transition-opacity text-[10px] text-indigo-300 shrink-0">
                   re-enqueue →
                 </span>
               </button>
@@ -681,7 +681,7 @@ function AutoRecoveryRulesSection() {
         <button
           type="button"
           onClick={() => setShowCreate(true)}
-          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono text-violet-300 hover:text-violet-200 hover:bg-violet-950/30"
+          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-mono text-indigo-300 hover:text-indigo-200 hover:bg-indigo-950/30"
         >
           <Plus size={11} /> add
         </button>
@@ -693,7 +693,7 @@ function AutoRecoveryRulesSection() {
         )}
         {!rulesQ.isLoading && rules.length === 0 && !showCreate && (
           <div className="text-xs text-gray-500 py-3 text-center">
-            нет правил. <button onClick={() => setShowCreate(true)} className="text-violet-300 hover:text-violet-200">создать первое</button>
+            нет правил. <button onClick={() => setShowCreate(true)} className="text-indigo-300 hover:text-indigo-200">создать первое</button>
           </div>
         )}
         {rules.map(rule => (
@@ -743,7 +743,7 @@ function RuleRow({
       >
         <Power size={9} />
       </button>
-      <code className="font-mono text-violet-300 w-32 truncate shrink-0" title={rule.name}>
+      <code className="font-mono text-indigo-300 w-32 truncate shrink-0" title={rule.name}>
         {rule.name}
       </code>
       <span className="font-mono text-[10px] text-gray-500 truncate flex-1" title={JSON.stringify(rule.condition)}>
@@ -801,14 +801,14 @@ function RuleCreateForm({
   })
 
   return (
-    <div className="p-3 rounded border border-violet-900/40 bg-violet-950/20 space-y-2 text-xs">
+    <div className="p-3 rounded border border-indigo-900/40 bg-indigo-950/20 space-y-2 text-xs">
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-gray-500 uppercase tracking-wider font-mono w-16">name</span>
         <input
           value={name}
           onChange={e => setName(e.target.value)}
           placeholder="qwen-recovery"
-          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-800 rounded font-mono text-violet-300"
+          className="flex-1 px-2 py-1 bg-gray-900 border border-gray-800 rounded font-mono text-indigo-300"
         />
       </div>
       <div className="flex items-start gap-2">
@@ -834,7 +834,7 @@ function RuleCreateForm({
           type="button"
           onClick={() => create.mutate()}
           disabled={!name.trim() || create.isPending}
-          className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-violet-700 hover:bg-violet-600 disabled:opacity-50 text-white"
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs bg-indigo-700 hover:bg-indigo-600 disabled:opacity-50 text-white"
         >
           {create.isPending && <Loader2 size={11} className="animate-spin" />}
           создать
@@ -892,18 +892,18 @@ function SkippedExplainer() {
         Это конечный статус: воркер сам её не подберёт, пока кто-то не вернёт её в pending.
       </p>
       <p className="text-gray-400">
-        Типичные причины (поле <code className="text-violet-300">error_detail</code> в match_queue):
+        Типичные причины (поле <code className="text-indigo-300">error_detail</code> в match_queue):
       </p>
       <ul className="ml-4 space-y-1 text-gray-300">
-        <li><code className="text-violet-300">llm_unavailable</code> — qwen2.5 был оффлайн (Circuit Breaker open). После
+        <li><code className="text-indigo-300">llm_unavailable</code> — qwen2.5 был оффлайн (Circuit Breaker open). После
           восстановления Ollama — re-enqueue их обратно.</li>
-        <li><code className="text-violet-300">no_candidates</code> — T2 cosine search ничего не нашёл. Возможно
+        <li><code className="text-indigo-300">no_candidates</code> — T2 cosine search ничего не нашёл. Возможно
           в каталоге нет эмбеддинга такой игры. Сделай <TierChip tier="T2" /> warmup, потом re-enqueue.</li>
-        <li><code className="text-violet-300">vec_below_threshold</code> — один кандидат, score 0.70-0.85. T3 не запускался
+        <li><code className="text-indigo-300">vec_below_threshold</code> — один кандидат, score 0.70-0.85. T3 не запускался
           (один слабый кандидат не стоит вызова LLM). Re-enqueue если каталог обновился.</li>
-        <li><code className="text-violet-300">ml_no_match</code> — T3 LLM сказал что среди кандидатов совпадения нет.
+        <li><code className="text-indigo-300">ml_no_match</code> — T3 LLM сказал что среди кандидатов совпадения нет.
           Обычно правильно — отдай оператору в manual review (<strong>/catalog → Очередь</strong>).</li>
-        <li><code className="text-violet-300">llm_low_confidence</code> — T3 выбрал, но confidence &lt; 0.75. Скорее всего
+        <li><code className="text-indigo-300">llm_low_confidence</code> — T3 выбрал, но confidence &lt; 0.75. Скорее всего
           действительно неоднозначно. Manual review.</li>
       </ul>
       <p className="text-gray-400">

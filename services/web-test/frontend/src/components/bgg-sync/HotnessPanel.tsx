@@ -10,7 +10,7 @@
  */
 import { useMemo, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Loader2, ExternalLink, ArrowDown, ArrowUp, Minus } from 'lucide-react'
+import { Loader2, ExternalLink, ArrowDown, ArrowUp, Minus, CheckCircle2 } from 'lucide-react'
 import clsx from 'clsx'
 
 import {
@@ -66,7 +66,7 @@ export function HotnessPanel() {
           <select
             value={effectivePrimary ?? ''}
             onChange={e => setPrimaryDate(e.target.value)}
-            className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           >
             {dates.data.map(d => (
               <option key={d} value={d}>{d}</option>
@@ -82,7 +82,7 @@ export function HotnessPanel() {
           <select
             value={compareDate ?? ''}
             onChange={e => setCompareDate(e.target.value || undefined)}
-            className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-violet-500"
+            className="px-2 py-1 bg-gray-900 border border-gray-700 rounded text-xs text-gray-200 focus:outline-none focus:border-indigo-500"
           >
             <option value="">— сравнить с… —</option>
             {dates.data
@@ -135,7 +135,7 @@ function SnapshotList({
 function HotnessRow({ item }: { item: HotnessItem }) {
   return (
     <div className="flex items-center gap-3 px-3 py-2 hover:bg-gray-900/40">
-      <div className="w-8 text-right text-violet-400 font-mono text-xs flex-shrink-0">
+      <div className="w-8 text-right text-indigo-400 font-mono text-xs flex-shrink-0">
         #{item.rank}
       </div>
       {item.thumbnail_url ? (
@@ -152,7 +152,9 @@ function HotnessRow({ item }: { item: HotnessItem }) {
         <div className="text-[10px] text-gray-500">
           {item.year ?? '—'} · bgg_id={item.bgg_id}
           {item.game_id && (
-            <span className="ml-2 text-emerald-400">✓ в каталоге</span>
+            <span className="ml-2 text-emerald-400 inline-flex items-center gap-0.5">
+              <CheckCircle2 size={10} /> в каталоге
+            </span>
           )}
         </div>
       </div>
@@ -161,7 +163,7 @@ function HotnessRow({ item }: { item: HotnessItem }) {
         target="_blank"
         rel="noopener noreferrer"
         title="Открыть на BGG"
-        className="text-gray-500 hover:text-violet-300 flex-shrink-0"
+        className="text-gray-500 hover:text-indigo-300 flex-shrink-0"
       >
         <ExternalLink size={12} />
       </a>

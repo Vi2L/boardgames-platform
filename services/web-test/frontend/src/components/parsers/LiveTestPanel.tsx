@@ -57,14 +57,14 @@ export function LiveTestPanel() {
             onChange={e => setQ(e.target.value)}
             onKeyDown={e => { if (e.key === 'Enter') submit() }}
             placeholder="Запрос для всех парсеров (мимо кеша)…"
-            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-violet-500"
+            className="flex-1 px-3 py-2 bg-gray-800 border border-gray-700 rounded text-sm text-gray-200 placeholder-gray-500 focus:outline-none focus:border-indigo-500"
             disabled={mutation.isPending}
           />
           <button
             type="button"
             onClick={submit}
             disabled={!q.trim() || mutation.isPending}
-            className="px-4 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-violet-700 hover:bg-violet-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
+            className="px-4 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-indigo-700 hover:bg-indigo-600 disabled:opacity-40 disabled:cursor-not-allowed text-white"
           >
             {mutation.isPending
               ? <><Loader2 size={13} className="animate-spin" /> Парсим…</>
@@ -80,7 +80,7 @@ export function LiveTestPanel() {
                 type="checkbox"
                 checked={selectedStores.includes(p.slug)}
                 onChange={() => toggleStore(p.slug)}
-                className="accent-violet-500"
+                className="accent-indigo-500"
               />
               <span className={clsx(
                 'px-1.5 py-0.5 rounded',
@@ -105,7 +105,7 @@ export function LiveTestPanel() {
               className={clsx(
                 'px-2 py-0.5 rounded',
                 limit === n
-                  ? 'bg-violet-900/60 text-violet-200'
+                  ? 'bg-indigo-900/60 text-indigo-200'
                   : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800',
               )}
             >
