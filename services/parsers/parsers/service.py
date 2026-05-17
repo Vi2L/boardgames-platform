@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from datetime import datetime, timezone
 
@@ -15,6 +16,36 @@ logger = logging.getLogger(__name__)
 
 def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _per_parser_timeout_seconds() -> float:
+    """Таймаут на одного парсера в /search (default 25 сек).
+
+    Зачем это: `asyncio.gather` ждёт всех парсеров, поэтому самый медленный
+    диктует latency. Когда browser-зависимый парсер (Ozon/OnlineTrade)
+    залипает на browser-service'е (Camoufox challenge), он может
+    блокировать gather на десятки секунд. Это приводит к тому, что
+    upstream-клиент (web-test parsers_client, timeout 30 сек) рвёт
+    соединение раньше, чем parsers успевают ответить — и пользователь
+    видит «parsers API недоступен» с пустым detail, хотя 5 из 7 парсеров
+    отдают данные за секунды.
+
+    25 сек = 30 сек (web-test timeout) − 5 сек запас на сериализацию и
+    транзит. Зависший парсер получает `asyncio.TimeoutError`, фолбэкает
+    в `errors[slug]`, остальные продолжают работать как обычно.
+    """
+    raw = os.getenv("PARSERS_PER_PARSER_TIMEOUT_SECONDS", "25").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        logger.warning(
+            "PARSERS_PER_PARSER_TIMEOUT_SECONDS=%r не float, использую 25", raw
+        )
+        value = 25.0
+    return max(5.0, value)  # минимум 5с — защита от опечатки в env
+
+
+_PER_PARSER_TIMEOUT = _per_parser_timeout_seconds()
 
 
 class PriceService:
@@ -72,9 +103,22 @@ class PriceService:
         async def _run_one(slug: str):
             t = time.monotonic()
             try:
-                products = await self._parsers[slug].search(query, limit)
+                # asyncio.wait_for отменит coro по таймауту и поднимет
+                # TimeoutError — попадает в общий except ниже как обычная
+                # ошибка парсера, без особой обработки. Зависший Ozon
+                # перестаёт блокировать остальных.
+                products = await asyncio.wait_for(
+                    self._parsers[slug].search(query, limit),
+                    timeout=_PER_PARSER_TIMEOUT,
+                )
                 elapsed = int((time.monotonic() - t) * 1000)
                 return slug, products, elapsed, None
+            except asyncio.TimeoutError:
+                elapsed = int((time.monotonic() - t) * 1000)
+                # Явный message — пустой str() у TimeoutError даёт «»
+                # в UI, что выглядит как «непонятная ошибка».
+                msg = f"per-parser timeout {_PER_PARSER_TIMEOUT:.0f}s"
+                return slug, None, elapsed, RuntimeError(msg)
             except Exception as e:
                 elapsed = int((time.monotonic() - t) * 1000)
                 return slug, None, elapsed, e
