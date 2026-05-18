@@ -16,10 +16,12 @@ from sqlalchemy.orm import selectinload
 
 from catalog.auth import require_scope
 from catalog.db import get_session
-from catalog.models import Game, GameAlias, Offer
+from catalog.models import BggFamily, BggFamilyMember, Game, GameAlias, Offer
 from catalog.schemas import (
     AliasCreate,
     AliasPatch,
+    BggFamilyMemberOut,
+    BggFamilyOut,
     GameAliasOut,
     GameBggOut,
     GameChildOut,
@@ -215,12 +217,87 @@ async def get_game(
     # Те же приоритеты, что и в list_games — но здесь aliases уже подгружены
     # через selectinload, так что считаем в Python без доп. запроса.
     base.title_ru = _pick_ru_title(game.aliases)
+    families = await _load_game_families(session, game.id)
     return GameDetailOut(
         **base.model_dump(),
         aliases=[GameAliasOut.model_validate(a) for a in game.aliases],
         bgg=GameBggOut.model_validate(game.bgg) if game.bgg else None,
         wikidata=GameWikidataOut.model_validate(game.wikidata) if game.wikidata else None,
+        families=families,
     )
+
+
+async def _load_game_families(
+    session: AsyncSession, game_id: int,
+) -> list["BggFamilyOut"]:
+    """CAT-8: подтягивает BGG-семьи игры + членов (тех что присутствуют в catalog).
+
+    Один SELECT с self-JOIN по `bgg_family_members`:
+    1) Найти family_id игры (members WHERE game_id = ?).
+    2) Для этих family_id вытащить всех members с JOIN на games (только не-null game_id).
+
+    Выполняется отдельно от основного SELECT, чтобы не раздувать selectinload-граф
+    (детальная карточка читается чаще, но не критично к latency).
+    """
+    from sqlalchemy import select as sa_select
+
+    # Шаг 1: какие family_id у этой игры.
+    family_ids = (
+        await session.execute(
+            sa_select(BggFamilyMember.family_id).where(BggFamilyMember.game_id == game_id)
+        )
+    ).scalars().all()
+    if not family_ids:
+        return []
+
+    # Шаг 2: метаданные семей.
+    family_rows = (
+        await session.execute(
+            sa_select(BggFamily).where(BggFamily.id.in_(family_ids))
+        )
+    ).scalars().all()
+    families_by_id = {f.id: f for f in family_rows}
+
+    # Шаг 3: members этих семей с LEFT JOIN на Game (для title/year известных игр).
+    member_rows = (
+        await session.execute(
+            sa_select(
+                BggFamilyMember.family_id,
+                BggFamilyMember.bgg_id,
+                BggFamilyMember.game_id,
+                Game.title,
+                Game.year,
+            )
+            .select_from(BggFamilyMember)
+            .outerjoin(Game, Game.id == BggFamilyMember.game_id)
+            .where(BggFamilyMember.family_id.in_(family_ids))
+        )
+    ).all()
+
+    # Группируем по family_id, сортируем — известные первыми, потом по bgg_id.
+    members_by_family: dict[int, list[BggFamilyMemberOut]] = {}
+    counts_by_family: dict[int, int] = {}
+    for fam_id, bgg_id, gid, title, year in member_rows:
+        counts_by_family[fam_id] = counts_by_family.get(fam_id, 0) + 1
+        if gid is None:
+            continue  # пропустим неизвестных в catalog для краткости карточки
+        members_by_family.setdefault(fam_id, []).append(
+            BggFamilyMemberOut(bgg_id=bgg_id, game_id=gid, title=title, year=year)
+        )
+
+    out: list[BggFamilyOut] = []
+    for fam_id in family_ids:
+        fam = families_by_id.get(fam_id)
+        if fam is None:
+            continue
+        out.append(BggFamilyOut(
+            bgg_family_id=fam.bgg_family_id,
+            name=fam.name,
+            description=fam.description,
+            member_count=counts_by_family.get(fam_id, 0),
+            members=members_by_family.get(fam_id, []),
+        ))
+    return out
 
 
 def _pick_ru_title(aliases: list[GameAlias]) -> str | None:

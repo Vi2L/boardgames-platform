@@ -120,11 +120,17 @@ async def enrich_one(
     session: AsyncSession,
     *,
     client: BggClient | None = None,
+    cascade: bool = True,
 ) -> BggGame | None:
     """Fetch одной игры через `/thing` + parse + upsert. Не коммитит сессию.
 
     Возвращает `BggGame` (если игра найдена) или None (BGG отдаёт пустой
     `<items/>` для несуществующих id).
+
+    `cascade` (CAT-8) — если True и у игры есть `boardgamefamily` линки,
+    запускает fire-and-forget `asyncio.create_task` для подтягивания членов
+    серий через отдельную сессию. Защита от рекурсии: cascade-task вызывает
+    `enrich_one(cascade=False)` для каждого члена.
     """
     own_client = client is None
     if client is None:
@@ -144,7 +150,106 @@ async def enrich_one(
         return None
     # xml_text идёт в raw.xml для аудита/re-парсинга (CAT-7).
     await upsert_bgg_data(session, bgg, xml_text)
+
+    # CAT-8: cascade-обогащение членов BGG-семей. Не блокирующее — fire-and-forget.
+    # caller'у возвращаемся как только основной enrich завершён; члены подтянутся
+    # в фоне. Это критично — у некоторых игр 5+ семей × 10+ членов каждая,
+    # синхронное обогащение «съест» 50+ секунд на одну операцию.
+    if cascade and bgg.families:
+        await _maybe_schedule_family_cascade(bgg.families)
+
     return bgg
+
+
+async def _maybe_schedule_family_cascade(families: list[tuple[int, str]]) -> None:
+    """CAT-8: запускает fire-and-forget task для каждого family-id.
+
+    Чтение runtime-флага `bgg_family_cascade_enabled` (миграция 0019) — если
+    выключен, ничего не делаем. Не блокирует caller'а.
+    """
+    from catalog.runtime_flags import get_bool
+
+    enabled = await get_bool("bgg_family_cascade_enabled", default=True)
+    if not enabled:
+        return
+
+    from catalog.config import get_settings
+    rate_limit_sec = get_settings().bgg_family_cascade_rate_limit_sec
+
+    family_ids = [fid for fid, _ in families]
+    asyncio.create_task(  # noqa: RUF006 — fire-and-forget by design
+        _cascade_family_enrich(family_ids, rate_limit_sec=rate_limit_sec),
+        name=f"bgg-cascade-{family_ids[:3]}",
+    )
+
+
+async def _cascade_family_enrich(
+    family_ids: list[int],
+    *,
+    rate_limit_sec: float = 1.0,
+) -> None:
+    """CAT-8: обходит families, для отсутствующих в каталоге членов делает enrich_one.
+
+    Изолированная сессия и client — task'а живёт отдельно от вызывающего
+    `enrich_one`, чтобы commit caller'а не блокировался cascade'ом.
+    """
+    from catalog.db import get_engine
+    from catalog.models import Game
+    from catalog.parsers.bgg.parser import parse_family_xml
+    from catalog.parsers.bgg.repository import upsert_family
+    from sqlalchemy import select as sa_select
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    SessionFactory = async_sessionmaker(get_engine(), expire_on_commit=False)
+
+    try:
+        async with BggClient.from_settings() as client:
+            for family_id in family_ids:
+                try:
+                    xml = await client.fetch_family(family_id)
+                except Exception:  # noqa: BLE001
+                    logging.getLogger(__name__).exception(
+                        "cascade family %d: fetch failed", family_id,
+                    )
+                    continue
+                family = parse_family_xml(xml)
+                if family is None or not family.members:
+                    continue
+
+                # Запись семьи + members в БД (через отдельную сессию).
+                async with SessionFactory() as session:
+                    await upsert_family(session, family)
+                    # Резолв отсутствующих bgg_id за один SELECT.
+                    existing = (
+                        await session.execute(
+                            sa_select(Game.bgg_id).where(Game.bgg_id.in_(family.members))
+                        )
+                    ).scalars().all()
+                    await session.commit()
+
+                missing = [bid for bid in family.members if bid not in set(existing)]
+
+                # Enrich отсутствующих с rate-limit. cascade=False — защита от рекурсии:
+                # если у этих игр тоже есть families, мы их НЕ обходим заново.
+                for missing_bgg_id in missing:
+                    try:
+                        async with SessionFactory() as session:
+                            await enrich_one(
+                                missing_bgg_id, session,
+                                client=client, cascade=False,
+                            )
+                            await session.commit()
+                    except Exception:  # noqa: BLE001
+                        logging.getLogger(__name__).exception(
+                            "cascade enrich bgg_id=%d failed", missing_bgg_id,
+                        )
+                    await asyncio.sleep(rate_limit_sec)
+    except Exception:  # noqa: BLE001
+        # Без этого внешнего try-блока exception в fire-and-forget task'е
+        # будет молча проглочен asyncio. Логируем явно.
+        logging.getLogger(__name__).exception(
+            "_cascade_family_enrich top-level failed for families=%s", family_ids,
+        )
 
 
 def _chunked(items: list[int], size: int) -> Iterable[list[int]]:

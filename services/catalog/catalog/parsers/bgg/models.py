@@ -47,6 +47,11 @@ class BggGame:
     # 1 (no in-game text) ... 5 (unplayable in foreign language); winning level.
     language_dependence: int | None = None
 
+    # CAT-8: `<link type="boardgamefamily">` — список (family_id, family_name).
+    # Family — это серия / тематическая группа (Catan, Carcassonne series, etc.).
+    # Хранится в satellite-таблицах `bgg_families` + `bgg_family_members`.
+    families: list[tuple[int, str]] = field(default_factory=list)
+
     def to_meta(self) -> dict[str, Any]:
         """Поля, которые не помещаются в основные колонки → в games.meta (JSONB).
 
@@ -112,6 +117,19 @@ class BggHotnessItem:
     name: str
     year: int | None = None
     thumbnail_url: str | None = None
+
+
+@dataclass
+class BggFamily:
+    """Распарсенная BGG-семья (CAT-8) из `/xmlapi2/family/{id}`.
+
+    `members` — bgg_id игр-членов; имена и каноничные данные тащим через
+    `/thing` (enrich_one), а не из family-XML (там только id+название).
+    """
+    bgg_family_id: int
+    name: str  # primary name семьи
+    description: str | None = None
+    members: list[int] = field(default_factory=list)
 
 
 @dataclass

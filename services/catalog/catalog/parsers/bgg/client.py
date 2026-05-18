@@ -186,6 +186,19 @@ class BggClient:
         response.raise_for_status()
         return response.text
 
+    async def fetch_family(self, family_id: int) -> str:
+        """CAT-8: GET `/xmlapi2/family/{id}` → raw XML тематической семьи BGG.
+
+        Family — это связанная группа игр (Catan series, Carcassonne series,
+        etc.). Endpoint возвращает список thing-id членов семьи + name +
+        description семьи. Используется для cascade-обогащения и периодического
+        refresh'а через bgg_family_refresh scheduler-job.
+
+        Поведение 202 — иногда «прогревает кеш» как `/thing` и `/geeklist`,
+        поэтому идём через `_get_with_backoff`.
+        """
+        return await self._get_with_backoff(f"{self._base_url}/family/{family_id}")
+
     async def fetch_geeklist(self, geeklist_id: int) -> str:
         """GET `/xmlapi2/geeklist/{id}` → raw XML кураторского списка.
 

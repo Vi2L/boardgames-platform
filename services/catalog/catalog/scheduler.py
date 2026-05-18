@@ -216,6 +216,29 @@ JOB_METADATA: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "bgg_family_refresh": {
+        "display_name": "BGG Family Refresh (weekly)",
+        "description": (
+            "CAT-8: обновляет N самых старых по fetched_at BGG-семей "
+            "(`/xmlapi2/family/{id}` → upsert + enrich отсутствующих членов). "
+            "Round-robin: каждый прогон обходит следующие N. Дефолт: вс 05:00 UTC."
+        ),
+        "params_schema": [
+            {
+                "name": "max_families",
+                "type": "int",
+                "label": "Max families за прогон",
+                "description": (
+                    "Сколько семей обновлять за один cron-запуск. Round-robin "
+                    "по fetched_at ASC."
+                ),
+                "default": 100,
+                "required": False,
+                "min": 1,
+                "max": 1000,
+            },
+        ],
+    },
     "bgg_yearly_releases": {
         "display_name": "BGG Yearly Releases (monthly)",
         "description": (
@@ -481,6 +504,11 @@ def _resolve_handler(job_id: str, params: dict[str, Any]):
             lambda jid: _run_match_log_retention(jid, retention_days),
             "match-log-retention",
         )
+
+    if job_id == "bgg_family_refresh":
+        from catalog.importers.bgg_family import run_family_refresh_import_job
+
+        return run_family_refresh_import_job, "bgg-family-refresh"
 
     if job_id == "bgg_yearly_releases":
         from catalog.importers.bgg_yearly import run_yearly_releases_import_job

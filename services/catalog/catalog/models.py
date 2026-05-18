@@ -429,6 +429,45 @@ class GameWikidata(Base):
     game: Mapped[Game] = relationship(back_populates="wikidata")
 
 
+class BggFamily(Base):
+    """CAT-8: BGG-семья (тематическая группа: Series: Catan, Components: Cards, ...).
+
+    Источник — `/xmlapi2/family/{id}`. Хранит метаданные семьи + raw (на случай
+    reparsing). Связь с играми через `bgg_family_members`.
+    """
+
+    __tablename__ = "bgg_families"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    bgg_family_id: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    name: Mapped[str] = mapped_column(Text, default="", nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now, nullable=False
+    )
+    raw: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, nullable=False)
+
+
+class BggFamilyMember(Base):
+    """CAT-8: связка «семья → игра» (`bgg_family_members`).
+
+    `game_id` опционален: парсер `/thing` может упомянуть члена семьи, ещё не
+    импортированного в catalog. `enrich_one` (через cascade) или
+    `bgg_family_refresh` подтянут его позже; game_id заполнится по
+    UPDATE-from-JOIN при необходимости.
+    """
+
+    __tablename__ = "bgg_family_members"
+
+    family_id: Mapped[int] = mapped_column(
+        ForeignKey("bgg_families.id", ondelete="CASCADE"), primary_key=True,
+    )
+    bgg_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    game_id: Mapped[int | None] = mapped_column(
+        ForeignKey("games.id", ondelete="SET NULL"),
+    )
+
+
 class ApiKey(Base):
     """API-ключи для межсервисного доступа (этап 7).
 

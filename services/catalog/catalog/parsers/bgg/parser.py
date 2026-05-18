@@ -16,6 +16,7 @@ from collections.abc import Callable
 from xml.etree import ElementTree as ET
 
 from catalog.parsers.bgg.models import (
+    BggFamily,
     BggGame,
     BggGeeklistItem,
     BggGeeklistMeta,
@@ -350,11 +351,12 @@ def parse_thing_xml(xml_text: str) -> BggGame | None:
             if alt:
                 aliases.append(alt)
 
-    # Линки: designers / publishers / categories / mechanics — через `<link type=...>`.
+    # Линки: designers / publishers / categories / mechanics / families — через `<link type=...>`.
     designers: list[str] = []
     publishers: list[str] = []
     categories: list[str] = []
     mechanics: list[str] = []
+    families: list[tuple[int, str]] = []  # CAT-8: (family_id, family_name)
     for link in item.findall("link"):
         ltype = link.attrib.get("type")
         value = link.attrib.get("value", "")
@@ -366,6 +368,15 @@ def parse_thing_xml(xml_text: str) -> BggGame | None:
             categories.append(value)
         elif ltype == "boardgamemechanic":
             mechanics.append(value)
+        elif ltype == "boardgamefamily":
+            # `id` атрибут = bgg_family_id (целое), `value` = название семьи
+            # («Series: Catan», «Components: Cards», и т.п.). Игнорируем
+            # «битые» записи без id (защита от malformed XML).
+            try:
+                family_id = int(link.attrib.get("id", ""))
+            except (ValueError, TypeError):
+                continue
+            families.append((family_id, value))
 
     description = None
     desc_el = item.find("description")
@@ -410,6 +421,7 @@ def parse_thing_xml(xml_text: str) -> BggGame | None:
         recommended_players=_parse_numplayers_poll(item),
         recommended_age=_parse_age_poll(item),
         language_dependence=_parse_lang_dependence_poll(item),
+        families=families,
     )
 
 
@@ -459,3 +471,58 @@ def parse_search_xml(xml_text: str) -> list[BggSearchHit]:
             )
         )
     return hits
+
+
+def parse_family_xml(xml_text: str) -> BggFamily | None:
+    """CAT-8: парсит `/xmlapi2/family/{id}` → BggFamily со списком thing-id членов.
+
+    Формат:
+        <items>
+          <item type="boardgamefamily" id="20137">
+            <name type="primary" value="Series: Carcassonne"/>
+            <description>...</description>
+            <link type="boardgamefamily" id="822" value="Carcassonne" inbound="true"/>
+            ...
+          </item>
+        </items>
+
+    `inbound="true"` означает «эта игра входит в эту семью» — то, что нам нужно.
+    Возвращает None при пустом ответе (family-id не существует).
+    """
+    root = ET.fromstring(xml_text)
+    item = root.find("item")
+    if item is None or item.attrib.get("type") != "boardgamefamily":
+        return None
+    try:
+        family_id = int(item.attrib["id"])
+    except (KeyError, ValueError):
+        return None
+
+    name = ""
+    for name_el in item.findall("name"):
+        if name_el.attrib.get("type") == "primary":
+            name = name_el.attrib.get("value", "")
+            break
+
+    description: str | None = None
+    desc_el = item.find("description")
+    if desc_el is not None and desc_el.text:
+        description = desc_el.text
+
+    members: list[int] = []
+    for link in item.findall("link"):
+        # Только inbound="true" — это связь «игра → семья», обратная связь
+        # «семья → жанр» сюда тоже попадёт без фильтра, что нам не нужно.
+        if link.attrib.get("inbound") != "true":
+            continue
+        try:
+            members.append(int(link.attrib.get("id", "")))
+        except (TypeError, ValueError):
+            continue
+
+    return BggFamily(
+        bgg_family_id=family_id,
+        name=name,
+        description=description,
+        members=members,
+    )

@@ -25,8 +25,14 @@ from sqlalchemy import case, func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from catalog.models import Game, GameAlias, GameBgg
-from catalog.parsers.bgg.models import BggGame
+from catalog.models import (
+    BggFamily,
+    BggFamilyMember,
+    Game,
+    GameAlias,
+    GameBgg,
+)
+from catalog.parsers.bgg.models import BggFamily as BggFamilyDC, BggGame
 
 
 def slug_from_title(title: str, bgg_id: int) -> str:
@@ -227,4 +233,144 @@ async def upsert_bgg_data(
             .on_conflict_do_nothing(constraint="uq_alias_per_game")
         )
 
+    # ── 4. bgg_families + bgg_family_members (CAT-8) ─────────────────────
+    # Для каждой `boardgamefamily` связки из /thing:
+    #   - upsert семьи (если впервые — только id+name, description=NULL,
+    #     fetched_at=now: scheduler-job bgg_family_refresh потом обновит description).
+    #   - upsert membership (family_id, bgg_id) → game_id.
+    # Это даёт UI «другие игры серии» сразу после первого enrich'а, даже до
+    # того, как scheduler-job обойдёт семью.
+    await _upsert_families_from_thing(session, game_id, bgg)
+
     return game_id
+
+
+async def _upsert_families_from_thing(
+    session: AsyncSession,
+    game_id: int,
+    bgg: BggGame,
+) -> None:
+    """Сохраняет связки игры с её BGG-семьями (`bgg.families: list[(family_id, name)]`).
+
+    Семья создаётся «облегчённо» — без description (его привезёт scheduler-job
+    `bgg_family_refresh` через отдельный `/family/{id}` вызов). Если семья уже
+    есть — обновляем только name (на случай переименования куратором BGG),
+    description/raw оставляем как есть.
+
+    Membership upsert'ится `INSERT ... ON CONFLICT DO UPDATE SET game_id =
+    EXCLUDED.game_id`: если связка уже была (например, попала из refresh'а
+    до thing-enrich'а с пустым game_id), теперь подставляется реальный game_id.
+    """
+    families_t = BggFamily.__table__
+    members_t = BggFamilyMember.__table__
+    if not bgg.families:
+        return
+
+    for family_id, family_name in bgg.families:
+        # Upsert семьи (минимальный — id+name). description/members привезёт
+        # scheduler-job через separate `/family/{id}` запрос.
+        fam_stmt = pg_insert(families_t).values(
+            bgg_family_id=family_id,
+            name=family_name,
+            description=None,
+            raw={},
+        )
+        fam_stmt = fam_stmt.on_conflict_do_update(
+            constraint="uq_bgg_families_bgg_id",
+            set_={"name": fam_stmt.excluded.name},
+        )
+        await session.execute(fam_stmt)
+
+        # Резолвим bgg_families.id (autoincrement) — UPSERT не возвращает его
+        # надёжно через RETURNING на ON CONFLICT, поэтому отдельный SELECT.
+        # На малом числе семей за вызов (обычно <10) — приемлемо; для batch
+        # можно будет агрегировать в один IN-SELECT, но сейчас YAGNI.
+        from sqlalchemy import select as sa_select
+        family_row = (
+            await session.execute(
+                sa_select(BggFamily.id).where(BggFamily.bgg_family_id == family_id)
+            )
+        ).scalar_one()
+
+        # Upsert membership.
+        mem_stmt = pg_insert(members_t).values(
+            family_id=family_row,
+            bgg_id=bgg.bgg_id,
+            game_id=game_id,
+        )
+        mem_stmt = mem_stmt.on_conflict_do_update(
+            index_elements=["family_id", "bgg_id"],
+            set_={"game_id": mem_stmt.excluded.game_id},
+        )
+        await session.execute(mem_stmt)
+
+
+async def upsert_family(
+    session: AsyncSession,
+    family: BggFamilyDC,
+) -> int:
+    """CAT-8: upsert BGG-семьи целиком (с description + members).
+
+    Используется `bgg_family_refresh` scheduler-job'ом — он тянет
+    `/xmlapi2/family/{id}` и пишет все members сюда.
+
+    Members без `game_id` — bgg_id ещё не в catalog (cascade `enrich_one`
+    подтянет их или они уже есть, тогда JOIN в reading-API заполнит UI).
+
+    Возвращает `bgg_families.id` (autoincrement PK). Не коммитит сессию.
+    """
+    families_t = BggFamily.__table__
+    members_t = BggFamilyMember.__table__
+
+    fam_stmt = pg_insert(families_t).values(
+        bgg_family_id=family.bgg_family_id,
+        name=family.name,
+        description=family.description,
+        raw={"members_count": len(family.members)},
+        fetched_at=_utcnow(),
+    )
+    fam_stmt = fam_stmt.on_conflict_do_update(
+        constraint="uq_bgg_families_bgg_id",
+        set_={
+            "name": fam_stmt.excluded.name,
+            "description": fam_stmt.excluded.description,
+            "raw": fam_stmt.excluded.raw,
+            "fetched_at": fam_stmt.excluded.fetched_at,
+        },
+    )
+    await session.execute(fam_stmt)
+
+    from sqlalchemy import select as sa_select
+    family_row_id = (
+        await session.execute(
+            sa_select(BggFamily.id).where(
+                BggFamily.bgg_family_id == family.bgg_family_id
+            )
+        )
+    ).scalar_one()
+
+    # Резолвим game_id для каждого bgg_id одним SELECT IN.
+    game_by_bgg: dict[int, int] = {}
+    if family.members:
+        rows = (
+            await session.execute(
+                sa_select(Game.bgg_id, Game.id).where(Game.bgg_id.in_(family.members))
+            )
+        ).all()
+        game_by_bgg = {row[0]: row[1] for row in rows}
+
+    # Upsert каждого membership. ON CONFLICT — обновляем game_id (может появиться
+    # после прошлого refresh'а, когда thing ещё не был импортирован).
+    for member_bgg_id in family.members:
+        mem_stmt = pg_insert(members_t).values(
+            family_id=family_row_id,
+            bgg_id=member_bgg_id,
+            game_id=game_by_bgg.get(member_bgg_id),
+        )
+        mem_stmt = mem_stmt.on_conflict_do_update(
+            index_elements=["family_id", "bgg_id"],
+            set_={"game_id": mem_stmt.excluded.game_id},
+        )
+        await session.execute(mem_stmt)
+
+    return family_row_id

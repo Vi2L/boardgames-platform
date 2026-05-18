@@ -92,6 +92,23 @@ export type CatalogGameWikidata = {
   fetched_at: string
 }
 
+/** CAT-8: член BGG-серии для отображения «другие игры серии». */
+export type BggFamilyMember = {
+  bgg_id: number
+  game_id: number | null
+  title: string | null
+  year: number | null
+}
+
+/** CAT-8: BGG-серия (Series: Catan, Components: Cards, ...). */
+export type BggFamily = {
+  bgg_family_id: number
+  name: string
+  description: string | null
+  member_count: number  // включая отсутствующих в catalog
+  members: BggFamilyMember[]  // только присутствующие в catalog
+}
+
 export type CatalogGameDetail = CatalogGame & {
   designers: string[] | null
   publishers: string[] | null
@@ -107,6 +124,7 @@ export type CatalogGameDetail = CatalogGame & {
   aliases: CatalogGameAlias[]
   bgg: CatalogGameBgg | null
   wikidata: CatalogGameWikidata | null
+  families: BggFamily[]
 }
 
 export type CatalogOffer = {

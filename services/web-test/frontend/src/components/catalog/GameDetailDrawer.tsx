@@ -46,6 +46,7 @@ import { fetchOfferHistory } from '../../lib/api'
 import { PriceChart } from '../shared/PriceChart'
 import { AliasEditor } from './AliasEditor'
 import { BggCard } from './BggCard'
+import { FamiliesCard } from './FamiliesCard'
 import { WikidataCard } from './WikidataCard'
 import { GameEditor } from './GameEditor'
 import { MergeDialog } from './MergeDialog'
@@ -276,6 +277,13 @@ function OverviewTab({ game }: { game: CatalogGameDetail }) {
 
       <Section title={`Wikidata satellite${game.wikidata ? '' : ' — нет данных'}`} defaultOpen={false}>
         {game.wikidata ? <WikidataCard wikidata={game.wikidata} /> : <Empty msg="Запустите python -m catalog.scripts.import_wikidata." />}
+      </Section>
+
+      <Section
+        title={`BGG-серии${game.families.length ? ` (${game.families.length})` : ''}`}
+        defaultOpen={false}
+      >
+        <FamiliesCard families={game.families} />
       </Section>
 
       {/* Lazy — useQuery запускается только когда секция открыта (mount при render-prop call). */}

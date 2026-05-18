@@ -114,11 +114,32 @@ class GameWikidataOut(_ORMBase):
     fetched_at: datetime
 
 
+class BggFamilyMemberOut(BaseModel):
+    """CAT-8: один член серии BGG для отображения в карточке игры."""
+    bgg_id: int
+    game_id: int | None = None
+    title: str | None = None  # из games.title если связь есть, иначе None
+    year: int | None = None
+
+
+class BggFamilyOut(BaseModel):
+    """CAT-8: BGG-серия с членами для блока «другие игры серии» в /games/{id}."""
+    bgg_family_id: int
+    name: str
+    description: str | None = None
+    member_count: int
+    # `members` — только те, что присутствуют в catalog (game_id != null).
+    # Полный список (включая отсутствующие thing-id) можно увидеть через
+    # /admin/bgg-families/{id} — здесь экономим payload карточки.
+    members: list[BggFamilyMemberOut] = Field(default_factory=list)
+
+
 class GameDetailOut(GameOut):
     """Карточка с алиасами и satellite-данными. /games/{id}."""
     aliases: list[GameAliasOut] = Field(default_factory=list)
     bgg: GameBggOut | None = None
     wikidata: GameWikidataOut | None = None
+    families: list[BggFamilyOut] = Field(default_factory=list)
 
 
 # Допустимые значения kind. Хранится строкой (не PG ENUM), валидация — на
