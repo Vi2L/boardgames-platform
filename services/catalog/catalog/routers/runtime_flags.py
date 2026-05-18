@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.auth import require_scope
+from catalog.config import get_settings
 from catalog.db import get_session
 from catalog.runtime_flags import set_bool
 from catalog.models import RuntimeFlag
@@ -29,7 +30,7 @@ router = APIRouter(prefix="/admin/runtime-flags", tags=["admin"])
 # Whitelist разрешённых ключей: запрещаем оператору создавать произвольные
 # флаги через PATCH — это поверхность для misconfiguration. Если нужен новый —
 # добавляется кодом одновременно с потребителем.
-_ALLOWED_KEYS = {"ml_enabled"}
+_ALLOWED_KEYS = {"ml_enabled", "bgg_family_cascade_enabled"}
 
 
 @router.get(
@@ -81,3 +82,42 @@ async def update_flag(
     )).scalar_one()
     logger.info("runtime_flag %s set to %s (by %s)", key, payload.value, updated_by)
     return RuntimeFlagOut.model_validate(row)
+
+
+# ── BGG-сводка для UI Global Settings (WT-F7) ────────────────────────────────
+
+
+# Отдельный сводный endpoint, а не три по отдельности — UI BGG Sync рисует одну
+# секцию шапки, нужно одно обращение. token_set — bool, не значение
+# (никогда не возвращаем сам токен из API).
+@router.get(
+    "/bgg",
+    dependencies=[Depends(require_scope("read"))],
+)
+async def get_bgg_summary(
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Сводка BGG-настроек для секции Global Settings в UI BGG Sync.
+
+    - `bgg_api_token_set`: bool — задан ли BGG_API_TOKEN в окружении.
+    - `family_cascade_enabled`: bool — берётся из runtime_flags при наличии,
+      иначе Settings.bgg_family_cascade_enabled (env default). Поскольку для
+      этого ключа в коммите 1 (WT-F7) ещё нет миграции-сидера, в БД его может
+      не оказаться — тогда отдаём ENV-default и помечаем `source='env'`.
+    - `family_cascade_rate_limit_sec`: float (ENV-only, не editable через UI).
+    """
+    settings = get_settings()
+    flag_row = (await session.execute(
+        select(RuntimeFlag).where(RuntimeFlag.key == "bgg_family_cascade_enabled")
+    )).scalar_one_or_none()
+    cascade_value = (
+        flag_row.value_bool
+        if flag_row is not None and flag_row.value_bool is not None
+        else settings.bgg_family_cascade_enabled
+    )
+    return {
+        "bgg_api_token_set": bool(settings.bgg_api_token),
+        "family_cascade_enabled": cascade_value,
+        "family_cascade_enabled_editable": flag_row is not None,
+        "family_cascade_rate_limit_sec": settings.bgg_family_cascade_rate_limit_sec,
+    }

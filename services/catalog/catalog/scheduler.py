@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal, TypedDict
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -48,9 +48,32 @@ class JobAlreadyRunning(Exception):
     """
 
 
-# ── Реестр job'ов: для UI (display_name, description) и роутера (trigger_handler).
-# job_id строго совпадает с PK в `scheduler_configs` и id в APScheduler.
-JOB_METADATA: dict[str, dict[str, str]] = {
+# ── Schema-driven UI для редактирования params (WT-F7) ───────────────────────
+# UI получает per-job `params_schema: list[FieldSpec]` через `GET /scheduler/jobs`
+# и рендерит динамическую форму вместо сырого JSON-textarea. На бэке используется
+# для server-side validate в PATCH /scheduler/jobs/{id} (точный тип, диапазон, enum).
+class FieldSpec(TypedDict, total=False):
+    """Описание одного поля в schema-driven форме параметров job'а.
+
+    `default` хранится как Python-значение и сериализуется в JSON как есть.
+    `min`/`max` применимы только к int/float; `enum` — только к 'enum'.
+    """
+    name: str  # ключ в params dict
+    type: Literal["int", "float", "bool", "string", "enum"]
+    label: str  # человеко-читаемая метка над полем в UI
+    description: str  # подсказка под полем (одно предложение, опционально)
+    default: Any
+    required: bool  # если True — пустое значение отвергается валидатором
+    enum: list[str]  # доступные значения для type='enum'
+    min: float  # включительно, для int/float
+    max: float  # включительно, для int/float
+
+
+# ── Реестр job'ов: для UI (display_name, description, params_schema) и роутера
+# (trigger_handler). job_id строго совпадает с PK в `scheduler_configs` и id в
+# APScheduler. `params_schema` опционально — без неё UI откатывается на JSON-textarea
+# (бекворд-совместимость), но новые job'ы должны её декларировать.
+JOB_METADATA: dict[str, dict[str, Any]] = {
     "bgg_top_sync": {
         "display_name": "BGG Top Sync (weekly)",
         "description": (
@@ -58,6 +81,28 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "/thing batch. Параметры: rank_le (default 1000), skip_recent_days "
             "(default 7). Дефолтное расписание: пн 03:00 UTC."
         ),
+        "params_schema": [
+            {
+                "name": "rank_le",
+                "type": "int",
+                "label": "Rank ≤",
+                "description": "Обогащать игры с BGG rank ниже или равным этому числу.",
+                "default": 1000,
+                "required": False,
+                "min": 1,
+                "max": 30000,
+            },
+            {
+                "name": "skip_recent_days",
+                "type": "int",
+                "label": "Skip если обновлено за (дней)",
+                "description": "Пропускать игры, у которых game_bgg.fetched_at новее, чем N дней назад.",
+                "default": 7,
+                "required": False,
+                "min": 0,
+                "max": 365,
+            },
+        ],
     },
     "bgg_hotness_sync": {
         "display_name": "BGG Hotness (daily)",
@@ -65,6 +110,9 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "Ежедневный snapshot 50 «горячих» игр + auto-import bgg_id'ов "
             "отсутствующих в каталоге. Дефолт: 06:00 UTC."
         ),
+        # Hotness не принимает params (запускается без аргументов) — пустая схема
+        # сигнализирует UI «параметров нет, форма пустая, только cron+enabled».
+        "params_schema": [],
     },
     "bgg_mini_batch": {
         "display_name": "BGG Daily Mini-batch",
@@ -73,6 +121,38 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "skip_recent_days > 30. Цикл обновления ~60 дней при 30K играх. "
             "Мягкий rate-limit (2с). Дефолт: 04:00 UTC."
         ),
+        "params_schema": [
+            {
+                "name": "batch_size",
+                "type": "int",
+                "label": "Batch size",
+                "description": "Сколько игр пытаемся обогатить за один прогон.",
+                "default": 500,
+                "required": False,
+                "min": 10,
+                "max": 5000,
+            },
+            {
+                "name": "skip_recent_days",
+                "type": "int",
+                "label": "Skip если обновлено за (дней)",
+                "description": "Пропускать игры с свежим fetched_at.",
+                "default": 30,
+                "required": False,
+                "min": 0,
+                "max": 365,
+            },
+            {
+                "name": "rate_limit_sec",
+                "type": "float",
+                "label": "Rate limit (сек)",
+                "description": "Пауза между батчами /thing.",
+                "default": 2.0,
+                "required": False,
+                "min": 0.5,
+                "max": 10.0,
+            },
+        ],
     },
     "ml_health_check": {
         "display_name": "ML Health Check (every 30s)",
@@ -81,6 +161,18 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "qwen2.5:7b-instruct. Синглтон OllamaHealth кэширует статус; "
             "tier'ы T2/T3 проверяют его без HTTP. Interval-trigger (не cron)."
         ),
+        "params_schema": [
+            {
+                "name": "interval_sec",
+                "type": "int",
+                "label": "Interval (сек)",
+                "description": "Период опроса Ollama /api/tags.",
+                "default": 30,
+                "required": True,
+                "min": 5,
+                "max": 600,
+            },
+        ],
     },
     "match_worker": {
         "display_name": "Match Queue Worker (every 10s)",
@@ -89,6 +181,18 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "Берёт batch=32 через FOR UPDATE SKIP LOCKED, embed/LLM, "
             "финализирует offer. Interval-trigger (не cron)."
         ),
+        "params_schema": [
+            {
+                "name": "interval_sec",
+                "type": "int",
+                "label": "Interval (сек)",
+                "description": "Период тика worker'а.",
+                "default": 10,
+                "required": True,
+                "min": 5,
+                "max": 300,
+            },
+        ],
     },
     "match_log_retention": {
         "display_name": "Match Log Retention (daily)",
@@ -99,6 +203,18 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "Параметр `retention_days` в scheduler_configs.params "
             "переопределяет default."
         ),
+        "params_schema": [
+            {
+                "name": "retention_days",
+                "type": "int",
+                "label": "Retention (дней)",
+                "description": "Override Settings.match_log_retention_days.",
+                "default": 90,
+                "required": False,
+                "min": 7,
+                "max": 730,
+            },
+        ],
     },
     "auto_recovery_runner": {
         "display_name": "Auto Recovery Runner (every 60s)",
@@ -110,8 +226,103 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "trigger_job}. Дедуп через last_triggered_at + "
             "dedup_minutes (default 5). Interval-trigger."
         ),
+        "params_schema": [
+            {
+                "name": "interval_sec",
+                "type": "int",
+                "label": "Interval (сек)",
+                "description": "Период тика runner'а.",
+                "default": 60,
+                "required": True,
+                "min": 10,
+                "max": 3600,
+            },
+        ],
     },
 }
+
+
+def validate_params_against_schema(
+    job_id: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Server-side валидация params против `params_schema` зарегистрированного job'а.
+
+    Зачем: UI рендерит форму по schema, но клиент может прислать что угодно через
+    raw PATCH-запрос — мы должны защитить себя на бэке. Возвращает coerced params
+    (например, '5' → 5 для int) или поднимает ValueError со списком проблем.
+
+    Поведение:
+    - Незнакомые ключи (не в schema) — пропускаются как есть (forward compat).
+    - Пропущенные required ключи — ошибка, если их не было и в существующем params.
+    - Type mismatch — ошибка с понятным message.
+    - Out of range / not in enum — ошибка.
+
+    Job'ы без schema (или с None) — params не валидируется (бэк-compat).
+    """
+    meta = JOB_METADATA.get(job_id)
+    if not meta:
+        return params  # неизвестный job, пусть PATCH-роутер сам отдаст 404
+    schema = meta.get("params_schema")
+    if schema is None:
+        return params  # opt-out от валидации
+
+    errors: list[str] = []
+    coerced: dict[str, Any] = dict(params)
+
+    by_name = {f["name"]: f for f in schema}
+    for field in schema:
+        name = field["name"]
+        ftype = field["type"]
+        if name not in coerced:
+            # required-проверка делается на момент апдейта в PATCH: если в БД
+            # уже лежит этот ключ — оставляем; merge на caller-side.
+            continue
+        value = coerced[name]
+
+        # Type coercion (UI присылает строки из текстовых input'ов).
+        try:
+            if ftype == "int":
+                if isinstance(value, bool):  # bool — это подкласс int, отделим
+                    raise TypeError("bool вместо int")
+                value = int(value)
+            elif ftype == "float":
+                if isinstance(value, bool):
+                    raise TypeError("bool вместо float")
+                value = float(value)
+            elif ftype == "bool":
+                if isinstance(value, str):
+                    value = value.lower() in ("true", "1", "yes", "on")
+                value = bool(value)
+            elif ftype == "string":
+                value = str(value)
+            elif ftype == "enum":
+                value = str(value)
+                if value not in (field.get("enum") or []):
+                    errors.append(f"{name}: '{value}' не входит в {field.get('enum')}")
+                    continue
+            else:
+                errors.append(f"{name}: неизвестный type '{ftype}' в schema")
+                continue
+        except (TypeError, ValueError) as exc:
+            errors.append(f"{name}: ожидался {ftype} ({exc})")
+            continue
+
+        # Диапазоны для int/float.
+        if ftype in ("int", "float"):
+            if "min" in field and value < field["min"]:
+                errors.append(f"{name}: {value} < min={field['min']}")
+            if "max" in field and value > field["max"]:
+                errors.append(f"{name}: {value} > max={field['max']}")
+
+        coerced[name] = value
+
+    # Игнорируем unknown ключи (не падаем, не удаляем).
+    _ = by_name  # подавим unused-предупреждение, by_name держим на будущее
+
+    if errors:
+        raise ValueError("; ".join(errors))
+    return coerced
 
 # Interval-jobs (не cron) — не пишутся в scheduler_configs cron_expr,
 # а используют specialized resolver. Заводим сюда: ml_health_check,

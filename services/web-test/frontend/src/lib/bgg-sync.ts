@@ -18,6 +18,22 @@ async function json<T>(res: Response): Promise<T> {
 
 // ── Scheduler ────────────────────────────────────────────────────────────────
 
+/**
+ * WT-F7: описание одного поля в schema-driven форме параметров job'а.
+ * Зеркало catalog/scheduler.py:FieldSpec.
+ */
+export type FieldSpec = {
+  name: string
+  type: 'int' | 'float' | 'bool' | 'string' | 'enum'
+  label: string
+  description?: string
+  default: unknown
+  required?: boolean
+  enum?: string[]
+  min?: number
+  max?: number
+}
+
 /** Один scheduler-job: конфиг из БД + runtime info из APScheduler + meta. */
 export type SchedulerJob = {
   job_id: string
@@ -33,12 +49,32 @@ export type SchedulerJob = {
   // Из реестра JOB_METADATA.
   display_name: string | null
   description: string | null
+  // Ring-buffer тиков для interval-job'ов (заполнен для match_worker/ml_health/etc.).
+  tick_history?: Array<{ ts: string; duration_ms: number; error: boolean }>
+  // WT-F7: если null — UI показывает JSON-textarea (legacy fallback).
+  params_schema: FieldSpec[] | null
 }
 
 export type RescheduleRequest = {
   cron_expr?: string
   enabled?: boolean
   params?: Record<string, unknown>
+}
+
+/** WT-F7: ответ bulk-action endpoint'ов. */
+export type SchedulerBulkActionResult = {
+  action: string
+  affected: string[]
+  triggered_import_job_ids: number[]
+  errors: Array<{ job_id: string; error: string }>
+}
+
+/** WT-F7: сводка Global BGG Settings. */
+export type BggRuntimeSummary = {
+  bgg_api_token_set: boolean
+  family_cascade_enabled: boolean
+  family_cascade_enabled_editable: boolean
+  family_cascade_rate_limit_sec: number
 }
 
 export const fetchSchedulerJobs = () =>
@@ -55,6 +91,22 @@ export const triggerSchedulerJob = (jobId: string) =>
   fetch(`${BASE}/scheduler/jobs/${encodeURIComponent(jobId)}/trigger`, {
     method: 'POST',
   }).then(r => json<ImportJob>(r))
+
+// WT-F7 bulk actions.
+export const pauseAllJobs = () =>
+  fetch(`${BASE}/scheduler/jobs/pause-all`, { method: 'POST' })
+    .then(r => json<SchedulerBulkActionResult>(r))
+
+export const resumeAllJobs = () =>
+  fetch(`${BASE}/scheduler/jobs/resume-all`, { method: 'POST' })
+    .then(r => json<SchedulerBulkActionResult>(r))
+
+export const triggerOverdueJobs = () =>
+  fetch(`${BASE}/scheduler/jobs/trigger-overdue`, { method: 'POST' })
+    .then(r => json<SchedulerBulkActionResult>(r))
+
+export const fetchBggSettings = () =>
+  fetch(`${BASE}/settings/bgg`).then(r => json<BggRuntimeSummary>(r))
 
 // ── Import history ───────────────────────────────────────────────────────────
 

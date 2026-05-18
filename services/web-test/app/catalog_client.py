@@ -264,6 +264,26 @@ class CatalogClient:
         resp = await self._client.post(f"/scheduler/jobs/{job_id}/trigger")
         return _ok_or_raise(resp)
 
+    async def scheduler_bulk_action(
+        self, action: str
+    ) -> dict[str, Any]:
+        """WT-F7: POST /scheduler/jobs/{pause-all,resume-all,trigger-overdue}.
+
+        Один метод вместо трёх — endpoint'ы симметричны и отличаются только
+        путём, валидация значения делается на роутере web-test (не здесь).
+        """
+        resp = await self._client.post(f"/scheduler/jobs/{action}")
+        return _ok_or_raise(resp)
+
+    async def get_bgg_runtime_summary(self) -> dict[str, Any]:
+        """WT-F7: GET /admin/runtime-flags/bgg → сводка BGG-настроек.
+
+        Возвращает {bgg_api_token_set, family_cascade_enabled, ...} для
+        Global Settings секции на странице /bgg-sync.
+        """
+        resp = await self._client.get("/admin/runtime-flags/bgg")
+        return _ok_or_raise(resp)
+
     # ── BGG read API (snapshots для UI Hotness/GeekList) ────────────────────
 
     async def bgg_hotness_dates(self, *, limit: int = 30) -> list[str]:

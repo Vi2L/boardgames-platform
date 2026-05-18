@@ -62,6 +62,38 @@ async def trigger_job(
         raise _err(e) from e
 
 
+# WT-F7 bulk actions. job_id-сегменты `pause-all`/`resume-all`/`trigger-overdue`
+# реально не job_id'ы, а action-имена — они НЕ пересекаются с разрешёнными
+# job_id (snake_case в БД) благодаря тире. Если позднее придёт job_id вида
+# `pause-all` — это поломает роутинг; пока маловероятно.
+_BULK_ACTIONS = {"pause-all", "resume-all", "trigger-overdue"}
+
+
+@router.post("/scheduler/jobs/{action}")
+async def bulk_scheduler_action(
+    action: str,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """WT-F7: bulk action над всеми scheduler-job'ами."""
+    if action not in _BULK_ACTIONS:
+        raise HTTPException(status_code=404, detail=f"unknown bulk action: {action}")
+    try:
+        return await client.scheduler_bulk_action(action)
+    except CatalogServiceError as e:
+        raise _err(e) from e
+
+
+@router.get("/settings/bgg")
+async def get_bgg_settings(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """WT-F7: сводка Global BGG Settings — token flag + cascade-настройки."""
+    try:
+        return await client.get_bgg_runtime_summary()
+    except CatalogServiceError as e:
+        raise _err(e) from e
+
+
 # ── Job history ───────────────────────────────────────────────────────────────
 
 

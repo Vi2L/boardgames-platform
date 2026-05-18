@@ -49,6 +49,14 @@ class Settings(BaseSettings):
     # и оффер auto-matched — запустить enrich_one в фоне. 0 = выключено.
     bgg_ingest_enrich_staleness_days: int = Field(default=14)
 
+    # CAT-8 (families): после успешного `enrich_one` подтягивать членов BGG-семей.
+    # Запускается fire-and-forget через asyncio.create_task. Editable через
+    # UI / runtime_flags (key='bgg_family_cascade_enabled', миграция 0018 в CAT-8) —
+    # эта ENV-настройка работает как seed-default, runtime_flags переопределяет.
+    bgg_family_cascade_enabled: bool = Field(default=True)
+    # Пауза между cascade-вызовами enrich_one (best practice BGG XML API).
+    bgg_family_cascade_rate_limit_sec: float = Field(default=1.0)
+
     # ── Matching v2 (миграция 0011) ──────────────────────────────────────────
     # Локальный Ollama-сервис для embedding (bge-m3) и LLM-арбитра (qwen2.5).
     # macOS host видим из Docker по host.docker.internal:11434.

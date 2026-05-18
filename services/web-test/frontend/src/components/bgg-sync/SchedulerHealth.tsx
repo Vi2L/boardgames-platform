@@ -1,5 +1,5 @@
 /**
- * SchedulerHealth — карточки трёх scheduled-job'ов с health-метриками.
+ * SchedulerHealth — карточки scheduler-job'ов с health-метриками.
  *
  * На каждой карточке:
  *   - title (display_name) + описание (collapsible).
@@ -7,6 +7,11 @@
  *   - last_run_at / next_run_at.
  *   - кнопка «Запустить сейчас» (manual trigger через POST /trigger).
  *   - inline cron editor (раскрывается по кнопке «Изменить расписание»).
+ *     — WT-F7: schema-driven форма по `params_schema` из API + cron-builder
+ *       с пресетами и human-readable preview (cronstrue).
+ *
+ * Над списком — GlobalBggSettings (BGG token + cascade) и bulk-toolbar
+ * (pause-all / resume-all / trigger-overdue).
  *
  * Polling каждые 10 сек — конфиги меняются редко, но last_run_status обновляется
  * при срабатывании cron'а. Если есть активный last_run_job_id со статусом
@@ -15,16 +20,26 @@
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Loader2, Play, ChevronDown, ChevronRight, Settings2 } from 'lucide-react'
+import {
+  Loader2, Play, ChevronDown, ChevronRight, Settings2,
+  Pause, PlayCircle, Zap,
+} from 'lucide-react'
 import clsx from 'clsx'
 
 import {
   fetchSchedulerJobs,
   rescheduleJob,
   triggerSchedulerJob,
+  pauseAllJobs,
+  resumeAllJobs,
+  triggerOverdueJobs,
   type SchedulerJob,
   type RescheduleRequest,
+  type SchedulerBulkActionResult,
 } from '../../lib/bgg-sync'
+import { CronInput } from './CronInput'
+import { SchemaForm } from './SchemaForm'
+import { GlobalBggSettings } from './GlobalBggSettings'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -100,8 +115,100 @@ export function SchedulerHealth() {
 
   return (
     <div className="space-y-3">
+      <GlobalBggSettings />
+      <BulkActionsToolbar jobs={data} />
       {data.map(job => <JobCard key={job.job_id} job={job} />)}
     </div>
+  )
+}
+
+// ── Bulk actions toolbar (WT-F7) ─────────────────────────────────────────────
+
+function BulkActionsToolbar({ jobs }: { jobs: SchedulerJob[] }) {
+  const qc = useQueryClient()
+  const enabledCount = jobs.filter(j => j.enabled).length
+  const disabledCount = jobs.length - enabledCount
+  const now = Date.now()
+  const overdueCount = jobs.filter(j => {
+    if (!j.enabled || !j.next_run_at) return false
+    return new Date(j.next_run_at).getTime() < now
+  }).length
+
+  const onSuccess = (label: string) => (res: SchedulerBulkActionResult) => {
+    const errs = res.errors.length
+    toast.success(
+      `${label}: затронуто ${res.affected.length}` +
+      (res.triggered_import_job_ids.length ? `, запущено ${res.triggered_import_job_ids.length}` : '') +
+      (errs ? `, ошибок ${errs}` : ''),
+    )
+    qc.invalidateQueries({ queryKey: ['bgg-sync', 'scheduler', 'jobs'] })
+    qc.invalidateQueries({ queryKey: ['bgg-sync', 'jobs'] })
+  }
+  const onError = (e: Error) => toast.error(e.message)
+
+  const pause = useMutation({ mutationFn: pauseAllJobs, onSuccess: onSuccess('Pause all'), onError })
+  const resume = useMutation({ mutationFn: resumeAllJobs, onSuccess: onSuccess('Resume all'), onError })
+  const overdue = useMutation({ mutationFn: triggerOverdueJobs, onSuccess: onSuccess('Trigger overdue'), onError })
+
+  const anyPending = pause.isPending || resume.isPending || overdue.isPending
+
+  return (
+    <div className="border border-gray-800 bg-gray-900/40 rounded-lg p-3 flex items-center gap-2">
+      <div className="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Bulk actions</div>
+      <BulkButton
+        icon={<Pause size={11} />}
+        label={`Pause all (${enabledCount})`}
+        disabled={anyPending || enabledCount === 0}
+        loading={pause.isPending}
+        onClick={() => {
+          if (!confirm(`Disable ${enabledCount} enabled-job(ы)? Это остановит все scheduled-запуски до Resume.`)) return
+          pause.mutate()
+        }}
+      />
+      <BulkButton
+        icon={<PlayCircle size={11} />}
+        label={`Resume all (${disabledCount})`}
+        disabled={anyPending || disabledCount === 0}
+        loading={resume.isPending}
+        onClick={() => resume.mutate()}
+      />
+      <BulkButton
+        icon={<Zap size={11} />}
+        label={`Trigger overdue (${overdueCount})`}
+        disabled={anyPending || overdueCount === 0}
+        loading={overdue.isPending}
+        onClick={() => overdue.mutate()}
+      />
+      <div className="text-[10px] text-gray-500 ml-auto">
+        Всего {jobs.length} · enabled {enabledCount} · overdue {overdueCount}
+      </div>
+    </div>
+  )
+}
+
+function BulkButton({
+  icon, label, loading, disabled, onClick,
+}: {
+  icon: React.ReactNode
+  label: string
+  loading?: boolean
+  disabled?: boolean
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={clsx(
+        'inline-flex items-center gap-1.5 px-2.5 py-1 text-[11px] rounded',
+        'bg-gray-800 hover:bg-gray-700 text-gray-200',
+        'disabled:opacity-40 disabled:cursor-not-allowed',
+      )}
+    >
+      {loading ? <Loader2 size={11} className="animate-spin" /> : icon}
+      {label}
+    </button>
   )
 }
 
@@ -228,23 +335,30 @@ function Stat({ label, value }: { label: string; value: string }) {
   )
 }
 
-// ── Cron editor (inline) ─────────────────────────────────────────────────────
+// ── Cron editor (inline, WT-F7 schema-driven) ────────────────────────────────
 
 function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }) {
   const qc = useQueryClient()
   const [cron, setCron] = useState(job.cron_expr)
   const [enabled, setEnabled] = useState(job.enabled)
-  // Params как JSON-текст, пользователь редактирует напрямую. Простота вместо
-  // per-job динамической формы — сейчас параметров мало (1-3 на job).
+
+  // WT-F7: если у job'а есть зарегистрированная схема — рендерим SchemaForm.
+  // Иначе — fallback на raw JSON-textarea (backward-compat для job'ов без схемы).
+  const hasSchema = Array.isArray(job.params_schema)
+  const [schemaValues, setSchemaValues] = useState<Record<string, unknown>>(job.params)
   const [paramsText, setParamsText] = useState(JSON.stringify(job.params, null, 2))
 
   const save = useMutation({
     mutationFn: () => {
       let parsedParams: Record<string, unknown> | undefined
-      try {
-        parsedParams = JSON.parse(paramsText)
-      } catch (e) {
-        throw new Error(`params: невалидный JSON (${(e as Error).message})`)
+      if (hasSchema) {
+        parsedParams = schemaValues
+      } else {
+        try {
+          parsedParams = JSON.parse(paramsText)
+        } catch (e) {
+          throw new Error(`params: невалидный JSON (${(e as Error).message})`)
+        }
       }
       const payload: RescheduleRequest = {
         cron_expr: cron !== job.cron_expr ? cron : undefined,
@@ -262,32 +376,26 @@ function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }
   })
 
   return (
-    <div className="mt-3 pt-3 border-t border-gray-800 space-y-2.5">
-      <div className="grid grid-cols-2 gap-3">
+    <div className="mt-3 pt-3 border-t border-gray-800 space-y-3">
+      <div className="grid grid-cols-[2fr_1fr] gap-3 items-start">
         <div>
           <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">
             Cron expression (UTC)
           </label>
-          <input
-            type="text"
-            value={cron}
-            onChange={e => setCron(e.target.value)}
-            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-indigo-500"
-            placeholder="0 3 * * 1"
-          />
-          <div className="mt-1 text-[10px] text-gray-500">
-            формат: «мин час день_мес мес день_нед»
-          </div>
+          <CronInput value={cron} onChange={setCron} />
         </div>
 
         <div>
-          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer mt-5">
+          <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+            Состояние
+          </label>
+          <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer py-1.5">
             <input
               type="checkbox"
               checked={enabled}
               onChange={e => setEnabled(e.target.checked)}
             />
-            Enabled
+            {enabled ? 'enabled' : 'disabled'}
           </label>
           <div className="mt-1 text-[10px] text-gray-500">
             disabled → scheduler паузит этот job
@@ -296,15 +404,23 @@ function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }
       </div>
 
       <div>
-        <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-          Params (JSON)
+        <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1.5">
+          Параметры
         </label>
-        <textarea
-          value={paramsText}
-          onChange={e => setParamsText(e.target.value)}
-          rows={3}
-          className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-indigo-500"
-        />
+        {hasSchema ? (
+          <SchemaForm
+            schema={job.params_schema!}
+            values={schemaValues}
+            onChange={setSchemaValues}
+          />
+        ) : (
+          <textarea
+            value={paramsText}
+            onChange={e => setParamsText(e.target.value)}
+            rows={3}
+            className="w-full px-2 py-1.5 bg-gray-900 border border-gray-700 rounded text-xs font-mono text-gray-200 focus:outline-none focus:border-indigo-500"
+          />
+        )}
       </div>
 
       <div className="flex items-center gap-2">

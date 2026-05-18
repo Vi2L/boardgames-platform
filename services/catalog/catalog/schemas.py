@@ -340,6 +340,18 @@ class SchedulerJobOut(_ORMBase):
     # ml_health_check). Каждый элемент = {ts, duration_ms, error}.
     # Источник — `catalog.scheduler.get_tick_history(job_id)`.
     tick_history: list[dict[str, Any]] = Field(default_factory=list)
+    # WT-F7: schema-driven форма для редактирования params. None — нет схемы,
+    # UI откатывается на JSON-textarea (бэквард-совместимость). Источник —
+    # `JOB_METADATA[job_id]['params_schema']`.
+    params_schema: list[dict[str, Any]] | None = None
+
+
+class SchedulerBulkActionOut(BaseModel):
+    """POST /scheduler/jobs/{pause-all,resume-all,trigger-overdue} ответ."""
+    action: str  # pause-all | resume-all | trigger-overdue
+    affected: list[str]  # job_id'ы, которых коснулись (не job'ы)
+    triggered_import_job_ids: list[int] = Field(default_factory=list)
+    errors: list[dict[str, str]] = Field(default_factory=list)  # [{job_id, error}]
 
 
 class SchedulerRescheduleRequest(BaseModel):
