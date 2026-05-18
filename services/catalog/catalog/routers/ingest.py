@@ -29,7 +29,7 @@ from bg_shared.ingest import IngestRequest
 from catalog.auth import require_scope
 from catalog.db import get_engine, get_session
 from catalog.matching.v2 import MatchAction, MatchContext, match_sync, normalize_title
-from catalog.matching.v2.auditor import log_change
+from catalog.matching.v2.auditor import log_change, log_progress
 from catalog.matching.v2.decisions import save_decision
 from catalog.matching.v2.queue_repo import enqueue
 from catalog.models import GameAlias, GameBgg, Offer, OfferPrice
@@ -198,6 +198,36 @@ async def ingest_offers(
             new_score = result.score
             new_tier = result.tier
             result_reason = result.reason
+
+            # CAT-4.7: intermediate progress-entries для UI Штучного матчинга.
+            # Пишем только при T0 miss — cache hit (tier=0) уже имеет финальную
+            # auto_t0/reject запись, прогресс там не нужен. Через JSON в `reason`
+            # — фронт парсит и показывает на T0/T1 stage'ах SingleMatchTab.
+            if result.tier != 0:
+                # T0 cache miss — короткая запись «было пусто, идём дальше».
+                await log_progress(
+                    session, offer_id=offer_id,
+                    action=MatchAction.T0_PROGRESS, tier=0,
+                    payload="cache_miss",
+                    performed_by="ingest",
+                )
+                # T1 progress: best score + кандидаты, если T1 не дал auto.
+                if not result.matched:
+                    import json as _json
+                    from catalog.config import get_settings as _gs
+                    t1_payload = {
+                        "score": result.score,
+                        "auto_threshold": _gs().match_t1_auto_threshold,
+                        "candidates": (result.candidates or [])[:5],
+                        "reason": result.reason,
+                    }
+                    await log_progress(
+                        session, offer_id=offer_id,
+                        action=MatchAction.T1_PROGRESS, tier=1,
+                        payload=_json.dumps(t1_payload, ensure_ascii=False, default=str),
+                        score=result.score,
+                        performed_by="ingest",
+                    )
 
             if result.matched:
                 # Auto-match (T0 cache hit или T1 pg_trgm ≥ 0.92).

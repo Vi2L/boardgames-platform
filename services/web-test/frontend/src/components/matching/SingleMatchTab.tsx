@@ -390,13 +390,18 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt, queueId }: {
 
   // Derive stages — combining queue item status + match_log progress + final entry.
   const stages = useMemo<Stage[]>(() => {
+    const PROGRESS_ACTIONS = ['t0_progress', 't1_progress', 't2_progress', 't3_progress']
     const entriesAfterStart = (log.data?.items ?? []).filter(
       l => runStartedAt && new Date(l.performed_at).getTime() >= runStartedAt,
     )
     // Final entry (auto_t1/2/3 / skipped) — последний по времени НЕ progress.
     const finalEntry = entriesAfterStart.find(
-      l => !['t2_progress', 't3_progress'].includes(l.action),
+      l => !PROGRESS_ACTIONS.includes(l.action),
     )
+    // CAT-4.7: T0/T1 прогрессы из ingest. Появляются только при первом
+    // ingest (re-run через очередь их не пишет — sync tiers пропускаются).
+    const t0Progress = entriesAfterStart.find(l => l.action === 't0_progress')
+    const t1Progress = entriesAfterStart.find(l => l.action === 't1_progress')
     const t2Progress = entriesAfterStart.find(l => l.action === 't2_progress')
     const t3Progress = entriesAfterStart.find(l => l.action === 't3_progress')
 
@@ -409,13 +414,56 @@ function ProgressDrawer({ open, onClose, offer, runStartedAt, queueId }: {
       { tier: 'T3', title: 'qwen LLM',      state: 'pending', detail: 'арбитр по 2-3 кандидатам' },
     ]
 
-    // Если воркер начал обрабатывать (status='processing' или есть progress entries) —
-    // T0/T1 уже прошли (они sync в ingest и здесь не запускаются для re-run).
+    // T0: если есть progress-запись или финал на T0 — показываем как done.
+    if (t0Progress) {
+      baseStages[0].state = 'done'
+      baseStages[0].detail = t0Progress.reason === 'cache_miss'
+        ? 'cache miss — пошли в T1'
+        : `cache: ${t0Progress.reason ?? '—'}`
+    } else if (finalEntry?.tier === 0) {
+      baseStages[0].state = 'done'
+      baseStages[0].detail =
+        `cache hit → ${finalEntry.action} (game_id #${finalEntry.new_game_id ?? '—'})`
+    }
+
+    // T1: progress-запись или auto_t1 финал.
+    if (t1Progress) {
+      try {
+        const payload = JSON.parse(t1Progress.reason || '{}')
+        const candidates = payload.candidates || []
+        baseStages[1].state = 'done'
+        const score = payload.score?.toFixed?.(2) ?? '—'
+        const threshold = payload.auto_threshold?.toFixed?.(2) ?? '0.92'
+        baseStages[1].detail = `best ${score} < threshold ${threshold} → T2`
+        if (candidates.length > 0) {
+          baseStages[1].detail += '\n' + candidates.slice(0, 3).map(
+            (c: { game_id?: number; title?: string; score?: number }) =>
+              `  ${c.score?.toFixed(2) ?? '—'}  ${c.title ?? '?'} #${c.game_id ?? '?'}`,
+          ).join('\n')
+        }
+      } catch {
+        baseStages[1].state = 'done'
+        baseStages[1].detail = 'T1 ниже threshold — пошли в T2'
+      }
+    } else if (finalEntry?.tier === 1) {
+      baseStages[1].state = 'done'
+      baseStages[1].detail =
+        `${finalEntry.action} → game_id #${finalEntry.new_game_id ?? '—'} (score ${finalEntry.score?.toFixed(2) ?? '—'})`
+    }
+
+    // Re-run кейс: воркер обрабатывает оффер (T2/T3), T0/T1 sync tiers в этом
+    // прогоне не запускаются — помечаем skipped, если нет ingest-progress
+    // записей. Если же ingest-progress есть (t0Progress/t1Progress) — выше
+    // мы уже выставили `done`, ниже не перетираем.
     if (queueStatus === 'processing' || t2Progress || t3Progress || finalEntry) {
-      baseStages[0].state = 'skipped'
-      baseStages[0].detail = 'sync tier в ingest — не запускается при re-run'
-      baseStages[1].state = 'skipped'
-      baseStages[1].detail = 'sync tier в ingest — не запускается при re-run'
+      if (baseStages[0].state === 'pending') {
+        baseStages[0].state = 'skipped'
+        baseStages[0].detail = 'sync tier в ingest — не запускается при re-run'
+      }
+      if (baseStages[1].state === 'pending') {
+        baseStages[1].state = 'skipped'
+        baseStages[1].detail = 'sync tier в ingest — не запускается при re-run'
+      }
     }
 
     // T2 progress entry — показывает candidates inline.

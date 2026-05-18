@@ -32,6 +32,8 @@ class MatchAction(str, Enum):
     # Промежуточные progress-entries для UI Штучного матчинга. Не меняют
     # offer.game_id — пишутся через `log_progress()` вместо `log_change()`.
     # При revert игнорируются (revert_one фильтрует по action не in PROGRESS).
+    T0_PROGRESS = "t0_progress"  # T0 cache miss (CAT-4.7) — в ingest
+    T1_PROGRESS = "t1_progress"  # T1 trgm ниже auto_threshold (CAT-4.7) — в ingest
     T2_PROGRESS = "t2_progress"  # T2 vec_search завершён, top-кандидаты в reason JSON
     T3_PROGRESS = "t3_progress"  # T3 LLM-запрос начат / завершён, payload в reason
 

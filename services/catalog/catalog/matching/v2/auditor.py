@@ -73,9 +73,17 @@ async def log_change(
 
 
 _PROGRESS_ACTIONS = (
+    MatchAction.T0_PROGRESS.value,
+    MatchAction.T1_PROGRESS.value,
     MatchAction.T2_PROGRESS.value,
     MatchAction.T3_PROGRESS.value,
 )
+_PROGRESS_ACTION_SET = {
+    MatchAction.T0_PROGRESS,
+    MatchAction.T1_PROGRESS,
+    MatchAction.T2_PROGRESS,
+    MatchAction.T3_PROGRESS,
+}
 
 
 async def log_progress(
@@ -90,14 +98,17 @@ async def log_progress(
 ) -> int:
     """Записывает прогресс-строку в match_log БЕЗ изменения offer'а.
 
-    Используется воркером для отображения промежуточных стадий T2/T3 в UI
-    Штучного матчинга (live-stages). Не меняет offers.game_id / match_status.
-    `payload` — текстовое описание (например JSON с топ-кандидатами), пишется
-    в `reason` (text). `tier` — 2 для T2_PROGRESS, 3 для T3_PROGRESS.
+    Используется ingest'ом (T0/T1) и воркером (T2/T3) для отображения
+    промежуточных стадий в UI Штучного матчинга (live-stages). Не меняет
+    offers.game_id / match_status.
+
+    `payload` — текстовое описание (например JSON с топ-кандидатами или
+    короткий reason типа `"cache_miss"`), пишется в `reason`. `tier` —
+    0/1/2/3 по сответствующему action.
 
     Revert этих записей запрещён — `revert_one` отказывает с ValueError.
     """
-    if action not in (MatchAction.T2_PROGRESS, MatchAction.T3_PROGRESS):
+    if action not in _PROGRESS_ACTION_SET:
         raise ValueError(f"log_progress: action {action} не является progress-action")
     log = MatchLog(
         offer_id=offer_id,

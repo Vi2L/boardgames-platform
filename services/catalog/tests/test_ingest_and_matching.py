@@ -7,7 +7,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncEngine
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from catalog import api as api_mod
 from tests.conftest import requires_db
@@ -31,6 +31,14 @@ async def client(clean_db: None) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=api_mod.app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
+
+
+@pytest_asyncio.fixture
+async def session(engine: AsyncEngine, clean_db: None) -> AsyncIterator[AsyncSession]:
+    """Прямая БД-сессия для тестов, которые seedят данные между client-запросами."""
+    Factory = async_sessionmaker(engine, expire_on_commit=False)
+    async with Factory() as s:
+        yield s
 
 
 async def _seed_carcassonne(client: AsyncClient) -> int:
@@ -64,6 +72,65 @@ async def test_ingest_auto_matches_existing_game(client: AsyncClient):
     assert body["items"][0]["game_id"] == gid
     assert body["items"][0]["match_status"] == "auto"
     assert body["items"][0]["match_score"] >= 0.9
+
+
+async def test_ingest_writes_t0_t1_progress_on_miss(client: AsyncClient):
+    """CAT-4.7: при первом ingest с T0 cache miss + T1 ниже threshold
+    в match_log появляются t0_progress + t1_progress записи.
+    UI Штучного матчинга (SingleMatchTab) показывает их как пройденные
+    stage'и вместо `pending`/`skipped without reason`."""
+    await _seed_carcassonne(client)
+    r = await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "gaga",
+            "products": [{
+                "external_id": "p1",
+                "title": "Каркасон",  # опечатка → trgm ~0.73 < 0.92
+                "url": "https://gaga.ru/p1",
+                "price": 159000,
+            }],
+        },
+    )
+    assert r.status_code == 200
+    # T1 ниже auto_threshold → progress-entries записаны
+    log = (await client.get("/matching/log")).json()
+    actions = [item["action"] for item in log["items"]]
+    assert "t0_progress" in actions, f"t0_progress missing in {actions}"
+    assert "t1_progress" in actions, f"t1_progress missing in {actions}"
+
+
+async def test_ingest_no_progress_entries_on_t0_cache_hit(
+    client: AsyncClient, session: AsyncSession,
+):
+    """T0 cache hit — финальная auto_t0 запись пишется, прогрессы НЕ нужны
+    (T0 запись сама по себе финальная)."""
+    from catalog.matching.v2.decisions import save_decision
+    gid = await _seed_carcassonne(client)
+    # Засеваем T0 cache, чтобы следующий ingest попал в hit
+    await save_decision(
+        session, title_norm="каркассон", game_id=gid,
+        source="auto_t1", tier=1, score=0.95,
+    )
+    await session.commit()
+
+    await client.post(
+        "/ingest/offers",
+        json={
+            "store_slug": "hg",
+            "products": [{
+                "external_id": "p2",
+                "title": "Каркассон",
+                "url": "https://h.ru/p2",
+            }],
+        },
+    )
+    log = (await client.get("/matching/log")).json()
+    actions = [item["action"] for item in log["items"]]
+    # Прогрессов нет, есть только финальная auto_t0
+    assert "t0_progress" not in actions
+    assert "t1_progress" not in actions
+    assert "auto_t0" in actions
 
 
 async def test_ingest_typo_goes_to_async_queue(client: AsyncClient):
