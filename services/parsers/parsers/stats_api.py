@@ -188,6 +188,20 @@ async def debug_features():
     }
 
 
+@router.get("/api/debug/breakers")
+async def debug_breakers():
+    """Состояние per-store Circuit Breaker'ов (PRS-7).
+
+    Возвращает snapshot per-store: state ('closed'|'open'|'half_open'),
+    failure_rate в окне, events_in_window, opens_until. Использовать
+    для troubleshooting'а: если парсер падает с `circuit breaker открыт`,
+    смотреть здесь когда восстановится. Empty list если breaker'ы ещё
+    не активировались (первый поиск ещё не делался).
+    """
+    from .utils.breaker import all_breakers
+    return {"breakers": [b.snapshot() for b in all_breakers()]}
+
+
 @router.get("/api/debug/snapshots")
 async def list_snapshots(
     store: str | None = None,

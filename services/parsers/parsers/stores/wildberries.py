@@ -36,6 +36,7 @@ from urllib.parse import quote_plus, urlencode
 
 from ..base import ParserMetrics, StoreParser
 from ..models import ParsedProduct, StoreInfo
+from ..utils.breaker import get_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -133,6 +134,16 @@ class WildberriesParser(StoreParser):
         self._http_counter = 0
         self.last_metrics = None
 
+        # PRS-7: per-store breaker. После N rate-limit'ов подряд цепь
+        # открывается, search падает мгновенно с понятной ошибкой вместо
+        # тыка в Angie и накопления шума.
+        breaker = get_breaker("wildberries")
+        if not breaker.is_available():
+            raise RuntimeError(
+                f"Wildberries: circuit breaker открыт до {breaker.opens_until_iso} "
+                f"(rate-limit паттерн обнаружен)"
+            )
+
         url = self._build_url(query)
         headers = {
             **_HEADERS_BASE,
@@ -145,7 +156,9 @@ class WildberriesParser(StoreParser):
         try:
             payload = await self._fetch_json(url, headers)
         except Exception as exc:
+            breaker.record_failure(str(exc)[:200])
             raise RuntimeError(f"Wildberries: {exc}") from exc
+        breaker.record_success()
         search_ms = int((time.monotonic() - t0) * 1000)
         self._http_counter = 1
 

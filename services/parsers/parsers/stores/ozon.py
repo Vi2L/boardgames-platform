@@ -53,6 +53,7 @@ from urllib.parse import quote_plus
 from ..base import ParserMetrics, StoreParser
 from ..browser_client import BrowserClient, BrowserServiceError
 from ..models import ParsedProduct, StoreInfo
+from ..utils.breaker import get_breaker
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +95,15 @@ class OzonParser(StoreParser):
                 "Запусти `docker compose --profile browser up -d browser`."
             )
 
+        # PRS-7: per-store breaker. Ozon antibot challenge может зависнуть
+        # на минуты — fail-fast вместо 12с timeout'а на каждый запрос.
+        breaker = get_breaker("ozon")
+        if not breaker.is_available():
+            raise RuntimeError(
+                f"Ozon: circuit breaker открыт до {breaker.opens_until_iso} "
+                f"(antibot/timeout паттерн)"
+            )
+
         # Поиск внутри категории «Настольные и карточные игры» (вместо
         # глобального /search/?text=) — отсекает книги/одежду/посуду
         # с похожими словами в названии. См. docstring модуля.
@@ -111,8 +121,10 @@ class OzonParser(StoreParser):
                 profile_id=_PROFILE_ID,
             )
         except BrowserServiceError as exc:
+            breaker.record_failure(f"browser-service {exc.status_code}")
             raise RuntimeError(f"Ozon: browser-service {exc.status_code} — {exc.detail}") from exc
         except Exception as exc:
+            breaker.record_failure(str(exc)[:200])
             raise RuntimeError(f"Ozon: {exc}") from exc
         search_ms = int((time.monotonic() - t0) * 1000)
         # Считаем один внешний HTTP-вызов: внутри browser-service ходит много,
@@ -121,15 +133,19 @@ class OzonParser(StoreParser):
 
         html = result.get("html") or ""
         if not html:
+            breaker.record_failure("empty HTML")
             raise RuntimeError("Ozon: browser-service вернул пустой HTML")
 
         # Сигнал «challenge не пройден»: title всё ещё «Antibot Challenge Page».
         if "<title>Antibot Challenge Page</title>" in html:
+            breaker.record_failure("antibot challenge")
             raise RuntimeError(
                 "Ozon: antibot challenge не пройден (профиль остыл?). "
                 "Проверь browser-service и BROWSER_BACKEND."
             )
 
+        # Если дошли сюда — HTML валидный, считаем запрос успешным.
+        breaker.record_success()
         products = _parse_cards(html, limit=limit)
 
         self.last_metrics = ParserMetrics(

@@ -39,6 +39,7 @@ import time
 
 from ..base import ParserMetrics, StoreParser
 from ..models import ParsedProduct, StoreInfo
+from ..utils.breaker import get_breaker
 from .avito_qrator import AvitoQratorClient, AvitoQratorError
 
 logger = logging.getLogger(__name__)
@@ -76,13 +77,24 @@ class AvitoParser(StoreParser):
         self._http_counter = 0
         self.last_metrics = None
 
+        # PRS-7: Qrator периодически забивает endpoint challenge'ем — после
+        # серии провалов цепь открывается, search падает мгновенно.
+        breaker = get_breaker("avito")
+        if not breaker.is_available():
+            raise RuntimeError(
+                f"Авито: circuit breaker открыт до {breaker.opens_until_iso} "
+                f"(Qrator challenge паттерн)"
+            )
+
         t0 = time.monotonic()
         try:
             payload = await self._qrator.search_items(query)
         except AvitoQratorError as exc:
             # Поднимаем как RuntimeError — PriceService логирует в parser_log
             # с success=False, аналитика подхватывает.
+            breaker.record_failure(str(exc)[:200])
             raise RuntimeError(f"Авито: {exc}") from exc
+        breaker.record_success()
 
         search_ms = int((time.monotonic() - t0) * 1000)
         # Один HTTP request (или 2 если был cold-start — для метрик считаем
