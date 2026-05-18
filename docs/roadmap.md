@@ -439,8 +439,12 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   endpoint через camoufox с накопленным persistent profile. См. devlog
   2026-05-14 [AVT-CONT].
 - [PRS-4] **Удаление `services/parsers/DEPRECATED/chrome-extension/`** —
-  целевая дата **2026-05-28** (две недели стабильной работы L0). Снять
-  блокер: 14 дней `parser_log` по avito с `success=1 ratio ≥ 95%`.
+  целевая дата **2026-06-15** (перенесено с 2026-05-28). Блокер
+  ещё не снят: на 2026-05-18 14-дневный success ratio Avito L0 = 76%
+  (требуется ≥95%). Худшие дни: 2026-05-10 (33%), 2026-05-11 (60%),
+  2026-05-15 (66.7%). Перепроверить через месяц — если стабилизируется
+  на 95%+, удалить папку. Если нет — заводить PRS-3 (L2-fallback через
+  camoufox).
 - [PRS-6.1] **WB L2-fallback / Circuit Breaker для 429** — пункты 3-4 из
   закрытого PRS-6 (см. devlog 2026-05-18). Текущий exp-backoff + chrome131
   должен снизить rate 429 ниже 5% за неделю наблюдения. Если этого
