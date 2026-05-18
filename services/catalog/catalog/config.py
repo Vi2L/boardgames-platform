@@ -93,6 +93,12 @@ class Settings(BaseSettings):
     # они потенциально нужны для отката.
     match_log_retention_days: int = Field(default=90)
 
+    # CAT-4.5: cross-service URL для auto_recovery_runner — он опрашивает
+    # `/api/debug/breakers` parsers'а для condition.type='breaker_state'.
+    # Default = docker-compose service name. Если задать пустую строку,
+    # breaker-conditions автоматически False (skip).
+    parsers_base_url: str = Field(default="http://parsers:8001")
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

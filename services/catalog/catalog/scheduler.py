@@ -100,11 +100,23 @@ JOB_METADATA: dict[str, dict[str, str]] = {
             "переопределяет default."
         ),
     },
+    "auto_recovery_runner": {
+        "display_name": "Auto Recovery Runner (every 60s)",
+        "description": (
+            "CAT-4.5: читает enabled правила из `auto_recovery_rules` и "
+            "применяет действия при выполнении condition. Поддерживает "
+            "condition.type ∈ {circuit_state, breaker_state, "
+            "job_completed} и action.type ∈ {re_enqueue_skipped, "
+            "trigger_job}. Дедуп через last_triggered_at + "
+            "dedup_minutes (default 5). Interval-trigger."
+        ),
+    },
 }
 
 # Interval-jobs (не cron) — не пишутся в scheduler_configs cron_expr,
-# а используют specialized resolver. Заводим сюда: ml_health_check, match_worker.
-_INTERVAL_JOBS = {"ml_health_check", "match_worker"}
+# а используют specialized resolver. Заводим сюда: ml_health_check,
+# match_worker, auto_recovery_runner.
+_INTERVAL_JOBS = {"ml_health_check", "match_worker", "auto_recovery_runner"}
 
 
 # ── Унифицированный trigger ───────────────────────────────────────────────────
@@ -351,12 +363,32 @@ def get_tick_history(job_id: str) -> list[dict]:
     return list(_TICK_HISTORY.get(job_id, []))
 
 
+async def _auto_recovery_runner() -> None:
+    """CAT-4.5: тик auto_recovery — читает rules, применяет action'ы."""
+    import time as _time
+    from catalog.db import get_engine
+    from catalog.matching.v2.auto_recovery import run_once
+
+    SessionFactory = async_sessionmaker(get_engine(), expire_on_commit=False)
+    started = _time.monotonic()
+    error = False
+    try:
+        await run_once(SessionFactory)
+    except Exception:
+        logger.exception("auto_recovery_runner failed")
+        error = True
+    duration_ms = (_time.monotonic() - started) * 1000.0
+    _push_tick("auto_recovery_runner", duration_ms=duration_ms, error=error)
+
+
 def _interval_runner(job_id: str):
     """Возвращает runner для interval-job'а по id."""
     if job_id == "ml_health_check":
         return _ml_health_check_runner
     if job_id == "match_worker":
         return _match_worker_runner
+    if job_id == "auto_recovery_runner":
+        return _auto_recovery_runner
     raise ValueError(f"Unknown interval job_id: {job_id}")
 
 
