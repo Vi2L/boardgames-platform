@@ -440,6 +440,7 @@ docker compose exec catalog python -m catalog.cli create-key --owner parsers --s
   - `POST /matching/decisions/invalidate` с `{title_contains, only_negative}` — bulk; **400** без фильтров (защита от wipe-all).
   - Audit: пишется запись `match_log.action='invalidate'` (одно из 16 chars; `offer_id` nullable с миграции 0016 — invalidate относится к `title_norm`, не к оферу).
   - Frontend нормализация: `lib/catalog.ts:normalizeTitle` (NFKD + remove combining marks + lowercase) — эквивалент Python `domain.normalize_title`. Если эквивалентность сломается — caller получит `deleted=0` и должен использовать bulk-вариант.
+- **T0/T1 progress entries в ingest (CAT-4.7, 2026-05-18)**: ingest пишет `match_log.action='t0_progress'` (cache miss) и `t1_progress` (best score < auto_threshold, payload — JSON с top-5 кандидатов) после `match_sync()`, когда `result.tier != 0`. Раньше эти стадии были невидимы — UI SingleMatchTab показывал их как `skipped without reason`. Теперь полные live-stages: T0 cache hit/miss → T1 score/threshold/candidates → T2 (worker) → T3 (worker). `auditor._PROGRESS_ACTIONS` = (`t0_progress`, `t1_progress`, `t2_progress`, `t3_progress`); `log_progress()` принимает любой из четырёх. При T0 cache hit прогрессы НЕ пишутся — финальная `auto_t0`/`reject` запись сама описывает результат.
 
 ## Запреты
 

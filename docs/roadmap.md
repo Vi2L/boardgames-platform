@@ -102,12 +102,6 @@ _(пусто)_
   не точная. **Осталось:** новая таблица `queue_depth_snapshots(ts, pending,
   processing, skipped, failed)` + cron-job раз в минуту пишет snapshot.
   Endpoint читает оттуда. Trade-off: ~1.4MB/год (60*24*365 строк × ~40 байт).
-- [CAT-4.7] **Intermediate match_log entries в ingest для T0/T1**.
-  **Сейчас:** worker пишет `t2_progress` / `t3_progress` (`auditor.log_progress`),
-  но ingest при miss T0+T1 не пишет ничего — UI SingleMatchTab показывает
-  T0/T1 как `skipped` для re-run. **Осталось:** при `match_sync` пиcать
-  `t0_progress` (cache miss) / `t1_progress` (best score < auto_threshold)
-  в match_log с короткой meta. Это даст полные live-stages в Штучном.
 - [CAT-4.8] **Skipped-таблица hover-actions + shift-range select**.
   Handoff `06-matching-v2-improvements.md` §D.5 — в Очереди → таблица skipped:
   hover-actions (re-enqueue / view in journal / run v2), shift+click range
@@ -445,14 +439,12 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   2026-05-15 (66.7%). Перепроверить через месяц — если стабилизируется
   на 95%+, удалить папку. Если нет — заводить PRS-3 (L2-fallback через
   camoufox).
-- [PRS-6.1] **WB L2-fallback / Circuit Breaker для 429** — пункты 3-4 из
-  закрытого PRS-6 (см. devlog 2026-05-18). Текущий exp-backoff + chrome131
-  должен снизить rate 429 ниже 5% за неделю наблюдения. Если этого
-  недостаточно — добавить:
-  1. **L2-fallback через browser-service** (по аналогии с Ozon и
-     avito PRS-3): при стабильном 429 на L0 перебрасывать на camoufox
-     с persistent profile.
-  2. **Circuit breaker per-store** (см. PRS-7).
+- [PRS-6.1] **WB L2-fallback через browser-service** — последний пункт из
+  закрытого PRS-6 (см. devlog 2026-05-18). exp-backoff + chrome131 +
+  per-store Circuit Breaker (PRS-7, devlog 2026-05-18) уже сильно
+  смягчили 429. Если рейт всё равно держится >5% — при открытом
+  WB breaker'е перебрасывать на camoufox с persistent profile
+  (по аналогии с Ozon).
 
   *Метрика успеха*: rate ошибок 429 в `parser_log` падает ниже 5%.
   Без замера — не катить, иначе ловим overkill.
@@ -467,17 +459,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   (2) для MVP цены без характеристик хватает. Завести если возникнет
   потребность в WB-данных для matching v2 (T2 embeddings).
 
-- [PRS-7] **Общий per-store Circuit Breaker.** WB-проблема (PRS-6 пункт 4)
-  и Ozon timeouts показали, что breaker нужен не одному парсеру, а как
-  cross-cutting pattern. Вынести в `services/parsers/parsers/utils/breaker.py`:
-  `CircuitBreaker(store, failure_threshold=0.5, window=60s, open_for=300s,
-  half_open_probes=1)`. Half-open паттерн — как у catalog'а
-  (`docs/cat-4-matching-v2.md` §5). Использовать декоратором над `search()`
-  в `wildberries.py`, `ozon.py`, `avito_qrator.py`. После реализации
-  PRS-6 пункт 4 становится частным случаем — wildberries-circuit
-  превращается в `@circuit_breaker(store='wildberries')`. Состояние
-  держать **per-process** (не в БД) — breaker'у не нужна персистентность,
-  цель — погасить шум на 5 минут, а не координировать инстансы.
 
 ### Инфра
 - [INFRA-1] **`apps/web/`** — пользовательский веб-портал

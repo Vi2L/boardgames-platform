@@ -8,6 +8,127 @@
 
 ---
 
+## 2026-05-18 · [PRS-7] per-store Circuit Breaker для wb/ozon/avito
+
+**Что сделано:** в WB и Ozon регулярно случались пачки 429/timeout'ов
+от Angie/Qrator/antibot — без breaker'а каждый запрос тыкался в забор,
+4 retry × exp-backoff = 30+ секунд гарантированного провала на запрос,
+плюс шум в `parser_log` и UI. Заведён новый модуль
+`services/parsers/parsers/utils/breaker.py`:
+- `CircuitBreaker` со sliding-window failure rate (default
+  `failure_threshold=0.5`, `window_sec=60`, `open_for_sec=300`,
+  `min_samples=5`).
+- `closed → open` при ≥50% failures в окне 60 сек (минимум 5 событий).
+- Lazy `half_open` probe через 300с — успех закрывает цепь, провал снова
+  открывает.
+- `get_breaker(store)` — per-process singleton-registry.
+
+Применение в `search()` парсеров (WB/Ozon/Avito): проверка
+`is_available()` до запроса → `record_success()`/`record_failure()` после.
+
+Diagnostics: `GET /api/debug/breakers` — snapshot всех активированных
+breaker'ов (state, failure_rate, events_in_window, opens_until_iso).
+
+**Как пользоваться:**
+
+```bash
+# Здоровое состояние — список пуст или все 'closed'
+curl http://localhost:8001/api/debug/breakers | jq
+
+# При проблемах: state='open' + opens_until — оператор знает, когда
+# WB/Ozon снова попробует. До этого момента search падает мгновенно с
+# понятной причиной вместо 30s timeout'а.
+```
+
+**Затронутые файлы:**
+- `services/parsers/parsers/utils/{__init__,breaker}.py` (новые).
+- `services/parsers/parsers/stores/{wildberries,ozon,avito}.py`
+  (вызов `get_breaker` + record_*).
+- `services/parsers/parsers/stats_api.py` (`/api/debug/breakers`).
+- `services/parsers/tests/{conftest,test_breaker}.py` (12 юнит-тестов
+  с фейковыми часами через monkeypatch, без реального sleep).
+
+Закрывает PRS-7. Частично PRS-6.1 (L2 browser-service fallback —
+остался отдельной задачей). Коммит `780cc65`.
+
+---
+
+## 2026-05-18 · [CAT-4.7] T0/T1 progress entries в ingest
+
+**Что сделано:** worker писал `t2_progress`/`t3_progress` для UI
+Штучного матчинга (SingleMatchTab → live-stages drawer), но при
+первом ingest sync-tier'ы T0/T1 не оставляли следов в `match_log` —
+UI показывал их как `skipped without reason`. Оператор не видел,
+что T0 был cache miss и T1 нашёл best=0.85 ниже порога 0.92.
+
+Backend:
+- `MatchAction.T0_PROGRESS` / `T1_PROGRESS` в `domain.py`.
+- `auditor._PROGRESS_ACTIONS` расширен до 4 значений; `log_progress`
+  принимает любой из 4 action'ов.
+- `routers/ingest.py` после `match_sync()`, при `result.tier != 0`
+  (т.е. cache был miss), пишет:
+  - `t0_progress` с reason='cache_miss'
+  - `t1_progress` с reason=JSON {score, auto_threshold, candidates[:5]} —
+    только если T1 не дал auto (matched=False).
+
+Frontend (`SingleMatchTab.tsx`):
+- парсит `t0_progress`/`t1_progress`, помечает stage'и как `done` с
+  inline-деталями (best score, threshold, top-3 кандидатов).
+- Re-run кейс остался без регресса: T0/T1 sync-tiers не запускаются —
+  помечаем `skipped` ТОЛЬКО если нет ingest-progress записей.
+
+**Как пользоваться:** в `/matching` → Штучный → выбрать unmatched оффер
+из очереди → в правом drawer'е увидеть 4 stage'а с полной историей:
+
+```
+T0 cache lookup  done  cache miss — пошли в T1
+T1 pg_trgm       done  best 0.85 < threshold 0.92 → T2
+                       0.85  Каркассон #42
+                       0.72  Каркассон Junior #58
+T2 bge-m3 cosine running  3 кандидата (top score 0.88)
+T3 qwen LLM      pending
+```
+
+**Затронутые файлы:**
+- `services/catalog/catalog/matching/v2/{domain,auditor}.py`.
+- `services/catalog/catalog/routers/ingest.py`.
+- `services/catalog/tests/test_ingest_and_matching.py` (2 новых теста:
+  T0 miss → прогрессы пишутся; T0 hit → НЕ пишутся).
+- `services/web-test/frontend/src/components/matching/SingleMatchTab.tsx`.
+
+Коммит `2415ce8`.
+
+---
+
+## 2026-05-18 · [PRS-4] перенос даты удаления chrome-extension на 2026-06-15
+
+**Что сделано:** проверил блокер для PRS-4 (удаление
+`services/parsers/DEPRECATED/chrome-extension/`). Условие из roadmap:
+«14 дней Avito L0 с success_ratio ≥ 95%». На 2026-05-18:
+
+| Дата | success/total | Rate |
+|---|---|---|
+| 2026-05-18 | 2/2 | 100% |
+| 2026-05-17 | 18/19 | 94.7% |
+| 2026-05-16 | 14/17 | 82.4% |
+| 2026-05-15 | 14/21 | **66.7%** |
+| 2026-05-11 | 3/5 | 60% |
+| 2026-05-10 | 2/6 | **33.3%** |
+| **All-time** | **58/76** | **76.32%** |
+
+Условие не выполнено — Qrator периодически не отдаёт `_avisc` на
+cold-start. Удалять fallback преждевременно: если L0 сломается, восстанавливать
+из git history. Целевая дата перенесена в roadmap на **2026-06-15**.
+
+**Как пользоваться:** проверить ещё раз 2026-06-15. Если success_ratio
+≥ 95% за 14 дней — удалить `services/parsers/DEPRECATED/chrome-extension/`.
+Если нет — заводить PRS-3 (L2-fallback через camoufox).
+
+**Затронутые файлы:** `docs/roadmap.md` — обновлена запись PRS-4 с
+актуальной статистикой. Коммит `0373afb`.
+
+---
+
 ## 2026-05-18 · [CAT-4.4] починены ingest-тесты под matcher v2 пороги
 
 **Что сделано:** два теста ingest-флоу (`test_ingest_typo_still_matches`,
