@@ -8,6 +8,125 @@
 
 ---
 
+## 2026-05-18 · [CAT-4.4] починены ingest-тесты под matcher v2 пороги
+
+**Что сделано:** два теста ingest-флоу (`test_ingest_typo_still_matches`,
+`test_auto_match_adds_alias`) падали с момента CAT-4: они ожидали
+поведение matcher v1 (порог 0.6 → typo «Каркасон» auto-match'ится), но
+после CAT-4 порог T1 auto = 0.92, опечатка trgm ~0.73 в auto не уходит.
+Тесты переписаны под актуальную семантику:
+- `test_ingest_typo_goes_to_async_queue`: фиксирует, что typo идёт в
+  `unmatched` + push в `match_queue`.
+- `test_auto_match_adds_alias`: title в payload теперь совпадает с
+  каноничным (score 1.0 в T1) → alias добавляется как ожидается.
+
+**Как пользоваться:** не пользоваться, просто перестали мешать. Теперь
+красные тесты — настоящие регрессии, а не legacy.
+
+**Затронутые файлы:** `services/catalog/tests/test_ingest_and_matching.py`.
+Коммит `9f05e3f`.
+
+---
+
+## 2026-05-18 · [PRS-6] WB exp-backoff + chrome131 impersonate
+
+**Что сделано:** раньше парсер WB при HTTP 429 делал 1 retry × фикс. 2 сек
+и падал с `HTTP 429 (rate-limited даже после retry)`. Пользователь часто
+видел эту ошибку в UI поиска. Заменено на:
+- **Exponential backoff с jitter**: 4 попытки (1 + 3 retry),
+  `delay = 1.5 * 2**attempt + random(0, 0.5)` → 1.5/3.0/6.0с + jitter.
+  Параллельные запросы рассеиваются (jitter), Angie успевает сбросить
+  burst-counter.
+- **TLS-impersonation `chrome131`** вместо `chrome124`. JA3 ближе к
+  реальному десктопному Chrome 2026 — Angie пропускает чаще. Override
+  через env `WB_IMPERSONATE` если новый профиль начнёт капризничать.
+- **UA + Sec-Ch-Ua** подняты до Chrome 131 синхронно (иначе Angie ловит
+  расхождение между JA3 и заявленным браузером).
+
+**Как пользоваться:** просто пользоваться WB-поиском. Через неделю
+наблюдения проверить rate 429 в `parser_log` — должен упасть. Если
+нет — откатить через `WB_IMPERSONATE=chrome124` в env.
+
+**Затронутые файлы:** `services/parsers/parsers/stores/wildberries.py`,
+`services/parsers/tests/test_wildberries_parser.py`. Коммит `c9d2fa2`.
+
+---
+
+## 2026-05-18 · [CAT-11] retention scheduler-job для match_log (90 дней)
+
+**Что сделано:** `match_log` рос неограниченно — каждый `reassess-all`
+писал тысячи строк, и cleanup-script reset_mismatched из CAT-FILTER
+добавлял ещё. Через несколько месяцев таблица стала бы миллионной без
+пользы для аудита. Заведён новый APScheduler-job `match_log_retention`:
+- cron `0 2 * * *` (ежедневно 02:00 UTC), сид в миграции 0015.
+- удаляет записи старше `Settings.match_log_retention_days` (default 90).
+- **сохраняет** активные auto-match'и (`reverted_at IS NULL AND
+  action != 'revert'`) — они нужны для возможности будущего revert.
+- ImportJob (`type='match-log-retention'`) пишет в payload
+  `{retention_days, deleted, error}` — UI sched-history показывает
+  результат в `/import/jobs?type=match-log-retention`.
+
+**Как пользоваться:** job сам стартует по cron'у. Проверить, что работает:
+```bash
+# Через сутки после деплоя
+curl http://localhost:8002/import/jobs?type=match-log-retention | jq '.[0]'
+# {"status": "done", "payload": {"deleted": N, "retention_days": 90}}
+```
+Ручной прогон через UI `/bgg-sync` → выбрать job → «Запустить сейчас».
+Override параметра — PATCH cron'а или params в `scheduler_configs`.
+
+**Затронутые файлы:**
+- `services/catalog/catalog/matching/v2/auditor.py` (новая
+  `evict_older_than(session, days)` — один SQL DELETE).
+- `services/catalog/catalog/scheduler.py` (`JOB_METADATA` +
+  `_resolve_handler` ветка + `_run_match_log_retention` runner).
+- `services/catalog/catalog/config.py` (`match_log_retention_days: int = 90`).
+- `services/catalog/alembic/versions/20260518_0015_match_log_retention.py`.
+- `services/catalog/tests/test_matching_v2_integration.py`.
+Коммит `3098cc3`.
+
+---
+
+## 2026-05-18 · [CAT-12] инвалидация Tier 0 кэша (decisions) — API + UI
+
+**Что сделано:** записи `match_decisions` с `game_id=null` (negative
+cache от reject и LLM `not_a_boardgame`) жили до TTL (7 дней для auto_t3,
+бессрочно для manual). Если LLM ошибочно reject'нул популярную игру —
+оператор не мог пересмотреть без прямого SQL DELETE. После CAT-FILTER
+(2026-05-18) это стало критичнее: LLM теперь финально reject'ит
+не-настолки. Сделано:
+- `DELETE /matching/decisions/{title_norm}` — точечная инвалидация +
+  audit-запись `action='invalidate'` в `match_log`.
+- `POST /matching/decisions/invalidate` — bulk c body
+  `{title_contains?: str, only_negative?: bool}`. Защита от accidental
+  wipe-all — без фильтров 400.
+- Миграция 0016: `match_log.offer_id → nullable` (invalidate работает
+  на уровне title_norm, не привязан к оферу).
+- UI: кнопка `cache` (Trash2 + текст) рядом с `action`-колонкой в
+  MatchLog для строк `reject` и `auto_t3` — confirm-диалог,
+  `normalizeTitle(title_raw)` на фронте (эквивалент Python NFKD+lower),
+  мутация, toast «инвалидирован / не найден», invalidate query.
+- Новая опция `invalidate (T0 cache)` в фильтре action для просмотра
+  истории.
+
+**Как пользоваться:** в web-test UI открыть Catalog → Журнал матчинга,
+найти ошибочный reject или auto_t3 → кликнуть **cache** в колонке
+`action` → подтвердить → следующий ingest того же title прогонит
+matching заново.
+
+**Затронутые файлы:**
+- catalog: `matching/v2/decisions.py` (`invalidate_bulk`),
+  `matching/v2/domain.py` (`MatchAction.INVALIDATE`), `models.py`
+  (offer_id nullable), `routers/matching.py` (2 endpoints + schemas).
+- web-test: `app/catalog_client.py` + `app/api/catalog.py` (proxy).
+- frontend: `lib/catalog.ts` (`normalizeTitle`, `invalidateDecision`,
+  `invalidateDecisionsBulk`), `components/catalog/MatchLogTab.tsx`
+  (кнопка + фильтр).
+- `services/catalog/alembic/versions/20260518_0016_match_log_invalidate.py`.
+Коммит `4ffd5e6`.
+
+---
+
 ## 2026-05-18 · [CAT-FILTER] фильтр «только настолки» на 3 слоях (parsers + ingest + LLM)
 
 **Что сделано:** трёхслойная защита от не-настольных товаров. Раньше на

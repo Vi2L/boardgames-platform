@@ -275,6 +275,7 @@ parsers/catalog с error mapping. Свои данные живут в локал
 | `/catalog/games/merge` | Merge двух игр | catalog |
 | `/catalog/import/{bgg,tesera}`, `/catalog/import/jobs/{id}` | BGG/Tesera импорт + polling | catalog |
 | `/catalog/matching/{queue,stats,candidates,{id}/{link,reject,reassess},reassess-all}` | Матчинг + dashboard | catalog |
+| `DELETE /catalog/matching/decisions/{title_norm}`, `POST /catalog/matching/decisions/invalidate` | Инвалидация T0 cache (CAT-12) | catalog |
 | `/health`, `/health/all` | Health-check (deep) | оба + локально |
 
 ## Dependencies

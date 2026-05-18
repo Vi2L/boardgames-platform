@@ -84,15 +84,6 @@ _(пусто)_
   «expansion»/«big box» в title; передавать `kind_filter` в `vec_search_top_k`
   ещё до первого embed-вызова. Точка вставки: `engine.py:103` перед
   `tier_2_vector`. Сэкономит embed-вызовы на офферах, где kind виден из title.
-- [CAT-4.4] **Legacy ingest-тесты под matcher v2 пороги**.
-  **Статус:** `test_ingest_typo_still_matches` (`tests/test_ingest_and_matching.py:69-91`)
-  **падает** — комментарий ожидает «trgm ~0.73 > порог 0.6», реальный
-  порог сейчас 0.92.
-  **Варианты исправления:** (a) переписать ожидания под
-  `match_status='unmatched'` + проверку push в `match_queue` (тогда тест
-  фиксирует поведение «typo больше не auto-T1, идёт в ML/manual»),
-  (b) переключить тесты на pre-seeded T0 cache для детерминированности
-  (`match_decisions` с готовым `game_id` ловит typo через cache hit).
 - [CAT-4.5] **Auto-recovery rules runner**.
   **Готово:** таблица `auto_recovery_rules` (миграция 0014), CRUD endpoints
   (`routers/auto_recovery.py`), UI секция в `/matching → Очередь` с create/toggle/delete.
@@ -205,30 +196,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   *UI* в `/bgg-sync` → вкладка «Расписание» автоматически покажет новый job
   благодаря registry-паттерну. Лог обогащения — в существующей вкладке
   «История» с фильтром `type=bgg-yearly`.
-
-### Catalog (audit log + cache hygiene)
-
-- [CAT-11] **Audit log retention.** `match_log` растёт неограниченно: один
-  `reassess-all` пишет тысячи строк, повторных пересчётов в неделю — десятки.
-  Завести eviction: APScheduler-job `match_log_retention` (раз в сутки)
-  удаляет строки **старше 90 дней** по `created_at`, **кроме** ещё не
-  реверченных (`reverted_at IS NULL AND action != 'revert'` сохраняем —
-  потенциально нужны для отката). ENV: `MATCH_LOG_RETENTION_DAYS=90`.
-  Точка реализации: `catalog/scheduler.py` + новый репозиторий-метод
-  `auditor.evict_older_than(days=90)`. Перед удалением — `COUNT(*)` в
-  лог для аудита. Связано с CAT-12 (negative cache тоже стоит чистить).
-
-- [CAT-12] **Negative cache invalidation API.** Сейчас `match_decisions`
-  с `game_id IS NULL` (negative cache, источник `manual` от `reject`)
-  живёт **бессрочно** (`ttl_days = NULL`) — оператор может пересмотреть
-  решение только руками через SQL `DELETE`. См. ограничение в
-  `docs/cat-4-matching-v2.md` §10.
-  - `DELETE /matching/decisions/{title_norm}` — точечная инвалидация.
-  - `POST /matching/decisions/invalidate` body
-    `{store: "...", title_contains: "...", only_negative: true}` —
-    bulk-вариант для случая «оператор переслушал политику reject'ов».
-  - UI: в `MatchLog` рядом со строкой `reject` — кнопка «Invalidate decision».
-  Audit: каждая инвалидация → запись в `match_log` с `action='invalidate_decision'`.
 
 ### web-test
 
@@ -474,49 +441,20 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [PRS-4] **Удаление `services/parsers/DEPRECATED/chrome-extension/`** —
   целевая дата **2026-05-28** (две недели стабильной работы L0). Снять
   блокер: 14 дней `parser_log` по avito с `success=1 ratio ≥ 95%`.
-- [PRS-6] **WB парсер — устойчивость к 429** — текущая реализация
-  `search_async` в `services/parsers/parsers/stores/wildberries.py:151-165`
-  делает всего **1 retry через фиксированные 2 сек** и падает с
-  `RuntimeError("HTTP 429 (rate-limited даже после retry)")`. В проде
-  WB стабильно режет DC-IP — пользователь часто видит эту ошибку.
+- [PRS-6.1] **WB L2-fallback / Circuit Breaker для 429** — пункты 3-4 из
+  закрытого PRS-6 (см. devlog 2026-05-18). Текущий exp-backoff + chrome131
+  должен снизить rate 429 ниже 5% за неделю наблюдения. Если этого
+  недостаточно — добавить:
+  1. **L2-fallback через browser-service** (по аналогии с Ozon и
+     avito PRS-3): при стабильном 429 на L0 перебрасывать на camoufox
+     с persistent profile.
+  2. **Circuit breaker per-store** (см. PRS-7).
 
-  *Симптом*: `Wildberries: HTTP 429 (rate-limited даже после retry)` в
-  UI поиска / Live Test.
-
-  *Гипотезы причин*:
-  - 2 сек backoff слишком короткий — Angie дросселирует на 10-30 сек.
-  - curl-cffi с `chrome124` устарел (Chrome ушёл вперёд → JA3 не матчит
-    реальный браузер); попробовать `chrome131` / `chrome133`.
-  - DC-IP домашнего датацентра в чёрном списке WB — нужен residential
-    прокси или fallback через browser-service.
-
-  *План реализации (от дешёвого к дорогому)*:
-  1. **Exponential backoff с jitter** вместо фиксированных 2 сек:
-     `delay = base * 2**attempt + random(0, jitter)`, 3-4 попытки,
-     base=1.5, max ~30 сек. Использовать существующий `_get_with_backoff`
-     паттерн из других парсеров (если он там устаканен), либо новый
-     helper в `parsers/utils/backoff.py`.
-  2. **Обновить `impersonate`**: попробовать `chrome131`/`safari17` через
-     `WB_BACKEND` env-флаг, замерить rate 429 на staging. Сейчас зашит
-     `chrome124` (`wildberries.py:183`).
-  3. **L2-fallback через browser-service** (по аналогии с Ozon
-     `feat(parsers): [PRS-OZ]` и avito PRS-3) — при стабильном 429 на L0
-     перебрасывать на camoufox с persistent profile, который копит cookies
-     и проходит через JS-challenge Angie. Browser-service уже поднят как
-     отдельный контейнер (`services/browser-service/`) — переиспользовать
-     ту же ручку, что у Ozon.
-  4. **Circuit breaker per-store**: если за последние N запросов rate
-     ошибок > 50% — открывать breaker на 5 мин и сразу возвращать
-     `ParserError("WB temporarily disabled")` вместо тыка в забор.
-     Уменьшит шум в UI и логах. Структура breaker'а уже есть в catalog
-     (`CAT-4` half-open) — переиспользовать паттерн.
-
-  *Метрика успеха*: rate ошибок 429 в `parser_log` (table в parsers-БД)
-  падает ниже 5% за неделю. Без замера — не катить в прод; добавить
-  метрику до начала работ.
+  *Метрика успеха*: rate ошибок 429 в `parser_log` падает ниже 5%.
+  Без замера — не катить, иначе ловим overkill.
 
   *Зависимости*: WT-F10 пункт «Headless rate-limit tester» — удобно
-  иметь UI-инструмент для калибровки backoff'а до выкатки.
+  иметь UI-инструмент для калибровки до выкатки.
 
 - [PRS-5] **WB enrichment через `card.wb.ru/cards/v{N}/detail`** — search
   даёт только цену/название/бренд/рейтинг. Через `card.wb.ru` доступны
