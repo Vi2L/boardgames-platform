@@ -8,6 +8,110 @@
 
 ---
 
+## 2026-05-18 · [CAT-8] BGG-families — связанные серии игр
+
+**Что сделано:** новые таблицы `bgg_families` + `bgg_family_members`
+(миграция 0019) с partial-FK на `games` (game_id опционален — позволяет
+записать членов семьи до их thing-импорта). Парсер `<link
+type="boardgamefamily">` в `parse_thing_xml` пишет связки автоматически
+при каждом enrich'е. Новый XML-эндпоинт `BggClient.fetch_family` +
+`parse_family_xml` для `/xmlapi2/family/{id}`. Два механизма
+обогащения работают параллельно:
+- **Cascade при enrich_one** — после успешного thing-импорта fire-and-forget
+  `asyncio.create_task` обходит все families игры, для отсутствующих в catalog
+  членов вызывает `enrich_one(cascade=False)` (защита от рекурсии). Module-level
+  set удерживает strong reference, что гарантирует не-GC'нутость task'а.
+- **Scheduler-job `bgg_family_refresh`** (вс 05:00 UTC) — round-robin по
+  `fetched_at` ASC, обходит `max_families=100` самых старых семей, обновляет
+  description + members. `upsert_family` через COALESCE — не затирает уже
+  связанные `game_id=NULL` поверх.
+
+Runtime-flag `bgg_family_cascade_enabled` (миграция 0019 сидит TRUE) — UI
+editable toggle через `PATCH /admin/runtime-flags/bgg_family_cascade_enabled`.
+`GET /games/{id}` отдаёт `families: list[BggFamilyOut]` со списком известных
+в catalog членов.
+
+**Как пользоваться:** открыть карточку любой игры в `/catalog` → раскрыть
+секцию «BGG-серии» — другие игры серии кликабельны (SPA-navigation на
+карточку). Запустить refresh вручную: `/bgg-sync` → tab Расписание → job
+`bgg_family_refresh` → «Запустить». Включить/выключить cascade в Global
+BGG Settings секции (после миграции 0019 toggle becomes editable).
+
+**Затронутые файлы:** `services/catalog/alembic/versions/20260518_0019_bgg_families.py`,
+`services/catalog/catalog/models.py` (BggFamily, BggFamilyMember),
+`services/catalog/catalog/parsers/bgg/{client,parser,models,repository,service}.py`,
+`services/catalog/catalog/importers/bgg_family.py`,
+`services/catalog/catalog/routers/games.py` (families в GameDetailOut),
+`services/catalog/catalog/scheduler.py` (JOB_METADATA + _resolve_handler),
+`services/web-test/frontend/src/lib/catalog.ts` (типы),
+`services/web-test/frontend/src/components/catalog/{FamiliesCard,GameDetailDrawer}.tsx`.
+
+---
+
+## 2026-05-18 · [CAT-10] bgg_yearly_releases — scheduler-job для новинок года
+
+**Что сделано:** новый scheduler-job (1-е число месяца, 02:00 UTC) скрейпит
+HTML страницы `boardgamegeek.com/browse/boardgame?yearpublished=YYYY&sort=numvoters`
+— XML API не отдаёт обе оси одновременно. Реализация:
+`catalog/parsers/bgg/browse.py` (BeautifulSoup-парсер строк `<tr id="row_">`,
+`findall[-1]` для года защищён от названий вида «1984 (Orwell) (2023)»),
+`BggClient.fetch_browse_year` (User-Agent под Chrome, без Bearer'а — для
+HTML страниц не требуется), `catalog/importers/bgg_yearly.py` через
+стандартный `run_import_job_skeleton`. Дефолт `year=null` (runtime UTC
+резолвится при каждом запуске — никаких ручных правок в январе нового
+года), `max_pages=5` (топ-500).
+
+**Как пользоваться:** автоматический запуск раз в месяц. Запуск вручную:
+`/bgg-sync` → tab Расписание → job `bgg_yearly_releases` → «Запустить».
+Через UI можно поменять `year` (фиксировать на конкретный) или `max_pages`
+(до 10 = топ-1000) — schema-driven форма из WT-F7.
+
+**Затронутые файлы:**
+`services/catalog/alembic/versions/20260518_0018_bgg_yearly_releases.py`,
+`services/catalog/catalog/parsers/bgg/browse.py` (новый),
+`services/catalog/catalog/importers/bgg_yearly.py` (новый),
+`services/catalog/catalog/parsers/bgg/client.py` (fetch_browse_year),
+`services/catalog/catalog/scheduler.py` (JOB_METADATA),
+`services/catalog/tests/{test_bgg_browse.py,fixtures/bgg_browse_2025.html}`.
+
+---
+
+## 2026-05-18 · [WT-F7] Schema-driven форма scheduler-job'ов
+
+**Что сделано:** заменил JSON-textarea в `CronEditor` на динамическую форму
+по `params_schema: list[FieldSpec]` из бэка. `JOB_METADATA` теперь хранит
+описание каждого поля (тип int/float/bool/string/enum, label, description,
+default, min/max, required) и `validate_params_against_schema` валидирует
+payload в `PATCH /scheduler/jobs/{id}` (coerce строк к типам, range/enum,
+None для optional/required). `cron`-input получил 9 пресетов и
+human-readable preview через `cronstrue` с RU-локалью. Над списком job'ов:
+- **Global BGG Settings** — read-only badge bearer token (set/not set),
+  family-cascade toggle (editable после CAT-8 миграции 0019), rate-limit.
+- **Bulk actions toolbar** — pause-all / resume-all / trigger-overdue с
+  best-effort hot-reload каждого job'а (ошибки не блокируют остальные).
+
+Бэк-валидация защищает от out-of-range через REST даже если фронт-форма
+позволяет; legacy job'ы без `params_schema` получают JSON-textarea
+fallback (backward-compat).
+
+**Как пользоваться:** открыть `/bgg-sync` → tab «Расписание». Каждый job
+имеет кнопку «Настроить» с типизированными полями и cron-пресетами.
+Сверху — карточка Global BGG Settings и кнопки bulk-операций.
+
+**Затронутые файлы:** `services/catalog/catalog/scheduler.py` (FieldSpec +
+расширенный JOB_METADATA + validate_params_against_schema),
+`services/catalog/catalog/schemas.py` (SchedulerJobOut.params_schema +
+SchedulerBulkActionOut), `services/catalog/catalog/routers/scheduler.py`
+(bulk endpoints + валидация в PATCH), `services/catalog/catalog/routers/runtime_flags.py`
+(GET /admin/runtime-flags/bgg), `services/catalog/catalog/config.py`
+(заготовка под CAT-8 settings),
+`services/web-test/app/{api/bgg_sync,catalog_client}.py` (proxy),
+`services/web-test/frontend/src/lib/bgg-sync.ts` (типы + API),
+`services/web-test/frontend/src/components/bgg-sync/{CronInput,SchemaForm,GlobalBggSettings,SchedulerHealth}.tsx`,
+`services/web-test/frontend/package.json` (cronstrue ^2.59.0).
+
+---
+
 ## 2026-05-18 · [CAT-4.5] auto_recovery_runner — runner для auto-правил
 
 **Что сделано:** таблица `auto_recovery_rules` (миграция 0014) + CRUD

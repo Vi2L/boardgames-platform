@@ -104,36 +104,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 `<statistics>`, `<poll>`, `<versions>`, `<link type="boardgamefamily">`
 и `<link type="boardgameartist">` — см. пункты ниже.
 
-- [CAT-8] **BGG `/family/{id}` — серии игр + подтягивание всех членов** —
-  endpoint возвращает thing-id связанных игр (Catan, Carcassonne, Splendor
-  series, Wingspan и т.п.). Реализуется в две стадии:
-
-  *Структура хранения*: новая таблица `bgg_families (id, bgg_family_id, name,
-  description, fetched_at)` + связь `bgg_family_members (family_id, game_id,
-  bgg_id)`. В `/thing` каждая игра имеет `<link type="boardgamefamily" value="...">` —
-  парсить и резолвить в family_id. UI: показ «другие игры серии» в карточке
-  (близко к функционалу parent_game_id, но горизонтально вместо иерархии).
-  Также может помочь матчингу — игры одной серии часто путаются.
-
-  *Подтягивание членов серии — два механизма работают параллельно*:
-  - **Cascade-import при первом обогащении.** После успешного `enrich_one(bgg_id)`
-    в `parsers/bgg/service.py`: если у игры были `boardgamefamily` linked,
-    запустить fire-and-forget background task через `asyncio.create_task` —
-    `fetch_family(family_id)`, для каждого thing-id отсутствующего в каталоге
-    вызвать `enrich_one(bgg_id)` с rate-limit (1 req/sec). Защита от рекурсии:
-    cascade сам не запускает следующий cascade (флаг в kwargs).
-  - **Scheduler-job `bgg_family_refresh`.** Раз в неделю обходит ВСЕ известные
-    families в БД, тянет свежий `/family/{id}`, сравнивает members со
-    `bgg_family_members`, для новых thing-id запускает `enrich_one`. Закрывает
-    кейс «вышел Wingspan: Asia через месяц после нашего импорта Wingspan» —
-    cascade при первом импорте не знал об этом.
-
-  *Конфиг*: добавить в `scheduler_configs` запись `bgg_family_refresh` (cron
-  по умолчанию `0 5 * * 0` — воскресенье 05:00 UTC). Параметры через JOB_METADATA
-  registry, ImportJob-паттерн `run_family_refresh_job`. Cascade — не отдельный
-  scheduler-job, а часть `enrich_one`, отключаемая через Settings-флаг
-  `BGG_FAMILY_CASCADE_ENABLED` (default true).
-
 - [CAT-9] **BGG `/thing?versions=1` — русские издания** — флаг
   `versions=1` в `/thing` добавляет `<versions><item type="boardgameversion">`
   с полями `<name>`, `<yearpublished>`, `<productcode>`, `<width>/<length>/
@@ -143,41 +113,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   не всегда explicit, часто через publisher (Hobby World, Звезда, GaGa).
   Хранить в новой таблице `bgg_versions (game_id, bgg_id, version_id,
   language, year, publisher, productcode, dimensions, ...)`.
-
-- [CAT-10] **Yearly releases sync — новинки текущего года**.
-  ⚠ **Уже сделана узкая часть** (коммит `0b70825` — `year_in` селектор для
-  ручного batch-enrich). Осталась автоматическая часть: HTML-скрейп +
-  scheduler-job для регулярного импорта новинок без участия оператора.
-
-  BGG XML API не даёт фильтр по году публикации и сортировку по
-  `numvoters`/`numplays`, оба необходимы для отбора «новых заметных игр».
-  Решение — HTML-скрейп страницы
-  `https://boardgamegeek.com/browse/boardgame?sort=numvoters&yearpublished=YYYY`
-  (10 страниц × 100 игр = топ-1000 новинок года).
-
-  *Парсер*: BeautifulSoup-парсер строк `<tr id="row_">` в tbody таблицы —
-  thing-id из `<a href="/boardgame/X/...">`, title, year, rating. Для thing-id
-  отсутствующих в каталоге — `enrich_one`. Никаких новых таблиц: записи
-  попадают в обычный `games` + `game_bgg` через стандартный enrich.
-
-  *Scheduler*: новый job `bgg_yearly_releases` (раз в месяц, например `0 2 1 * *`
-  — первое число месяца, 02:00 UTC). Параметры `params.year` (default — текущий
-  UTC-год через runtime-вычисление), `params.max_pages` (default 5 = топ-500).
-
-  *Риски HTML-скрейпа*:
-  - Вёрстка BGG может измениться → парсер сломается. Mitigation: фикстура
-    `tests/fixtures/bgg_browse_2025.html` для unit-теста парсера; при росте
-    rate failure'ов в логах — алерт.
-  - Anti-bot защиты на browse-страницах. Mitigation: запросы с User-Agent
-    реального браузера, mild rate-limit (3-5 сек/стр), retry через
-    `_get_with_backoff`-аналог для HTTP 429/503.
-  - Bearer token нужен для XML API, но для HTML-страниц `/browse/*` —
-    проверить в smoke-тесте (по обсуждениям BGG-форума работает без токена,
-    но это не задокументировано).
-
-  *UI* в `/bgg-sync` → вкладка «Расписание» автоматически покажет новый job
-  благодаря registry-паттерну. Лог обогащения — в существующей вкладке
-  «История» с фильтром `type=bgg-yearly`.
 
 ### web-test
 
@@ -237,50 +172,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   *Не входит*: переезд `/sources` в `/debug` — это разные домены
   (источники = «что подключено», debug = «как это диагностировать»).
 
-**BGG Sync UI**
-- [WT-F7] **Удобное редактирование всех настроек BGG Sync** —
-  на `/bgg-sync` сейчас редактируются только `cron_expr` + `enabled`
-  + сырая JSON-строка `params` (`SchedulerHealth.tsx:CronEditor`).
-  Остальные настройки разбросаны: BGG bearer token и
-  `BGG_FAMILY_CASCADE_ENABLED` — только через ENV/Settings,
-  Hotness/GeekList запускаются без явного UI для расписания
-  обновления. Цель — единая «панель настроек» вкладки.
-
-  *Объём* (что должно стать редактируемым из UI):
-  - Per-job динамическая форма вместо textarea с JSON. Источник схемы —
-    JOB_METADATA registry на бэке (`services/catalog/.../scheduler/jobs.py`):
-    добавить `params_schema: list[FieldSpec]` (тип, default, label,
-    description, validation), endpoint `/api/scheduler/jobs/{id}/schema`
-    или включить schema в payload `fetchSchedulerJobs`. Рендер —
-    `<SchemaForm fields={...}>` с типами `int`/`bool`/`string`/`enum`/
-    `cron`. Эта же схема валидирует payload в `rescheduleJob`.
-  - Cron-builder помимо raw expr: пресеты («каждый час», «ежедневно
-    в HH:MM UTC», «по воскресеньям 05:00 UTC») + human-readable preview
-    («Раз в неделю, воскресенье 05:00 UTC → следующий запуск …»).
-    Библиотека-кандидат: `cronstrue` (lightweight, i18n включает RU).
-  - Global Settings-секция в шапке вкладки: BGG bearer token (masked),
-    `BGG_FAMILY_CASCADE_ENABLED` toggle, rate-limit (req/sec) для cascade.
-    Бэк: расширить `/api/settings` (catalog) под whitelist BGG-ключей,
-    UI — отдельная карточка `<BggGlobalSettings>` сверху над списком job'ов.
-  - Bulk actions: «pause all», «resume all», «trigger all overdue»
-    (когда `next_run_at < now() - cron-interval`).
-
-  *Не входит*: миграция Hotness/GeekList панелей под общую форму —
-  они уже имеют собственные триггеры (`HotnessPanel.tsx`,
-  `GeeklistPanel.tsx`); им добавится только blok «расписание»
-  если эти job'ы появятся в `JOB_METADATA`.
-
-  *Зависимости*: CAT-8/CAT-9/CAT-10 добавят новые job'ы
-  (`bgg_family_refresh`, `bgg_yearly_releases`) с нетривиальными
-  параметрами — без schema-driven формы каждый из них принесёт
-  правку фронта руками. Делать WT-F7 **до** ландинга CAT-10
-  выгоднее, чем потом ретрофитить три формы сразу.
-
-  *Риски*: schema-driven формы соблазняют переусложнить (валидация
-  cross-field, conditional fields). Держаться минимума: тип + label
-  + description + default + simple required-flag. Cross-field
-  валидация — на бэке в момент `rescheduleJob`.
-
 **Кросс-страничные UX-паттерны**
 - [WT-F12] **Bulk-actions sticky toolbar pattern.** Базовый примитив
   `components/ui/Toolbar.tsx` уже есть, но применён точечно. Привести
@@ -295,6 +186,24 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка
   invalidate для cache-keys одного домена вместо ручного
   перечисления в каждой mutation.
+- [CAT-13] **Вынести общий enrich-loop в `catalog/importers/_enrich_loop.py`**.
+  Сейчас один и тот же цикл (per-bgg_id `enrich_one` + `await session.commit()`
+  + `try/except errors += 1` + `asyncio.sleep(rate_limit_sec)`) повторяется
+  трижды: `bgg_geeklist.py`, `bgg_yearly.py`, `bgg_family.py` + базовая
+  версия в `service._cascade_family_enrich`. Целевая API:
+  `enrich_missing_bgg_ids(missing, session_factory, client, *, rate_limit_sec,
+  log, context) -> tuple[int_imported, int_errors]`. Все 4 сайта схлопнутся
+  до 2 строк. Trigger: при добавлении 5-го importer'а (например, CAT-9 versions).
+- [CAT-14] **`BggClient.maybe(client)` контекст-менеджер**. Паттерн
+  `own_client = client is None; if own_client: await client.__aenter__()`
+  с зеркальным `__aexit__` повторяется в `search_games`, `enrich_one`,
+  `enrich_batch`, `run_yearly_releases_sync`, `run_family_refresh_sync`,
+  `run_geeklist_sync`. Хелпер `@asynccontextmanager` упрощает все шесть
+  мест до `async with BggClient.maybe(client) as c: ...`.
+- [CAT-15] **`catalog/utils/time.py:utcnow()`**. Сейчас `_utcnow()` /
+  `_current_utc_year()` дублируются в `scheduler.py`, `bgg_family.py`,
+  `bgg_yearly.py`, `bgg_geeklist.py`. Один общий модуль; тривиальный
+  cleanup, делается при следующем касании любого из этих файлов.
 
 ### Parsers
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,
