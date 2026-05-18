@@ -84,18 +84,6 @@ _(пусто)_
   «expansion»/«big box» в title; передавать `kind_filter` в `vec_search_top_k`
   ещё до первого embed-вызова. Точка вставки: `engine.py:103` перед
   `tier_2_vector`. Сэкономит embed-вызовы на офферах, где kind виден из title.
-- [CAT-4.5] **Auto-recovery rules runner**.
-  **Готово:** таблица `auto_recovery_rules` (миграция 0014), CRUD endpoints
-  (`routers/auto_recovery.py`), UI секция в `/matching → Очередь` с create/toggle/delete.
-  **Осталось:** scheduler-job `auto_recovery_runner` (раз в минуту) который
-  читает `enabled=true` правила, проверяет condition против актуального
-  ml-status/job-status и выполняет action. Сейчас правила сохраняются
-  «armed but not executing». MVP типов condition:
-  `{type: 'circuit_state', model, becomes: 'closed'}`,
-  `{type: 'job_completed', type: 'warmup-embeddings', status: 'done'}`.
-  Actions: `{type: 're_enqueue_skipped', filters: {reason?, store_slug?}}`,
-  `{type: 'trigger_job', job_id: str}`. Дедуп — через `last_triggered_at`
-  + минимальный interval (например 5 минут).
 - [CAT-4.6] **Snapshot-таблица queue_depth для точного `depth_history`**.
   **Сейчас:** `GET /matching/queue/depth` реконструирует depth по
   `created_at`/`processed_at` (`queue_repo.depth_history`) — аппроксимация,
@@ -200,100 +188,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   `CATALOG_API_KEY` (catalog запущен с `REQUIRE_AUTH=1`).
 
 **Поиск**
-- [WT-F11] **Группировка результатов по игре**.
-  ⚠ **Семантический дрейф:** коммиты `de24cce`/`c9dd058`/`1de0edf` от
-  2026-05-16 имеют label `[WT-F11]`, но содержательно относятся к
-  редизайну админ-панели матчинга (см. `docs/web-test-redesign-brief.md`),
-  а **не** к группировке результатов поиска. Сама эта задача
-  (`GroupedResultsTable` в SearchPage) ещё не начата. В будущих коммитах
-  под admin-panel-редизайн использовать другой label, чтобы не путать.
-
-  Сейчас `ResultsTable`
-  (`frontend/src/components/search/ResultsTable.tsx`) рисует плоский
-  список `ProductOut[]`: один и тот же «Каркассон» из 6 магазинов = 6
-  строк с разными названиями (HG: «Каркассон. Базовый набор»,
-  WB: «Carcassonne настольная игра CGA1001», Avito: «Каркассон новый
-  в плёнке»). Нужна одна строка с агрегатами + раскрытие со списком
-  магазинов/цен.
-
-  *Цель UX*:
-  - Одна строка на «игру» с колонками: title (каноничный), **min/max
-    цены среди магазинов**, **кол-во магазинов в наличии**, sparkline
-    разброса (опционально).
-  - Клик/тап → раскрытие inline-блока (или drawer) с текущей таблицей
-    как «sub-rows»: магазин / цена / sale-бейдж / loyalty / link.
-  - Кнопка-переключатель в `SearchForm`: «Группировать по игре / Плоский
-    список» — плоский остаётся для дебаг-сценариев (это же debug-портал).
-  - Несгруппированные «осиротевшие» офферы (catalog не смог сматчить) —
-    отдельная секция внизу «Не сматчено (N)», тоже раскрываемая.
-
-  *Архитектурная развилка — как определять «одинаковая игра»*:
-
-  - **Вариант A (frontend-only fuzzy)**: использовать существующий
-    `lib/similarity.ts` (Jaccard по токенам) + порог. Дёшево (0 backend
-    изменений), но путает «Каркассон» с «Каркассон: Замки и крепости» —
-    expansion'ы склеит с base. Подходит как **MVP / fallback**, когда
-    catalog недоступен.
-  - **Вариант B (catalog batch-lookup)**: новый endpoint
-    `POST /catalog/matching/lookup-batch` (catalog) — **не путать с уже
-    реализованным `/matching/offers/search`**, это fuzzy-lookup offer'ов
-    по title для admin-UI, а нужен **батч-резолв game_id для списка
-    title'ов из поиска**. Принимает
-    `[{store_slug, title, url, price_rub}]`, возвращает массив
-    `[{idx, game_id, game_title_ru, match_score, match_tier}]` либо
-    `null` для не-сматченных. Внутри переиспользует `MatchEngine`
-    (`services/catalog/catalog/matching/engine.py`) — T0 cache hit
-    через `match_cache` для уже виденных пар (store, title), T1/T2 для
-    новых. Этот же путь уже работает в `/ingest/offers`, просто без
-    записи в `offers` (read-only режим). **Это правильное направление.**
-  - **Вариант C (parsers возвращает game_id)**: parsers сам зовёт catalog
-    при отдаче результата. Нарушает изоляцию parsers ↔ catalog, добавляет
-    catalog в hot-path SSE-поиска (повышает latency). **Не делать.**
-
-  *План реализации (рекомендуется B + A fallback)*:
-  1. **Backend (catalog)**: `POST /matching/lookup` (admin? или public —
-     решить по auth). Принимает батч, возвращает резолв через
-     `MatchEngine.match_offer(...)` в режиме `dry_run=True` (не пишет
-     в `match_cache`, либо пишет с TTL). Лимит батча 100. Кеш в Redis
-     по `(store_slug, normalized_title)` на 1 час — поиск часто повторяет
-     те же офферы.
-  2. **Backend (web-test)**: `app/api/search.py` после получения всех
-     результатов SSE — финальный батч-вызов в `catalog_client.lookup(...)`,
-     отдаёт фронту дополнительное SSE-событие `event: matches` с массивом
-     `{product_id, game_id, game_title_ru}`. Не блокирует основной поток —
-     эмитим события `results` сразу, `matches` приходит «дозаливкой».
-  3. **Frontend**:
-     - Расширить `ProductOut` опциональным `match?: {game_id, game_title_ru,
-       tier}` (типы в `types/api.ts`).
-     - В `SearchPage` собрать `Map<game_id, ProductOut[]>` + bucket
-       `unmatched` для `match=null`.
-     - Новый компонент `GroupedResultsTable` (рядом с `ResultsTable`):
-       строки игр + `expandedGameIds: Set<number>` в локальном state,
-       раскрытие через `<details>` или ручной toggle. Sub-rows — те же
-       `<ResultRow>` что в плоском режиме (вынести как компонент из
-       `ResultsTable`).
-     - Тоггл «Группировать / Плоский» в `SearchForm`, persist в
-       `useSearchStore` (Zustand v2 persist).
-     - Fallback на frontend-fuzzy (вариант A через `similarity.ts`),
-       если catalog ответил ошибкой или timeout > 3 сек — показать
-       «приблизительная группировка» с warning-бейджем.
-
-  *Метрика успеха*:
-  - На типичном запросе («каркассон», 6 магазинов, ~30 офферов) кол-во
-    «строк верхнего уровня» падает с 30 до ~3-5.
-  - `lookup` p95 < 500 мс для батча 30 (cache hit ratio ≥ 70% после
-    разогрева).
-
-  *Не входит*:
-  - **Inline-merge нескольких разных игр** (юзер сам говорит «это всё
-    Каркассон») — это уже manual matching, есть в `/catalog` (LinkPicker).
-  - **Sparkline разброса цен** среди магазинов — nice-to-have, после
-    landing'а базовой группировки.
-
-  *Зависимости*: CAT-4 (matching v2) — должен быть стабилен в проде,
-  иначе lookup даст много false positives. Сейчас CAT-4 в devlog
-  (2026-05) — можно начинать.
-
 - [WT-F8.1] **Persistent search history (опционально).** Изначальный WT-F8
   («drawer с журналом запросов на `/`») закрыт как «решено иначе» —
   таб `api-log` в SearchPage уже даёт API-логи текущей сессии (см. devlog
@@ -303,30 +197,10 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   потребности — не делать.
 
 **Парсеры / Debug**
-- [WT-F9] **Убрать пункт «Парсеры» из сайдбара** — `/parsers` сейчас
-  показывает 6 карточек `<ParserCard>` с двумя действиями: «Запустить»
-  (`POST /parsers/{slug}/run`) и trash (`DELETE /parsers/cache`).
-  Функциональность дублирует:
-  - Live Test (`/debug` → таб «Live Test») — ручной прогон парсера
-    мимо кеша с raw `ParsedProduct`.
-  - Источники (`/sources/{provider}`) — это «новый дом» для
-    диагностики per-source (видно в App.tsx:13,27).
-
-  *План*:
-  - Удалить запись из `NAV` в `App.tsx:22`. `<Route path="/parsers">`
-    оставить ещё одну итерацию (deep-link через bookmark'и) с
-    `<Navigate to="/sources" replace>` либо с баннером
-    «страница переехала на /sources». Через 2-3 недели — удалить роут
-    и `ParsersPage.tsx`.
-  - Action «Очистить кеш» (Trash) — перенести в `/debug` или в
-    `/sources/{provider}` как отдельную кнопку «Invalidate cache»
-    рядом с Live Test. Это единственное действие, которого нет ни в
-    Debug, ни в Sources.
-  - Бейдж «parsers API доступен/ошибка» — уже частично есть в
-    `HealthBadge` (сайдбар внизу), дублировать не нужно.
-
-  *Риск*: кто-то ходит по `/parsers` из закладок → редирект + toast
-  «страница переехала», лог события в `console.info` для отлова.
+- [WT-F9.1] **Удалить `pages/ParsersPage.tsx` + redirect route** —
+  follow-up к WT-F9 (см. devlog 2026-05-18). Route `/parsers` сейчас
+  Navigate-редиректит на `/debug`; через 2-3 недели (после 2026-06-10)
+  удалить redirect, `ParsersPage.tsx` и `ParserCard.tsx`.
 
 - [WT-F10] **Аудит функциональности `/debug` и план расширения** —
   пройти по 5 текущим табам (Live Test / Сравнить / По URL / Контракт

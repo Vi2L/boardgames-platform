@@ -127,7 +127,9 @@ services/web-test/
     │   ├── SearchPage.tsx                # SSE-поиск + фильтр out-of-stock + sale бейдж
     │   │                                 #   + персональные скидки + min-цены, watch-mode,
     │   │                                 #   snapshots, favorites preset
-    │   ├── ParsersPage.tsx               # ParserCard × N
+    │   ├── ParsersPage.tsx               # @deprecated (WT-F9) — удалена из NAV
+    │   │                                 #   2026-05-18; route /parsers → Navigate /debug.
+    │   │                                 #   Удалить после 2026-06-10 вместе с ParserCard.tsx.
     │   ├── DebugPage.tsx                 # 5 tabs: live / compare / url / contract / snapshots
     │   ├── DatabasePage.tsx              # 6 tabs + сводный health-блок наверху;
     │   │                                 #   товары портала открываются в ProductDrawer
@@ -276,6 +278,7 @@ parsers/catalog с error mapping. Свои данные живут в локал
 | `/catalog/import/{bgg,tesera}`, `/catalog/import/jobs/{id}` | BGG/Tesera импорт + polling | catalog |
 | `/catalog/matching/{queue,stats,candidates,{id}/{link,reject,reassess},reassess-all}` | Матчинг + dashboard | catalog |
 | `DELETE /catalog/matching/decisions/{title_norm}`, `POST /catalog/matching/decisions/invalidate` | Инвалидация T0 cache (CAT-12) | catalog |
+| `POST /catalog/matching/lookup-batch` | Batch резолв game_id для группировки SearchPage (WT-F11) | catalog |
 | `/health`, `/health/all` | Health-check (deep) | оба + локально |
 
 ## Dependencies

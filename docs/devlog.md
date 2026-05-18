@@ -8,6 +8,141 @@
 
 ---
 
+## 2026-05-18 · [CAT-4.5] auto_recovery_runner — runner для auto-правил
+
+**Что сделано:** таблица `auto_recovery_rules` (миграция 0014) + CRUD
+endpoints + UI секция в `/matching → Очередь` существовали, но правила
+«armed but not executing» — не было scheduler-job'а который читал бы
+их и применял. Заведён новый interval-job `auto_recovery_runner`
+(60 сек), модуль `catalog/matching/v2/auto_recovery.py:run_once()`.
+
+Поддерживаемые **condition** types:
+- `circuit_state {model, becomes}` — Ollama-модель в нужном state
+  (читает `OllamaHealth.status_summary`).
+- `breaker_state {store, becomes}` — parsers per-store breaker (PRS-7)
+  в нужном state. Опрашивает `parsers/api/debug/breakers` через httpx
+  (`Settings.parsers_base_url`); кешируется на один тик.
+- `job_completed {job_type, status?}` — последний ImportJob нужного
+  типа имеет status='done' (default).
+
+Поддерживаемые **action** types:
+- `re_enqueue_skipped {filters: {reason?, store_slug?}}` —
+  `match_queue.status='skipped'` → `pending` (LIKE prefix по reason).
+- `trigger_job {job_id, params?}` — `trigger_scheduled_job` с
+  `trigger='auto-recovery'`.
+
+**Дедуп через `last_triggered_at` + `dedup_minutes`** (default 5).
+Проще edge detection, не теряет события при рестарте сервиса.
+Action'ы идемпотентны: re-enqueue пустого набора → 0 строк, trigger
+ловит `JobAlreadyRunning`.
+
+**Как пользоваться:**
+
+```bash
+# 1. Применить миграцию (auto-сидит scheduler_configs)
+docker compose exec catalog alembic upgrade head
+
+# 2. Создать правило через UI или API
+curl -X POST http://localhost:8002/admin/auto-recovery-rules \
+  -H "content-type: application/json" \
+  -d '{
+    "name": "wb-recovery",
+    "condition": {"type": "breaker_state", "store": "wildberries", "becomes": "closed"},
+    "action": {"type": "re_enqueue_skipped",
+               "filters": {"store_slug": ["wildberries"]}},
+    "enabled": true
+  }'
+
+# 3. Через минуту проверить tick history
+curl http://localhost:8002/scheduler/jobs/auto_recovery_runner | jq
+```
+
+Когда WB breaker (PRS-7) откроется и потом закроется через 5 минут,
+runner подберёт closed-condition → re-enqueue все skipped offers по WB →
+match_worker подхватит и повторно прогонит matching без участия оператора.
+
+**Затронутые файлы:**
+- `services/catalog/catalog/matching/v2/auto_recovery.py` (новый).
+- `services/catalog/catalog/scheduler.py` (`JOB_METADATA` +
+  `_INTERVAL_JOBS` + `_auto_recovery_runner` runner).
+- `services/catalog/catalog/config.py` (`parsers_base_url`).
+- `services/catalog/alembic/versions/20260518_0017_auto_recovery_runner.py` (сид).
+- `services/catalog/tests/test_auto_recovery_runner.py` (8 тестов).
+
+300/300 catalog тестов passing. Коммит `dbb1396`.
+
+---
+
+## 2026-05-18 · [WT-F9] убрать /parsers из сайдбара
+
+**Что сделано:** ParsersPage (карточки 6 парсеров с «Запустить»+«Trash»)
+дублировала функционал `/debug` (Live Test) и `/sources/{provider}`.
+
+Изменения:
+- `App.tsx`: запись `/parsers` удалена из NAV. Route оставлен с
+  `<Navigate to="/debug" replace>` ещё на 2-3 недели для старых
+  закладок — удалить после 2026-06-10 (см. WT-F9.1 в roadmap).
+- `LiveTestPanel.tsx`: добавлена кнопка «Очистить кеш» рядом с
+  «Запустить». Умная логика per-store + per-query (если оба заполнены),
+  per-store / per-query (один из), или wipe-all с `confirm` модалкой.
+  Toast с числом удалённых products/observations.
+
+**Как пользоваться:** `/parsers` URL → redirect на `/debug`. В Live Test
+кнопка `Очистить кеш` рядом с `Запустить`. Состояние формы (store +
+query) определяет scope: per-store/query → wipe-all.
+
+**Затронутые файлы:**
+- `services/web-test/frontend/src/App.tsx`.
+- `services/web-test/frontend/src/components/parsers/LiveTestPanel.tsx`.
+
+Коммит `6fc4a45`.
+
+---
+
+## 2026-05-18 · [WT-F11] backend lookup-batch для группировки SearchPage
+
+**Что сделано:** раньше SearchPage группировал результаты через
+greedy Jaccard по токенам title — это склеивало expansion с base
+(«Каркассон» + «Каркассон: Замки и крепости» = одна группа) и не
+видело офферы из catalog, которых не было в текущем SSE.
+
+Backend (catalog):
+- `POST /matching/lookup-batch` — batch резолв game_id через
+  `match_sync` (T0+T1). Возвращает `matches[]` (idx → game_id, score,
+  tier) и `games[]` с `title`/`title_ru` + `related_offers` из
+  `catalog.offers` (auto/manual) — даёт UI «также есть в этих
+  магазинах» даже если они не в текущем SSE. Limit 200 items,
+  `include_related_offers=true` (можно выключить для скорости).
+
+Web-test proxy:
+- `catalog_client.lookup_batch()` + `POST /api/catalog/matching/lookup-batch`.
+
+Frontend (SearchPage):
+- `lib/catalog.ts`: `lookupBatch()`, типы.
+- `lib/searchGrouping.ts`: новая `groupProductsByBackend(products, lookup)` —
+  точная группировка по `matches[i].game_id`, canonicalTitle из
+  `games[].title_ru`. Orphans = `game_id=null`.
+- SearchPage: TanStack Query дёргает catalog после завершения SSE.
+  При ошибке/pending — fallback на старый `groupProducts` (fuzzy).
+  Graceful degradation: если catalog недоступен, группировка работает
+  через frontend-fuzzy как раньше.
+
+**Как пользоваться:** на `/search` запустить поиск (например, «Каркассон»).
+Переключиться в group mode. После завершения SSE группы будут точные
+(по game_id). В drawer'е игры — секция «также есть в магазинах» с
+офферами из catalog.offers (которых может не быть в текущем SSE).
+
+**Затронутые файлы:**
+- `services/catalog/catalog/routers/matching.py` (`/matching/lookup-batch`).
+- `services/catalog/tests/test_matching_v2_integration.py` (4 теста).
+- `services/web-test/app/catalog_client.py`, `app/api/catalog.py`.
+- `services/web-test/frontend/src/lib/catalog.ts`,
+  `lib/searchGrouping.ts`, `pages/SearchPage.tsx`.
+
+Коммит `a37b584`.
+
+---
+
 ## 2026-05-18 · [PRS-7] per-store Circuit Breaker для wb/ozon/avito
 
 **Что сделано:** в WB и Ozon регулярно случались пачки 429/timeout'ов
