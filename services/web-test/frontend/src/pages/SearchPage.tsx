@@ -23,7 +23,8 @@ import { ProductDrawer } from '../components/search/ProductDrawer'
 import { GameGroupDrawer } from '../components/search/GameGroupDrawer'
 import type { PriceDeltaOut, PriceStatsOut, ProductOut } from '../types/api'
 import { Tabs, Button, Tag, Badge } from '../components/ui'
-import { groupProducts, type ProductGroup } from '../lib/searchGrouping'
+import { groupProducts, groupProductsByBackend, type ProductGroup } from '../lib/searchGrouping'
+import { lookupBatch } from '../lib/catalog'
 import { Layers, List } from 'lucide-react'
 
 type Tab = 'results' | 'api-log'
@@ -134,13 +135,35 @@ export function SearchPage() {
     [priceStatsArray],
   )
 
-  // WT-F11: frontend-fallback группировка по titleSimilarity.
-  // Дешёво (O(n×k), n≤500 — ≤10мс), greedy-clustering ≥ 0.6 Jaccard.
-  // Когда backend выкатит /search/grouped с game_id — заменим на прямой group-by-id.
-  const grouped = useMemo(
-    () => groupMode === 'group' ? groupProducts(visibleResults) : null,
-    [groupMode, visibleResults],
+  // WT-F11 var. A: backend-резолв через `POST /matching/lookup-batch`.
+  // После завершения SSE (isSearching=false) дёргаем catalog, группируем
+  // по реальным game_id. При ошибке/timeout — fallback на frontend-fuzzy
+  // через `groupProducts`. Дёргаем только в group mode и когда есть
+  // visibleResults — экономим на flat-режиме и пустых выдачах.
+  const lookupKey = useMemo(
+    () => visibleResults.map(p => `${p.store_slug}|${p.title}`).join('§'),
+    [visibleResults],
   )
+  const { data: backendLookup } = useQuery({
+    queryKey: ['search', 'lookup-batch', lookupKey],
+    queryFn: () => lookupBatch(
+      visibleResults.map(p => ({ title: p.title, store_slug: p.store_slug })),
+      { include_related_offers: true },
+    ),
+    enabled: groupMode === 'group' && visibleResults.length > 0 && !isSearching,
+    staleTime: 60_000,
+    retry: 1,
+    // Тимаут — отдельной обёрткой не делаем; httpx-таймауты у catalog тонкие.
+    // При полном падении catalog (e.g. service down) — fall back на frontend.
+  })
+  const grouped = useMemo(() => {
+    if (groupMode !== 'group') return null
+    if (backendLookup) {
+      return groupProductsByBackend(visibleResults, backendLookup)
+    }
+    // Fallback пока lookup не пришёл — показываем fuzzy-группировку.
+    return groupProducts(visibleResults)
+  }, [groupMode, visibleResults, backendLookup])
 
   // Выбор группы → GameGroupDrawer; закрываем product-drawer если был.
   // Invariant из Q6: один drawer на screen.

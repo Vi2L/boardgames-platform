@@ -867,6 +867,101 @@ class TestIngestE2E:
         assert "total" in body
 
 
+# ── WT-F11: batch lookup ─────────────────────────────────────────────────────
+
+
+class TestLookupBatch:
+    """POST /matching/lookup-batch — batch резолв game_id для SearchPage."""
+
+    async def test_basic_lookup_returns_matches_and_games(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        gid = await _seed_game(session, title="Carcassonne", title_ru="Каркассон")
+        # Создадим оффер привязанный к этой игре, чтобы increase related_offers
+        offer = Offer(
+            store_slug="hg", external_id="1", url="http://h/1",
+            title_raw="Каркассон. Базовый набор",
+            game_id=gid, match_status="auto", last_price=169500,
+        )
+        session.add(offer)
+        await session.commit()
+
+        r = await client.post(
+            "/matching/lookup-batch",
+            json={"items": [
+                {"title": "Каркассон", "store_slug": "wb"},
+                {"title": "несуществующая игра zzz", "store_slug": "ozon"},
+            ]},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["matches"]) == 2
+        # Первый матчится через T1 trgm (точное совпадение с title_ru alias)
+        assert body["matches"][0]["idx"] == 0
+        assert body["matches"][0]["game_id"] == gid
+        assert body["matches"][0]["game_title_ru"] == "Каркассон"
+        # Второй — не сматчился
+        assert body["matches"][1]["idx"] == 1
+        assert body["matches"][1]["game_id"] is None
+
+        # games[]: одна запись по найденной игре
+        assert len(body["games"]) == 1
+        g = body["games"][0]
+        assert g["game_id"] == gid
+        assert g["title"] == "Carcassonne"
+        assert g["title_ru"] == "Каркассон"
+        # related_offers: оффер из hg должен попасть
+        assert len(g["related_offers"]) == 1
+        assert g["related_offers"][0]["store_slug"] == "hg"
+
+    async def test_include_related_offers_false_skips_offers_query(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        gid = await _seed_game(session, title="Carcassonne", title_ru="Каркассон")
+        offer = Offer(
+            store_slug="hg", external_id="1", url="http://h/1",
+            title_raw="Каркассон", game_id=gid, match_status="auto",
+        )
+        session.add(offer)
+        await session.commit()
+
+        r = await client.post(
+            "/matching/lookup-batch",
+            json={"items": [{"title": "Каркассон"}], "include_related_offers": False},
+        )
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["games"]) == 1
+        # related_offers выключен — пустой
+        assert body["games"][0]["related_offers"] == []
+
+    async def test_lookup_empty_items_returns_400(self, client: AsyncClient):
+        r = await client.post("/matching/lookup-batch", json={"items": []})
+        assert r.status_code == 422  # pydantic min_length=1
+
+    async def test_lookup_filters_out_rejected_offers_from_related(
+        self, client: AsyncClient, session: AsyncSession,
+    ):
+        """related_offers показывает только auto/manual — rejected/unmatched скрыты."""
+        gid = await _seed_game(session, title="Carcassonne", title_ru="Каркассон")
+        for status in ("auto", "rejected", "unmatched"):
+            session.add(Offer(
+                store_slug=f"s_{status}", external_id="1", url="http://x",
+                title_raw="x", game_id=gid, match_status=status,
+            ))
+        await session.commit()
+
+        r = await client.post(
+            "/matching/lookup-batch",
+            json={"items": [{"title": "Каркассон"}]},
+        )
+        body = r.json()
+        slugs = [o["store_slug"] for o in body["games"][0]["related_offers"]]
+        assert "s_auto" in slugs
+        assert "s_rejected" not in slugs
+        assert "s_unmatched" not in slugs
+
+
 # ── CAT-12: invalidation API ──────────────────────────────────────────────────
 
 

@@ -554,6 +554,25 @@ async def batch_revert_match_log(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+@router.post("/matching/lookup-batch")
+async def lookup_batch(
+    body: dict,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    """WT-F11: batch резолв game_id для SearchPage группировки.
+
+    Принимает `{items: [{title, store_slug?}], include_related_offers?: bool}`,
+    возвращает `{matches, games[].related_offers}`. Прозрачный proxy к catalog.
+    """
+    try:
+        return await client.lookup_batch(
+            items=body.get("items", []),
+            include_related_offers=body.get("include_related_offers", True),
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 @router.delete("/matching/decisions/{title_norm}")
 async def invalidate_decision(
     title_norm: str,

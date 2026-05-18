@@ -15,7 +15,7 @@ from uuid import UUID
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import case, desc, func, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -29,7 +29,7 @@ from catalog.matching.matcher import (
     find_best_match,
     find_match_candidates,
 )
-from catalog.matching.v2 import normalize_title
+from catalog.matching.v2 import match_sync, normalize_title
 from catalog.matching.v2.auditor import (
     log_change,
     revert_batch as v2_revert_batch,
@@ -1211,6 +1211,149 @@ class ProbeResultOut(BaseModel):
     circuit_state: str
     """closed / open / half_open / unknown — после probe."""
     last_check_at: str | None = None
+
+
+# ── WT-F11: batch lookup для группировки результатов поиска ──────────────
+
+
+class LookupBatchItemIn(BaseModel):
+    """Один товар во входном батче. Минимум — title; остальные поля
+    игнорируются (matcher работает только по title)."""
+    title: str = Field(min_length=1)
+    store_slug: str | None = None
+
+
+class LookupBatchRequest(BaseModel):
+    items: list[LookupBatchItemIn] = Field(min_length=1, max_length=200)
+    # Для каждой найденной игры backend дополнительно возвращает все связанные
+    # офферы из catalog.offers — даёт UI «другие магазины этой игры даже если
+    # они не в текущем поиске». В первой итерации можно отключить для скорости.
+    include_related_offers: bool = True
+
+
+class LookupMatchOut(BaseModel):
+    """Резолв одного input-элемента."""
+    idx: int  # позиция в items[]
+    game_id: int | None
+    game_title: str | None = None
+    game_title_ru: str | None = None
+    match_score: float | None = None
+    match_tier: int | None = None
+    match_reason: str | None = None
+
+
+class RelatedOfferOut(BaseModel):
+    """Оффер из catalog.offers — НЕ обязательно совпадает с input items.
+    Frontend может dedup'ить по (store_slug, title_raw)."""
+    store_slug: str
+    title_raw: str
+    url: str
+    image_url: str | None = None
+    last_price: int | None = None  # копейки
+    in_stock: bool | None = None
+    match_status: str
+
+
+class LookupGameOut(BaseModel):
+    """Сводка по игре (для всех game_id, найденных в matches[])."""
+    game_id: int
+    title: str
+    title_ru: str | None = None
+    related_offers: list[RelatedOfferOut] = []
+
+
+class LookupBatchResponse(BaseModel):
+    matches: list[LookupMatchOut]
+    games: list[LookupGameOut]
+
+
+@router.post(
+    "/lookup-batch",
+    response_model=LookupBatchResponse,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def lookup_batch(
+    payload: LookupBatchRequest,
+    session: AsyncSession = Depends(get_session),
+) -> LookupBatchResponse:
+    """Batch-резолв game_id для списка title'ов из SearchPage (WT-F11).
+
+    Прогоняет каждый title через `match_sync` (T0 cache → T1 trgm 0.92).
+    Не пишет в БД, не enqueue'ит — read-only вызов. Если `include_related_offers`,
+    для каждой найденной игры возвращает все офферы из catalog.offers
+    (включая магазины, которых нет в input).
+
+    Frontend в SearchPage использует `matches[i].game_id` для группировки
+    своих SSE-результатов; `games[].related_offers` — для «также есть в
+    этих магазинах» секции в drawer'е.
+    """
+    # 1. Резолв game_id для каждого input — последовательный, чтобы не плодить
+    # параллельные коннекты к одной session (SQLAlchemy async session не
+    # thread-safe для параллельных execute).
+    matches: list[LookupMatchOut] = []
+    game_ids_seen: set[int] = set()
+    for idx, item in enumerate(payload.items):
+        result = await match_sync(
+            session, item.title, store_slug=item.store_slug,
+        )
+        gid = result.game_id if result.matched else None
+        matches.append(LookupMatchOut(
+            idx=idx,
+            game_id=gid,
+            match_score=result.score,
+            match_tier=result.tier,
+            match_reason=result.reason,
+        ))
+        if gid is not None:
+            game_ids_seen.add(gid)
+
+    # 2. Хвост по уникальным game_id: одной выборкой подтягиваем title/title_ru
+    # и related_offers (если запрошены).
+    games: list[LookupGameOut] = []
+    if game_ids_seen:
+        # Берём денормализованные `title_ru` из games (миграция 0006 cd).
+        # Полная иерархия приоритетов алиасов (manual > dicefest > wikidata) —
+        # в /games роутере; здесь достаточно денорм-поля для UI-заголовков.
+        game_rows = (await session.execute(
+            select(Game.id, Game.title, Game.title_ru)
+            .where(Game.id.in_(game_ids_seen))
+        )).all()
+        title_by_gid = {r.id: (r.title, r.title_ru) for r in game_rows}
+
+        # related_offers — отдельная выборка по game_id.
+        offers_by_gid: dict[int, list[RelatedOfferOut]] = {gid: [] for gid in game_ids_seen}
+        if payload.include_related_offers:
+            offer_rows = (await session.execute(
+                select(
+                    Offer.game_id, Offer.store_slug, Offer.title_raw, Offer.url,
+                    Offer.image_url, Offer.last_price, Offer.in_stock,
+                    Offer.match_status,
+                )
+                .where(Offer.game_id.in_(game_ids_seen))
+                .where(Offer.match_status.in_(("auto", "manual")))
+                .order_by(Offer.game_id, Offer.last_seen_at.desc())
+            )).all()
+            for r in offer_rows:
+                offers_by_gid[r.game_id].append(RelatedOfferOut(
+                    store_slug=r.store_slug, title_raw=r.title_raw, url=r.url,
+                    image_url=r.image_url, last_price=r.last_price,
+                    in_stock=r.in_stock, match_status=r.match_status,
+                ))
+
+        for gid in sorted(game_ids_seen):
+            title, title_ru = title_by_gid.get(gid, (f"game #{gid}", None))
+            games.append(LookupGameOut(
+                game_id=gid, title=title, title_ru=title_ru,
+                related_offers=offers_by_gid.get(gid, []),
+            ))
+
+    # 3. Обогащаем matches title'ами из games (избегаем второго JOIN'а)
+    title_idx = {g.game_id: (g.title, g.title_ru) for g in games}
+    for m in matches:
+        if m.game_id is not None and m.game_id in title_idx:
+            m.game_title, m.game_title_ru = title_idx[m.game_id]
+
+    return LookupBatchResponse(matches=matches, games=games)
 
 
 class InvalidateDecisionOut(BaseModel):

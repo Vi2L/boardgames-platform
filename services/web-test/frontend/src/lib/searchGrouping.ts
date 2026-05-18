@@ -158,3 +158,81 @@ function jaccardSets(a: Set<string>, b: Set<string>): number {
 
 /** Для совместимости / тестов — выставляем сторонним кодом. */
 export { titleSimilarity }
+
+
+// ── WT-F11 backend var. A: группировка по game_id из catalog ─────────────────
+
+import type { LookupBatchResponse } from './catalog'
+
+/**
+ * Точная группировка через backend lookup (matcher v2). Заменяет fuzzy
+ * `groupProducts` когда catalog доступен.
+ *
+ * Алгоритм:
+ *   - matches[i].game_id → собираем products[i] в группу game_id.
+ *   - Продукты с `game_id=null` → orphans.
+ *   - canonicalTitle берётся из `games[].title_ru` (или `title` если ru
+ *     отсутствует) — backend источник правды, а не первый product.
+ *   - related_offers (из catalog) **не** добавляются в `offers` — это
+ *     отдельный список, который UI показывает как «также в магазинах»
+ *     (см. использование в GameGroupDrawer).
+ *
+ * Если lookup ответил ошибкой/timeout — caller fall-back'ает на
+ * `groupProducts` (fuzzy).
+ */
+export function groupProductsByBackend(
+  products: ProductOut[],
+  lookup: LookupBatchResponse,
+): GroupedResults {
+  // Карта idx → game_id. matches[].idx ссылается на индекс в products[].
+  const gameByIdx = new Map<number, number>()
+  for (const m of lookup.matches) {
+    if (m.game_id != null) gameByIdx.set(m.idx, m.game_id)
+  }
+  // Карта game_id → title из backend (используется как canonicalTitle).
+  const canonicalByGid = new Map<number, string>()
+  for (const g of lookup.games) {
+    canonicalByGid.set(g.game_id, g.title_ru || g.title)
+  }
+
+  const groupsByGid = new Map<number, ProductGroup>()
+  const orphans: ProductOut[] = []
+
+  products.forEach((p, idx) => {
+    const gid = gameByIdx.get(idx)
+    if (gid == null) {
+      orphans.push(p)
+      return
+    }
+    let group = groupsByGid.get(gid)
+    if (!group) {
+      group = {
+        id: gid,
+        canonicalTitle: canonicalByGid.get(gid) ?? p.title,
+        centroidTokens: new Set(),  // не используется для backend-группировки
+        offers: [],
+        minPrice: null,
+        inStockCount: 0,
+        totalStores: 0,
+        storeSlugs: [],
+        hasSale: false,
+      }
+      groupsByGid.set(gid, group)
+    }
+    addToGroup(group, p)
+  })
+
+  const realGroups = Array.from(groupsByGid.values()).sort(
+    (a, b) => b.totalStores - a.totalStores,
+  )
+
+  return {
+    groups: realGroups,
+    orphans,
+    stats: {
+      totalOffers: products.length,
+      totalGroups: realGroups.length,
+      totalOrphans: orphans.length,
+    },
+  }
+}

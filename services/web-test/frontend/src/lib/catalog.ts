@@ -910,6 +910,59 @@ export function normalizeTitle(raw: string): string {
     .trim()
 }
 
+// ── WT-F11: batch lookup для группировки SearchPage ──────────────────────
+
+export type LookupBatchItem = {
+  title: string
+  store_slug?: string
+}
+
+export type LookupBatchMatch = {
+  idx: number
+  game_id: number | null
+  game_title: string | null
+  game_title_ru: string | null
+  match_score: number | null
+  match_tier: number | null
+  match_reason: string | null
+}
+
+export type RelatedOffer = {
+  store_slug: string
+  title_raw: string
+  url: string
+  image_url: string | null
+  last_price: number | null
+  in_stock: boolean | null
+  match_status: string
+}
+
+export type LookupBatchGame = {
+  game_id: number
+  title: string
+  title_ru: string | null
+  related_offers: RelatedOffer[]
+}
+
+export type LookupBatchResponse = {
+  matches: LookupBatchMatch[]
+  games: LookupBatchGame[]
+}
+
+export const lookupBatch = (
+  items: LookupBatchItem[],
+  options: { include_related_offers?: boolean } = {},
+) =>
+  fetch(`${BASE}/matching/lookup-batch`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      items,
+      include_related_offers: options.include_related_offers ?? true,
+    }),
+  }).then(r => json<LookupBatchResponse>(r))
+
+
 export const invalidateDecision = (titleNorm: string) =>
   fetch(`${BASE}/matching/decisions/${encodeURIComponent(titleNorm)}`, {
     method: 'DELETE',

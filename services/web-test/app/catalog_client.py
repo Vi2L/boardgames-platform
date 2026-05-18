@@ -469,6 +469,24 @@ class CatalogClient:
         )
         return _ok_or_raise(resp)
 
+    async def lookup_batch(
+        self,
+        items: list[dict[str, Any]],
+        *,
+        include_related_offers: bool = True,
+    ) -> dict[str, Any]:
+        """POST /matching/lookup-batch — batch резолв game_id для SearchPage.
+
+        Используется фронтом после получения SSE-результатов: батч из
+        product title'ов → backend matcher v2 → game_id'ы → точная
+        группировка вместо frontend-fuzzy. См. WT-F11.
+        """
+        resp = await self._client.post(
+            "/matching/lookup-batch",
+            json={"items": items, "include_related_offers": include_related_offers},
+        )
+        return _ok_or_raise(resp)
+
     async def invalidate_decision(self, title_norm: str) -> dict[str, Any]:
         """DELETE /matching/decisions/{title_norm} — точечная инвалидация
         Tier 0 кэша (CAT-12). Используется в MatchLog UI для отмены
