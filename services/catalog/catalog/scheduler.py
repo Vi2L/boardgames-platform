@@ -216,6 +216,37 @@ JOB_METADATA: dict[str, dict[str, Any]] = {
             },
         ],
     },
+    "bgg_yearly_releases": {
+        "display_name": "BGG Yearly Releases (monthly)",
+        "description": (
+            "CAT-10: HTML-скрейп boardgamegeek.com/browse/boardgame с фильтром "
+            "yearpublished + sort=numvoters. Топ-N новинок года, для отсутствующих "
+            "в каталоге — enrich_one. Default — текущий UTC-год через runtime "
+            "(year: null в params). Дефолт: 1-е число месяца, 02:00 UTC."
+        ),
+        "params_schema": [
+            {
+                "name": "year",
+                "type": "int",
+                "label": "Year (null = current UTC)",
+                "description": "Если null — берётся текущий UTC-год на момент запуска.",
+                "default": None,
+                "required": False,
+                "min": 1900,
+                "max": 2100,
+            },
+            {
+                "name": "max_pages",
+                "type": "int",
+                "label": "Max pages (1 page = 100 игр)",
+                "description": "Сколько страниц browse обходить. 5 → топ-500, 10 → топ-1000.",
+                "default": 5,
+                "required": False,
+                "min": 1,
+                "max": 10,
+            },
+        ],
+    },
     "auto_recovery_runner": {
         "display_name": "Auto Recovery Runner (every 60s)",
         "description": (
@@ -279,6 +310,14 @@ def validate_params_against_schema(
             # уже лежит этот ключ — оставляем; merge на caller-side.
             continue
         value = coerced[name]
+
+        # None — sentinel «сбросить к default / runtime-резолв» (например, year=null
+        # для bgg_yearly_releases — раннеру это сигнал «бери текущий UTC год»).
+        # Для required-поля None отвергается; для optional — пропускается без coerce.
+        if value is None:
+            if field.get("required"):
+                errors.append(f"{name}: обязательное, не может быть null")
+            continue
 
         # Type coercion (UI присылает строки из текстовых input'ов).
         try:
@@ -442,6 +481,11 @@ def _resolve_handler(job_id: str, params: dict[str, Any]):
             lambda jid: _run_match_log_retention(jid, retention_days),
             "match-log-retention",
         )
+
+    if job_id == "bgg_yearly_releases":
+        from catalog.importers.bgg_yearly import run_yearly_releases_import_job
+
+        return run_yearly_releases_import_job, "bgg-yearly-releases"
 
     if job_id == "bgg_mini_batch":
         from catalog.routers.imports import _run_bgg_batch_job

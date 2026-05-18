@@ -22,6 +22,10 @@ import httpx
 
 BGG_BASE_URL = "https://boardgamegeek.com/xmlapi2"
 
+# CAT-10: HTML browse-страницы НЕ под /xmlapi2, а на корне сайта.
+# Это не XML API, а обычный HTML, без bearer'а, без 202.
+BGG_BROWSE_URL = "https://boardgamegeek.com/browse/boardgame"
+
 # 202 Accepted = «запрос принят, попробуйте снова». Стандартный паттерн BGG.
 # Кортеж задержек = количество попыток (4 ретрая до фейла).
 _RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
@@ -29,6 +33,14 @@ _RETRY_DELAYS: tuple[float, ...] = (1.0, 2.0, 4.0, 8.0)
 # /thing поддерживает множественные ID в одном запросе. По документации BGG —
 # до 20 одновременно. Превышение → 414 URI Too Long или silent truncation.
 THING_BATCH_MAX = 20
+
+# CAT-10: для HTML-страниц boardgamegeek.com BGG плохо реагирует на запросы без
+# реалистичного User-Agent — может вернуть 403 или статическую страницу-капчу.
+# Используем актуальный Chrome UA (на 2026-05); обновлять не чаще раза в год.
+_BROWSE_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_3) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+)
 
 
 class BggClient:
@@ -185,6 +197,33 @@ class BggClient:
         через `_get_with_backoff` как `/thing`.
         """
         return await self._get_with_backoff(f"{self._base_url}/geeklist/{geeklist_id}")
+
+    async def fetch_browse_year(self, year: int, page: int = 1) -> str:
+        """CAT-10: GET HTML страницы `/browse/boardgame?sort=numvoters&yearpublished=YYYY&page=N`.
+
+        BGG XML API не отдаёт фильтр по году + сортировку по numvoters — нужно скрейпить
+        HTML. Bearer для browse-страниц не нужен (по обсуждениям BGG-форума работает
+        без токена), но реалистичный User-Agent обязателен — иначе 403/капча.
+
+        Не использует backoff на 202 — browse-страницы их не возвращают; любая
+        ошибка сразу поднимет httpx.HTTPError.
+
+        100 игр на страницу (стандарт BGG); максимум 10 страниц = топ-1000 года.
+        """
+        client = await self._ensure_client()
+        params: dict[str, str | int] = {
+            "sort": "numvoters",
+            "yearpublished": year,
+            "page": page,
+        }
+        # Подменяем UA для browse — XML API ходит без UA (там Bearer достаточно).
+        response = await client.get(
+            BGG_BROWSE_URL,
+            params=params,
+            headers={"User-Agent": _BROWSE_USER_AGENT, "Accept": "text/html"},
+        )
+        response.raise_for_status()
+        return response.text
 
     async def search(self, query: str, *, exact: bool = False) -> str:
         """GET `/search?query=<q>&type=boardgame[&exact=1]` → raw XML.
