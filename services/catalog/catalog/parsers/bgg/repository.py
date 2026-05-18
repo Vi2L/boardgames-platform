@@ -359,17 +359,25 @@ async def upsert_family(
         ).all()
         game_by_bgg = {row[0]: row[1] for row in rows}
 
-    # Upsert каждого membership. ON CONFLICT — обновляем game_id (может появиться
-    # после прошлого refresh'а, когда thing ещё не был импортирован).
+    # Upsert каждого membership. ON CONFLICT — обновляем game_id ТОЛЬКО если
+    # в БД сейчас NULL (COALESCE). Иначе weekly refresh потерял бы уже-связанные
+    # member→game связки в момент когда `Game.bgg_id`-IN не нашёл их (например,
+    # игра удалена/смерджена, а её bgg_id перенесён на target).
     for member_bgg_id in family.members:
+        new_game_id = game_by_bgg.get(member_bgg_id)
         mem_stmt = pg_insert(members_t).values(
             family_id=family_row_id,
             bgg_id=member_bgg_id,
-            game_id=game_by_bgg.get(member_bgg_id),
+            game_id=new_game_id,
         )
         mem_stmt = mem_stmt.on_conflict_do_update(
             index_elements=["family_id", "bgg_id"],
-            set_={"game_id": mem_stmt.excluded.game_id},
+            set_={
+                "game_id": func.coalesce(
+                    members_t.c.game_id,  # текущее значение в БД
+                    mem_stmt.excluded.game_id,  # новое — только если текущее NULL
+                ),
+            },
         )
         await session.execute(mem_stmt)
 

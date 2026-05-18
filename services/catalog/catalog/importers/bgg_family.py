@@ -157,10 +157,12 @@ async def run_family_refresh_import_job(import_job_id: int) -> None:
         ).scalar_one()
         payload = job.payload or {}
         max_families = int(payload.get("max_families", 100))
+        enrich_rate_limit_sec = float(payload.get("enrich_rate_limit_sec", 1.0))
 
     async def body(buf: LogBuffer, buf_log: BufLogger, sf):
         return await run_family_refresh_sync(
             max_families=max_families,
+            enrich_rate_limit_sec=enrich_rate_limit_sec,
             session_factory=sf,
             log=buf_log,  # type: ignore[arg-type]
         )

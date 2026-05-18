@@ -133,15 +133,23 @@ async def run_yearly_releases_sync(
     log.info("yearly[%d]: %d уже в каталоге, %d новых для enrich",
              year, len(existing_ids), len(missing))
 
-    # Enrich отсутствующих с rate-limit'ом.
+    # Enrich отсутствующих с rate-limit'ом. Reuse'им client (тот же httpx connection
+    # pool, тот же Bearer token) — два BggClient одновременно нарушают rate-limit
+    # к BGG XML API и ломают тестируемость (mock-client не действует на enrich).
     auto_imported = 0
     errors = 0
     if missing:
-        async with BggClient.from_settings() as import_client:
+        # Если у нас был own_client — он закрыт в finally выше. Откроем заново.
+        # Если caller передал client — он всё ещё активен, переиспользуем.
+        own_enrich_client = client is None
+        enrich_client = BggClient.from_settings() if own_enrich_client else client
+        try:
+            if own_enrich_client:
+                await enrich_client.__aenter__()
             for row in missing:
                 try:
                     async with session_factory() as session:
-                        bgg = await enrich_one(row.bgg_id, session, client=import_client)
+                        bgg = await enrich_one(row.bgg_id, session, client=enrich_client)
                         if bgg is not None:
                             await session.commit()
                             auto_imported += 1
@@ -156,6 +164,9 @@ async def run_yearly_releases_sync(
                                   year, row.bgg_id)
                     errors += 1
                 await asyncio.sleep(enrich_rate_limit_sec)
+        finally:
+            if own_enrich_client:
+                await enrich_client.__aexit__(None, None, None)
 
     return {
         "year": year,

@@ -237,6 +237,16 @@ JOB_METADATA: dict[str, dict[str, Any]] = {
                 "min": 1,
                 "max": 1000,
             },
+            {
+                "name": "enrich_rate_limit_sec",
+                "type": "float",
+                "label": "Rate-limit (сек)",
+                "description": "Пауза между enrich_one для отсутствующих членов.",
+                "default": 1.0,
+                "required": False,
+                "min": 0.5,
+                "max": 10.0,
+            },
         ],
     },
     "bgg_yearly_releases": {
@@ -324,7 +334,6 @@ def validate_params_against_schema(
     errors: list[str] = []
     coerced: dict[str, Any] = dict(params)
 
-    by_name = {f["name"]: f for f in schema}
     for field in schema:
         name = field["name"]
         ftype = field["type"]
@@ -379,9 +388,7 @@ def validate_params_against_schema(
 
         coerced[name] = value
 
-    # Игнорируем unknown ключи (не падаем, не удаляем).
-    _ = by_name  # подавим unused-предупреждение, by_name держим на будущее
-
+    # Unknown ключи пропускаем — не падаем, не удаляем (forward-compat).
     if errors:
         raise ValueError("; ".join(errors))
     return coerced

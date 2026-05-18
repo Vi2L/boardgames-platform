@@ -11,6 +11,7 @@
  */
 import type { BggFamily, BggFamilyMember } from '../../lib/catalog'
 import { Users } from 'lucide-react'
+import { Link } from 'react-router-dom'
 
 export function FamiliesCard({ families }: { families: BggFamily[] }) {
   if (!families.length) {
@@ -62,9 +63,11 @@ function FamilyBlock({ family }: { family: BggFamily }) {
 function MemberTag({ member }: { member: BggFamilyMember }) {
   // game_id всегда есть у known-членов (по фильтру в API), но TS не знает.
   if (member.game_id == null) return null
+  // SPA-навигация через react-router-dom — без перезагрузки страницы, что
+  // сохраняет state TanStack Query и Zustand. <a href> сбросил бы весь app-state.
   return (
-    <a
-      href={`/catalog/games/${member.game_id}`}
+    <Link
+      to={`/catalog/games/${member.game_id}`}
       className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] rounded bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-gray-100"
       title={`bgg_id=${member.bgg_id}${member.year ? ` (${member.year})` : ''}`}
     >
@@ -72,7 +75,7 @@ function MemberTag({ member }: { member: BggFamilyMember }) {
       {member.year != null && (
         <span className="text-[10px] text-gray-500">({member.year})</span>
       )}
-    </a>
+    </Link>
   )
 }
 

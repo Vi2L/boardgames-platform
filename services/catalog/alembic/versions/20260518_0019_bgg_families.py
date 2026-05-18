@@ -87,7 +87,7 @@ def upgrade() -> None:
             'bgg_family_refresh',
             '0 5 * * 0',
             TRUE,
-            '{"max_families": 100}'::jsonb
+            '{"max_families": 100, "enrich_rate_limit_sec": 1.0}'::jsonb
         )
         ON CONFLICT (job_id) DO NOTHING
     """)

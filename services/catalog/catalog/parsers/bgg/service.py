@@ -161,6 +161,13 @@ async def enrich_one(
     return bgg
 
 
+# CAT-8: module-level set удерживает strong reference на fire-and-forget task'и
+# до их завершения. Без этого asyncio может GC'нуть task до выполнения; CPython
+# хранит свой внутренний weak set, но это implementation detail (cм. python.org
+# docs `asyncio.create_task`). Стандартный паттерн.
+_background_tasks: set[asyncio.Task] = set()
+
+
 async def _maybe_schedule_family_cascade(families: list[tuple[int, str]]) -> None:
     """CAT-8: запускает fire-and-forget task для каждого family-id.
 
@@ -177,10 +184,12 @@ async def _maybe_schedule_family_cascade(families: list[tuple[int, str]]) -> Non
     rate_limit_sec = get_settings().bgg_family_cascade_rate_limit_sec
 
     family_ids = [fid for fid, _ in families]
-    asyncio.create_task(  # noqa: RUF006 — fire-and-forget by design
+    task = asyncio.create_task(
         _cascade_family_enrich(family_ids, rate_limit_sec=rate_limit_sec),
         name=f"bgg-cascade-{family_ids[:3]}",
     )
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
 
 
 async def _cascade_family_enrich(
@@ -193,12 +202,11 @@ async def _cascade_family_enrich(
     Изолированная сессия и client — task'а живёт отдельно от вызывающего
     `enrich_one`, чтобы commit caller'а не блокировался cascade'ом.
     """
-    from catalog.db import get_engine
-    from catalog.models import Game
+    # Lazy-импорт parser/repository — module-level импорт привёл бы к циклу
+    # repository → service через parsers.bgg.* (service-функции вызываются из
+    # repository в перспективе тестов). Cascade — не hot path, накладные минимальны.
     from catalog.parsers.bgg.parser import parse_family_xml
     from catalog.parsers.bgg.repository import upsert_family
-    from sqlalchemy import select as sa_select
-    from sqlalchemy.ext.asyncio import async_sessionmaker
 
     SessionFactory = async_sessionmaker(get_engine(), expire_on_commit=False)
 
@@ -208,9 +216,7 @@ async def _cascade_family_enrich(
                 try:
                     xml = await client.fetch_family(family_id)
                 except Exception:  # noqa: BLE001
-                    logging.getLogger(__name__).exception(
-                        "cascade family %d: fetch failed", family_id,
-                    )
+                    logger.exception("cascade family %d: fetch failed", family_id)
                     continue
                 family = parse_family_xml(xml)
                 if family is None or not family.members:
@@ -222,7 +228,7 @@ async def _cascade_family_enrich(
                     # Резолв отсутствующих bgg_id за один SELECT.
                     existing = (
                         await session.execute(
-                            sa_select(Game.bgg_id).where(Game.bgg_id.in_(family.members))
+                            select(Game.bgg_id).where(Game.bgg_id.in_(family.members))
                         )
                     ).scalars().all()
                     await session.commit()
@@ -240,14 +246,12 @@ async def _cascade_family_enrich(
                             )
                             await session.commit()
                     except Exception:  # noqa: BLE001
-                        logging.getLogger(__name__).exception(
-                            "cascade enrich bgg_id=%d failed", missing_bgg_id,
-                        )
+                        logger.exception("cascade enrich bgg_id=%d failed", missing_bgg_id)
                     await asyncio.sleep(rate_limit_sec)
     except Exception:  # noqa: BLE001
         # Без этого внешнего try-блока exception в fire-and-forget task'е
         # будет молча проглочен asyncio. Логируем явно.
-        logging.getLogger(__name__).exception(
+        logger.exception(
             "_cascade_family_enrich top-level failed for families=%s", family_ids,
         )
 

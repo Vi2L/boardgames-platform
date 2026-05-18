@@ -102,14 +102,16 @@ def _parse_row(row: Tag) -> BrowseRow | None:
 
     # Год — отдельный <span> рядом с заголовком: «Caverna (2013)». Иногда
     # стилизуется как `.smallerfont.dull`. Регекс по тексту строки берёт его
-    # независимо от классов CSS.
+    # независимо от классов CSS. Берём ПОСЛЕДНЕЕ вхождение `(\d{4})` — если
+    # в самом названии есть скобочное число (напр. «1984 (Orwell) (2023)»),
+    # год публикации — это последняя группа, не первая.
     year: int | None = None
     title_cell = link.find_parent("td")
     if isinstance(title_cell, Tag):
         cell_text = title_cell.get_text(" ", strip=True)
-        ym = _YEAR_RE.search(cell_text)
-        if ym:
-            year = int(ym.group(1))
+        matches = _YEAR_RE.findall(cell_text)
+        if matches:
+            year = int(matches[-1])
 
     # Rating — колонка `collection_bggrating` (geek rating, bayes-сглажен).
     rating: float | None = None
