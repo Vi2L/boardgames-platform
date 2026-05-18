@@ -11,10 +11,11 @@
  * нужно сохранять между навигацией.
  */
 import { useState } from 'react'
-import { useMutation, useQuery } from '@tanstack/react-query'
-import { Play, Loader2, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Play, Loader2, AlertTriangle, CheckCircle2, ChevronDown, ChevronRight, Trash2 } from 'lucide-react'
 import clsx from 'clsx'
-import { debugParse, fetchParsers } from '../../lib/api'
+import { toast } from 'sonner'
+import { debugParse, fetchParsers, invalidateParserCache } from '../../lib/api'
 import { getStoreLabel, getStoreBadgeColor } from '../../lib/stores'
 import type { DebugParseResponse, DebugStoreResult } from '../../types/api'
 import { RawProductCard } from './RawProductCard'
@@ -26,6 +27,7 @@ export function LiveTestPanel() {
   const [selectedStores, setSelectedStores] = useState<string[]>([])
   const [limit, setLimit] = useState(5)
 
+  const queryClient = useQueryClient()
   const parsers = useQuery({ queryKey: ['parsers'], queryFn: fetchParsers })
 
   const mutation = useMutation<DebugParseResponse, Error>({
@@ -34,6 +36,37 @@ export function LiveTestPanel() {
       stores: selectedStores.length > 0 ? selectedStores : undefined,
       limit,
     }),
+  })
+
+  // WT-F9: cache invalidation перенесён сюда из ParsersPage (страница
+  // удалена). Действует per-store если selectedStores непустой;
+  // per-query если q заполнен; всё иначе — глобальный wipe (требует
+  // подтверждение).
+  const invalidate = useMutation({
+    mutationFn: async () => {
+      const params: Parameters<typeof invalidateParserCache>[0] = {}
+      if (selectedStores.length === 1) params.store = selectedStores[0]
+      if (q.trim()) params.q = q.trim()
+      // Глобальная инвалидация — только с явным confirm.
+      if (!params.store && !params.q) {
+        if (!confirm('Очистить ВЕСЬ кеш парсеров? Все товары + observations будут удалены.')) {
+          throw new Error('cancelled')
+        }
+        params.confirm = true
+      }
+      return invalidateParserCache(params)
+    },
+    onSuccess: (res) => {
+      toast.success(
+        `Кеш очищен: ${res.deleted_products ?? 0} продуктов, ` +
+        `${res.deleted_observations ?? 0} observations`,
+      )
+      queryClient.invalidateQueries({ queryKey: ['parsers'] })
+      queryClient.invalidateQueries({ queryKey: ['parsers-db'] })
+    },
+    onError: (e: Error) => {
+      if (e.message !== 'cancelled') toast.error(`Ошибка: ${e.message}`)
+    },
   })
 
   const toggleStore = (slug: string) =>
@@ -69,6 +102,26 @@ export function LiveTestPanel() {
             {mutation.isPending
               ? <><Loader2 size={13} className="animate-spin" /> Парсим…</>
               : <><Play size={13} /> Запустить</>}
+          </button>
+          <button
+            type="button"
+            onClick={() => invalidate.mutate()}
+            disabled={invalidate.isPending}
+            title={
+              selectedStores.length === 1 && q.trim()
+                ? `Очистить кеш ${selectedStores[0]} по «${q.trim()}»`
+                : selectedStores.length === 1
+                ? `Очистить кеш ${selectedStores[0]}`
+                : q.trim()
+                ? `Очистить кеш по «${q.trim()}»`
+                : 'Очистить ВЕСЬ кеш парсеров (требует подтверждения)'
+            }
+            className="px-3 py-2 rounded text-sm font-medium flex items-center gap-1.5 bg-amber-900/40 hover:bg-amber-900/80 text-amber-200 disabled:opacity-40"
+          >
+            {invalidate.isPending
+              ? <Loader2 size={13} className="animate-spin" />
+              : <Trash2 size={13} />}
+            Очистить кеш
           </button>
         </div>
 

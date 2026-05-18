@@ -1,12 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Routes, Route, useNavigate, useLocation } from 'react-router-dom'
+import { Routes, Route, Navigate, useNavigate, useLocation } from 'react-router-dom'
 import {
-  Search, Cpu, Database, FlaskConical, Library, Bug, Inbox, Boxes,
+  Search, Database, FlaskConical, Library, Bug, Inbox, Boxes,
   Activity, RefreshCw, Sparkles, BookOpen,
 } from 'lucide-react'
 
 import { SearchPage } from './pages/SearchPage'
-import { ParsersPage } from './pages/ParsersPage'
 import { DatabasePage } from './pages/DatabasePage'
 import { ProductPage } from './pages/ProductPage'
 import { TestingPage } from './pages/TestingPage'
@@ -32,7 +31,10 @@ import { DesignSystemPage } from './pages/__design/DesignSystemPage'
 
 const NAV: NavItem[] = [
   { to: '/',          label: 'Поиск',     icon: Search },
-  { to: '/parsers',   label: 'Парсеры',   icon: Cpu },
+  // WT-F9: «Парсеры» удалена из сайдбара. Функции дублировались с
+  // /debug (Live Test + Invalidate cache) и /sources/{provider}.
+  // /parsers route оставлен с Navigate'ом ещё на 2-3 недели для
+  // закладок — удалить после 2026-06-10.
   { to: '/debug',     label: 'Debug',     icon: Bug },
   { to: '/database',  label: 'БД',        icon: Database },
   { to: '/catalog',   label: 'Каталог',   icon: Library },
@@ -109,7 +111,9 @@ export default function App() {
       >
         <Routes>
           <Route path="/" element={<SearchPage />} />
-          <Route path="/parsers" element={<ParsersPage />} />
+          {/* WT-F9: redirect для старых закладок. Удалить после 2026-06-10
+              (даём 2-3 недели) — тогда же удалить ParsersPage.tsx. */}
+          <Route path="/parsers" element={<Navigate to="/debug" replace />} />
           <Route path="/debug" element={<DebugPage />} />
           <Route path="/dlq" element={<DlqPage />} />
           <Route path="/database" element={<DatabasePage />} />
