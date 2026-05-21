@@ -200,9 +200,12 @@ Web-test backend — тонкий proxy к `services/parsers` и
   старыми числами.
 - **Snapshot diff**: `extra` разбивается на `extra.<key>` уже на
   бэкенде (`app/diff.py`). Тест в `app/` фронт не трогает.
-- **Health popover** держит `position: fixed inset-0` overlay
-  для закрытия по клику. Не вкладывать в `overflow-hidden`
-  родителя — иначе обрезается.
+- **Popover'ы и overflow-hidden**: `ui/Popover.tsx` (и `Tooltip`, и
+  `HelpBox` поверх него) рендерится через Radix Portal в `document.body`,
+  поэтому `overflow-hidden`/`overflow-clip` родителя не обрезает контент.
+  Если делаешь свой кастомный popover — используй `ui/Popover` или
+  Radix Portal напрямую, а не `position: absolute` внутри dom-родителя
+  (раньше `HealthBadge` ломался в свёрнутом sidebar именно из-за этого).
 - **`extra.on_sale` / `extra.original_price`** ставит парсер
   HobbyGames при акционной цене (`original_price` в **копейках**).
   Используется на `/search` для бейджа «sale» и блокировки
