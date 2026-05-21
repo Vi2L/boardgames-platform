@@ -254,16 +254,6 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   весь batch (не N модалок). Связать с keyboard-shortcuts: Shift+click
   для range-select, Cmd+A для select-all-visible, Esc для clear-selection.
 
-**Справка и onboarding**
-- [WT-F13.1] **OnboardingTour для первого визита** (follow-up к WT-F13,
-  закрытому 2026-05-21 — см. devlog). Базовый `<HelpBox>` + словарь
-  `help-topics.tsx` уже работает на 6 страницах. Остаётся надстройка:
-  multi-step popover-тур (5-7 шагов) для нового оператора, persistence
-  в `localStorage:onboarding.seen=true`, ссылка «показать ещё раз» в
-  Help-меню. Реализовать через `<Popover>` controlled-mode с координацией
-  через Zustand-стор. Не блокирующее — текущий HelpBox уже даёт
-  контекстную справку по клику.
-
 **Технический долг**
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка
   invalidate для cache-keys одного домена вместо ручного
