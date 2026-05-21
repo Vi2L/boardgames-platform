@@ -19,6 +19,7 @@ import {
   fetchDlq, replayDlq, replayDlqAll, deleteDlq,
 } from '../lib/api'
 import { Button, IconButton, Badge, EmptyState } from '../components/ui'
+import { HelpBox } from '../components/shared/HelpBox'
 
 export function DlqPage() {
   const queryClient = useQueryClient()
@@ -63,6 +64,7 @@ export function DlqPage() {
       <div>
         <h1 className="text-lg font-semibold text-zinc-100 flex items-center gap-2">
           <Inbox size={18} /> DLQ — catalog ingest
+          <HelpBox topic="dlq.what_is_dlq" iconSize={14} />
         </h1>
         <p className="text-xs text-zinc-500 mt-0.5">
           Зависшие батчи с парсеров, которые catalog не принял (downtime,
@@ -112,10 +114,18 @@ export function DlqPage() {
               <th className="px-3 py-2 font-normal">id</th>
               <th className="px-3 py-2 font-normal">создано</th>
               <th className="px-3 py-2 font-normal">последняя попытка</th>
-              <th className="px-3 py-2 font-normal text-right">попыток</th>
+              <th className="px-3 py-2 font-normal text-right">
+                <span className="inline-flex items-center gap-1 justify-end">
+                  попыток <HelpBox topic="dlq.attempt_count" />
+                </span>
+              </th>
               <th className="px-3 py-2 font-normal text-right">payload</th>
               <th className="px-3 py-2 font-normal">last_error</th>
-              <th className="px-3 py-2 font-normal text-right w-32">действия</th>
+              <th className="px-3 py-2 font-normal text-right w-32">
+                <span className="inline-flex items-center gap-1 justify-end">
+                  действия <HelpBox topic="dlq.replay_vs_delete" />
+                </span>
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-zinc-800">

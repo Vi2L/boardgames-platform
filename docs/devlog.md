@@ -8,6 +8,91 @@
 
 ---
 
+## 2026-05-21 · [WT-F13] Контекстные help-боксы (HelpBox + словарь топиков)
+
+**Что сделано:** в web-test frontend заведён новый UI-примитив для контекстной
+справки `<HelpBox topic="..." />` (кликабельная иконка `HelpCircle` →
+popover с JSX-контентом). Основа — `Popover` обёртка над
+`@radix-ui/react-popover` (новый файл в `ui/`, симметричен с `ui/Tooltip.tsx`).
+Контент — typed-словарь 25 топиков в `lib/help-topics.tsx`; тип
+`TopicId = keyof typeof HELP_TOPICS` — несуществующий topic в HelpBox даёт
+ошибку компиляции на месте вызова, без lint-скриптов.
+
+Раскатка по 6 страницам (25 врезок):
+- `/matching` ControlTab — `TierChip` T0/T1/T2/T3 + ML pipeline + Circuit
+  Breaker + worker_interval (расширил `Card` через `helpTopic` prop, чтобы
+  не дублировать import в каждой карточке).
+- `/matching` QueuePanel — `skipped` ячейка (расширил `QueueCell` через
+  `helpTopic` prop).
+- `/catalog → Очередь матчинга` MatchingStatsHeader — bucket good/candidate/
+  cold + match_status_values (расширил `Bucket` через `helpTopic` prop).
+- `/bgg-sync` SchedulerHealth — 5 BGG-job'ов (через локальный
+  `JOB_HELP_TOPICS` маппинг по `job.job_id`) + параметры в CronEditor.
+- `/debug → Контракт` ContractPanel — coverage heatmap, required, defaults,
+  category_whitelist (conditional на `f.name === 'category'`).
+- `/dlq` DlqPage — what_is_dlq, attempt_count, replay_vs_delete.
+
+Палитра 6 уровней зафиксирована в `frontend/CLAUDE.md` (`InfoTip` → `Tooltip`
+→ `HelpBox` → `HowItWorks` → `MatchingHelpTab` → `help.html`) — никаких
+существующих механизмов не заменяли, только дополнили средний слой
+(2-6 предложений JSX, click-open). `react-markdown` намеренно не подключали:
++50KB бандла vs JSX уже даёт type-safe ссылки, `<code>`, `<ul>` и
+переиспользование компонентов вроде `TierChip`.
+
+**Процессное правило** прописано в `services/web-test/CLAUDE.md` (видно
+backend-сессии) и подробно в `services/web-test/frontend/CLAUDE.md` (видно
+frontend-split-сессии): при добавлении нового scheduler-job'а / runtime-flag /
+статуса / bucket'а / tier'а / breaker'а / threshold'а / action-кнопки с
+неочевидным эффектом / колонки с жаргоном проекта (T0..T3, match_status,
+breaker, DLQ, auto_t1, pg_trgm, bge-m3, qwen2.5) — **обязательно** добавить
+запись в `help-topics.tsx` и врезать `<HelpBox topic="..." />` рядом с
+концептом. Чек-лист и конвенция именования `<domain>.<concept_name>` —
+в `frontend/CLAUDE.md` секция «Help-контент».
+
+**Как пользоваться:** на любой из 6 страниц найти лейбл с маленькой
+иконкой `?` рядом → клик раскрывает popover с объяснением. Закрытие —
+клик вне, Esc, повторный клик. Галерея вариантов — `/__design` секция
+«Popover · HelpBox (WT-F13)» (DEV-сборка).
+
+**Чтобы добавить новый help-топик** (frontend):
+```bash
+# 1. Открыть src/lib/help-topics.tsx, добавить:
+#    'matching.your_concept': { title: '...', body: <>...</> }
+# 2. Импортировать HelpBox и врезать рядом с лейблом
+#    <HelpBox topic="matching.your_concept" />
+# 3. Проверить:
+cd services/web-test/frontend
+npx tsc --noEmit
+```
+
+**Архитектурные решения:**
+- `Popover` как separate primitive (а не inlined в HelpBox) — даёт
+  симметрию с `Tooltip`, переиспользование для будущих кастомных popover'ов.
+  Замена самопального popover'а в `shared/HealthBadge.tsx` — отдельный
+  follow-up.
+- Хелпер `defineTopics<K extends string>(t: Record<K, HelpTopic>)` сохраняет
+  узкие литералы ключей через generic-вывод, разрешая optional `learnMore`
+  без narrowing'а от `as const satisfies`.
+- `JOB_HELP_TOPICS` маппинг на фронте (не поле `help_topic` в JOB_METADATA
+  бэка) — help-контент это UI-специфика, нет смысла раздувать API-контракт.
+
+**OnboardingTour** для первого визита — вынесен как [WT-F13.1] в roadmap;
+текущий HelpBox уже даёт контекстную справку по клику.
+
+**Затронутые файлы:**
+- Новые: `services/web-test/frontend/src/components/ui/Popover.tsx`,
+  `components/shared/HelpBox.tsx`, `lib/help-topics.tsx`.
+- Обновлены: `components/ui/index.ts` (+экспорт `Popover`),
+  `components/matching/{ControlTab,QueuePanel}.tsx` (8 врезок),
+  `components/bgg-sync/SchedulerHealth.tsx` (6 врезок + маппинг),
+  `components/catalog/MatchingStatsHeader.tsx` (4 врезки),
+  `components/parsers/ContractPanel.tsx` (4 врезки),
+  `pages/DlqPage.tsx` (3 врезки), `pages/__design/DesignSystemPage.tsx`
+  (галерея), `services/web-test/{frontend/,}CLAUDE.md` (правило +
+  чек-лист).
+
+---
+
 ## 2026-05-18 · [CAT-8] BGG-families — связанные серии игр
 
 **Что сделано:** новые таблицы `bgg_families` + `bgg_family_members`

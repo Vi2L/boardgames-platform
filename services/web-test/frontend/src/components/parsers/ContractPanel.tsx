@@ -13,6 +13,7 @@ import { Loader2, AlertTriangle } from 'lucide-react'
 import clsx from 'clsx'
 import { fetchContract, fetchFieldCoverage } from '../../lib/api'
 import { getStoreLabel, getStoreBadgeColor } from '../../lib/stores'
+import { HelpBox } from '../shared/HelpBox'
 
 const HEATMAP_FIELDS = [
   'description', 'image_url', 'image_url_hd',
@@ -57,14 +58,29 @@ export function ContractPanel() {
                 <tr>
                   <th className="px-3 py-2">Поле</th>
                   <th className="px-3 py-2">Тип</th>
-                  <th className="px-3 py-2">Required</th>
-                  <th className="px-3 py-2">Default</th>
+                  <th className="px-3 py-2">
+                    <span className="inline-flex items-center gap-1">
+                      Required <HelpBox topic="debug.parsed_product_required" />
+                    </span>
+                  </th>
+                  <th className="px-3 py-2">
+                    <span className="inline-flex items-center gap-1">
+                      Default <HelpBox topic="debug.field_defaults" />
+                    </span>
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">
                 {contract.data!.fields.map(f => (
                   <tr key={f.name} className="hover:bg-gray-850">
-                    <td className="px-3 py-2 font-mono text-gray-200">{f.name}</td>
+                    <td className="px-3 py-2 font-mono text-gray-200">
+                      <span className="inline-flex items-center gap-1.5">
+                        {f.name}
+                        {f.name === 'category' && (
+                          <HelpBox topic="debug.category_whitelist" />
+                        )}
+                      </span>
+                    </td>
                     <td className="px-3 py-2 font-mono text-gray-400">{f.type}</td>
                     <td className="px-3 py-2">
                       {f.required
@@ -85,8 +101,9 @@ export function ContractPanel() {
 
         {/* Coverage heatmap */}
         <div>
-          <div className="text-xs text-gray-500 mb-2">
+          <div className="text-xs text-gray-500 mb-2 inline-flex items-center gap-1.5">
             Coverage опциональных полей (% непустых значений в БД)
+            <HelpBox topic="debug.coverage_heatmap" />
           </div>
           {coverage.isLoading ? (
             <div className="bg-gray-900 border border-gray-800 rounded-lg h-40 animate-pulse" />

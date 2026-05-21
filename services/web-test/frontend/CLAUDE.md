@@ -89,6 +89,92 @@ src/
   `GameDetailDrawer`. Inline-формы для CRUD (`AliasEditor`,
   `GameEditor`).
 
+## Help-контент (WT-F13)
+
+### Палитра механизмов — какой инструмент когда применять
+
+| Механизм | Файл | Когда использовать |
+|---|---|---|
+| **InfoTip** | `components/matching/InfoTip.tsx` | 1-строчное plain-string пояснение к метрике / лейблу. CSS-only hover-bubble, max 280px, без JSX. Не закрывается кликом — пишет аналог `title=""`. |
+| **Tooltip** (Radix) | `components/ui/Tooltip.tsx` | Короткий JSX-тултип к action-кнопке (хоткей, статус). Hover, 300ms delay. Не для понятий — для action-подсказок. |
+| **HelpBox** | `components/shared/HelpBox.tsx` | Объяснение понятия 2-6 предложений JSX, click-open popover. Поддерживает `<code>`, `<a>`, `<ul>`. Основной механизм контекстной справки. |
+| **HowItWorks** | `components/matching/HowItWorks.tsx` | Collapsible `<details>`-блок в шапке таба. Объясняет всю подсистему целиком (T0..T4, skipped flow). |
+| **MatchingHelpTab** | `components/matching/MatchingHelpTab.tsx` | Full inline-doc tab с anchor navigation. Длинный prose для одного домена. |
+| **help.html** | `public/help.html` | Standalone справочник — print, sharing, offline. Открывается в новой вкладке. |
+
+Не путать с `<Popover>` (`components/ui/Popover.tsx`) — это базовый
+Radix-обёртка, на которой построен HelpBox. Использовать `Popover`
+напрямую — только если HelpBox с типизированным словарём не подходит.
+
+### Когда добавлять новый help-топик
+
+**При любом изменении в web-test, которое вводит или меняет:**
+- Новый scheduler-job, runtime-flag, breaker, threshold или порог.
+- Новый статус / bucket / tier в матчинге / каталоге.
+- Новую колонку с неочевидным значением (поле БД, метрика).
+- Новый параметр в form / cron-job, который оператор может править.
+- Новый action-кнопку с неочевидными последствиями (replay, revert,
+  invalidate, merge).
+
+Жаргон проекта — `T0/T1/T2/T3`, `match_status`, `skipped_reason`,
+`breaker`, `DLQ`, `auto_t1`, `tier`, `bge-m3`, `qwen2.5`, `pg_trgm` —
+**требует HelpBox**, если впервые встречается на новой странице или
+без объяснений в контексте.
+
+### Чек-лист «добавить help-топик»
+
+1. Открыть `src/lib/help-topics.tsx`.
+2. Добавить запись в `HELP_TOPICS` через `defineTopics`:
+   ```tsx
+   'domain.concept_name': {
+     title: 'Краткий заголовок',
+     body: (
+       <>Объяснение 2-6 предложений. Допустим <code>code</code>, <strong>strong</strong>, ссылки.</>
+     ),
+     learnMore: { label: 'Подробнее в roadmap', href: '...' },  // опционально
+   },
+   ```
+3. Тип `TopicId` обновится автоматически — не нужно ничего править вручную.
+4. Импортировать HelpBox в нужный компонент и вставить рядом с концептом:
+   ```tsx
+   import { HelpBox } from '../shared/HelpBox'
+   ...
+   <span className="inline-flex items-center gap-1.5">
+     T1 порог
+     <HelpBox topic="matching.tier_t1" />
+   </span>
+   ```
+5. Запустить `npx tsc --noEmit` — несуществующий topic = ошибка
+   компиляции на месте вызова.
+
+### Конвенция именования topic_id
+
+`<domain>.<concept_name_in_snake_case>` — где `domain` совпадает с
+сайдбар-разделом или ключом cache:
+- `matching.*` — `/matching` ControlTab, QueuePanel, JournalTab
+- `catalog.*` — `/catalog` (Каталог + Очередь матчинга)
+- `bgg_sync.*` — `/bgg-sync` (scheduler-job'ы и их параметры)
+- `debug.*` — `/debug` (Live Test, Контракт, snapshots)
+- `dlq.*` — `/dlq`
+- `search.*` / `database.*` / `testing.*` — для будущей раскатки
+
+### Когда HelpBox **не нужен**
+
+- Очевидные метрики (`elapsed`, `total`, `count`) — слово говорит за себя.
+- Тривиальные кнопки (`Обновить`, `Закрыть`, `Сохранить`) — Tooltip или
+  ничего.
+- Поля формы с обычным смыслом (`Заголовок`, `Описание`) — placeholder
+  и label достаточно.
+
+### Когда HelpBox **обязателен** (по этому списку соблюдаем при PR-review)
+
+- Появилась новая колонка в таблице со значением-аббревиатурой или
+  жаргоном проекта.
+- Введён новый scheduler-job — он должен попасть в `JOB_HELP_TOPICS`
+  внутри `SchedulerHealth.tsx`.
+- Введён новый bucket / tier / status / reason — добавить запись в
+  словарь, врезать рядом с первой встречей лейбла.
+
 ## Контракты с backend
 
 Web-test backend — тонкий proxy к `services/parsers` и

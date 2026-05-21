@@ -255,24 +255,14 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   для range-select, Cmd+A для select-all-visible, Esc для clear-selection.
 
 **Справка и onboarding**
-- [WT-F13] **Контекстные help-боксы и onboarding-tooltips**. Сейчас
-  пояснения дают точечно: info-блоки на `/database`, html-инструкция
-  в разделе «Помощь» (WT-HELP), tooltip-ы Radix в отдельных местах.
-  Системы нет — оператор должен догадаться, что значит «T2 confidence
-  margin» или «breaker open_for_sec». Дизайн:
-  - Примитив `<HelpBox topic="...">` (`components/ui/HelpBox.tsx`) —
-    Radix Popover + react-markdown.
-  - Контент в `src/lib/help-topics.ts`: словарь
-    `topic_id → {title, body_md, related_links?, learn_more_url?}`.
-  - Раскатка по 5 страницам в порядке приоритета: `/matching`
-    SettingsDrawer (T0/T1/T2/T3, thresholds, profiles) →
-    `/catalog → Очередь` (tier/score/buckets) → `/bgg-sync`
-    (scheduler-job'ы) → `/debug → Контракт` (heatmap field-coverage)
-    → `/dlq` (когда replay/удалять).
-  - Опционально `<OnboardingTour>` для первого визита
-    (`localStorage:onboarding.seen=true`).
-  Trade-off: `react-markdown` ≈50KB в bundle; альтернатива — plain
-  text с базовым `**bold**` через regex.
+- [WT-F13.1] **OnboardingTour для первого визита** (follow-up к WT-F13,
+  закрытому 2026-05-21 — см. devlog). Базовый `<HelpBox>` + словарь
+  `help-topics.tsx` уже работает на 6 страницах. Остаётся надстройка:
+  multi-step popover-тур (5-7 шагов) для нового оператора, persistence
+  в `localStorage:onboarding.seen=true`, ссылка «показать ещё раз» в
+  Help-меню. Реализовать через `<Popover>` controlled-mode с координацией
+  через Zustand-стор. Не блокирующее — текущий HelpBox уже даёт
+  контекстную справку по клику.
 
 **Технический долг**
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка

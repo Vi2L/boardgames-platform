@@ -33,6 +33,8 @@ import { useMatchingMetrics, selectLatencySeries } from '../../store/matching-me
 import { CircuitStateBadge, type CircuitState } from './CircuitStateBadge'
 import { HowItWorks, TierChip } from './HowItWorks'
 import { InfoTip } from './InfoTip'
+import { HelpBox } from '../shared/HelpBox'
+import type { TopicId } from '../../lib/help-topics'
 import { MetricSpark } from './MetricSpark'
 import { ConfirmPanel } from './ConfirmPanel'
 
@@ -82,13 +84,25 @@ function PipelineExplainer() {
         дальше не идём.
       </p>
       <div className="flex flex-wrap items-center gap-2 my-2">
-        <TierChip tier="T0" label="cache" />
+        <span className="inline-flex items-center gap-1">
+          <TierChip tier="T0" label="cache" />
+          <HelpBox topic="matching.tier_t0" />
+        </span>
         <span className="text-gray-600">→</span>
-        <TierChip tier="T1" label="pg_trgm ≥ 0.92" />
+        <span className="inline-flex items-center gap-1">
+          <TierChip tier="T1" label="pg_trgm ≥ 0.92" />
+          <HelpBox topic="matching.tier_t1" />
+        </span>
         <span className="text-gray-600">→</span>
-        <TierChip tier="T2" label="cosine ≥ 0.85" />
+        <span className="inline-flex items-center gap-1">
+          <TierChip tier="T2" label="cosine ≥ 0.85" />
+          <HelpBox topic="matching.tier_t2" />
+        </span>
         <span className="text-gray-600">→</span>
-        <TierChip tier="T3" label="LLM ≥ 0.75 conf" />
+        <span className="inline-flex items-center gap-1">
+          <TierChip tier="T3" label="LLM ≥ 0.75 conf" />
+          <HelpBox topic="matching.tier_t3" />
+        </span>
         <span className="text-gray-600">→</span>
         <TierChip tier="T4" label="manual" />
       </div>
@@ -156,6 +170,7 @@ function KillSwitchCard() {
     <Card
       title="ML pipeline"
       tooltip="Глобальный kill-switch. Хранится в таблице runtime_flags (миграция 0013). После PATCH значение пропагируется в инстансы catalog'а через TTL-кэш (≤5с)."
+      helpTopic="matching.kill_switch"
       right={
         <span className={clsx(
           'font-mono text-[10px] uppercase tracking-wider',
@@ -281,6 +296,7 @@ function ModelsCard() {
     <Card
       title="ML-модели · Ollama"
       tooltip="OllamaHealth polling раз в 30 сек через scheduler-job ml_health_check. Circuit Breaker: closed → open после 3 подряд провалов; open → half-open через recovery_timeout (60с). p50/p95/rps — rolling-buffer последних ~60 успешных вызовов."
+      helpTopic="matching.circuit_breaker"
       right={
         <div className="flex items-center gap-3 text-[10px] uppercase tracking-wider text-gray-500 font-mono">
           <span>last_check {lastCheckRel}</span>
@@ -471,6 +487,7 @@ function WorkerCard() {
     <Card
       title="match_worker · обработка очереди"
       tooltip="APScheduler interval-job. Каждые N сек берёт batch из match_queue (FOR UPDATE SKIP LOCKED), прогоняет через T2 и/или T3, финализирует offers. max_instances=1 — параллельные тики невозможны."
+      helpTopic="matching.worker_interval"
       right={<JobStatusPill job={job} />}
     >
       <div className="space-y-3">
@@ -683,9 +700,12 @@ function WarmupCard() {
 
 // ── Shared layout primitives ───────────────────────────────────────────────
 
-function Card({ title, tooltip, right, children }: {
+function Card({ title, tooltip, helpTopic, right, children }: {
   title: string
+  /** Короткий InfoTip (hover) — для быстрого пояснения концепта. */
   tooltip?: string
+  /** Полный HelpBox (click-popup) — для подробного объяснения концепта. */
+  helpTopic?: TopicId
   right?: React.ReactNode
   children: React.ReactNode
 }) {
@@ -700,6 +720,7 @@ function Card({ title, tooltip, right, children }: {
         <h3 className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-gray-300">
           {title}
           {tooltip && <InfoTip text={tooltip} />}
+          {helpTopic && <HelpBox topic={helpTopic} />}
         </h3>
         {right}
       </header>

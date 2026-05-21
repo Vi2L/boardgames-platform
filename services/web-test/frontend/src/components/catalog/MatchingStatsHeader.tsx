@@ -12,6 +12,8 @@ import { Loader2, Layers } from 'lucide-react'
 import clsx from 'clsx'
 import { fetchMatchingStats } from '../../lib/catalog'
 import { getStoreLabel, getStoreBadgeColor } from '../../lib/stores'
+import { HelpBox } from '../shared/HelpBox'
+import type { TopicId } from '../../lib/help-topics'
 
 export function MatchingStatsHeader() {
   const { data, isLoading } = useQuery({
@@ -38,16 +40,17 @@ export function MatchingStatsHeader() {
     <div className="bg-gray-900 border border-gray-800 rounded p-3 space-y-3">
       <div className="flex items-center gap-3">
         <Layers size={14} className="text-gray-400" />
-        <span className="text-sm font-semibold text-gray-100">
+        <span className="text-sm font-semibold text-gray-100 inline-flex items-center gap-1.5">
           {total.toLocaleString()} unmatched оффер{plural(total)}
+          <HelpBox topic="catalog.match_status_values" />
         </span>
         <div className="flex items-center gap-2 ml-auto text-xs">
           <Bucket label={`good ≥${data.thresholds.auto.toFixed(2)}`}
-                  count={good} color="emerald" />
+                  count={good} color="emerald" helpTopic="catalog.bucket_good" />
           <Bucket label={`candidate ${data.thresholds.candidate.toFixed(2)}–${data.thresholds.auto.toFixed(2)}`}
-                  count={cand} color="amber" />
+                  count={cand} color="amber" helpTopic="catalog.bucket_candidate" />
           <Bucket label={`cold <${data.thresholds.candidate.toFixed(2)}`}
-                  count={cold} color="gray" />
+                  count={cold} color="gray" helpTopic="catalog.bucket_cold" />
         </div>
       </div>
 
@@ -77,11 +80,12 @@ export function MatchingStatsHeader() {
 }
 
 function Bucket({
-  label, count, color,
+  label, count, color, helpTopic,
 }: {
   label: string
   count: number
   color: 'emerald' | 'amber' | 'gray'
+  helpTopic?: TopicId
 }) {
   const cls: Record<string, string> = {
     emerald: 'bg-emerald-900/40 text-emerald-200',
@@ -89,8 +93,11 @@ function Bucket({
     gray:    'bg-gray-800 text-gray-400',
   }
   return (
-    <span className={`px-2 py-0.5 rounded font-mono ${cls[color]}`} title={label}>
-      {count.toLocaleString()}
+    <span className="inline-flex items-center gap-1">
+      <span className={`px-2 py-0.5 rounded font-mono ${cls[color]}`} title={label}>
+        {count.toLocaleString()}
+      </span>
+      {helpTopic && <HelpBox topic={helpTopic} />}
     </span>
   )
 }

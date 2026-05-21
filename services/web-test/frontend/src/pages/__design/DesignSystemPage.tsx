@@ -23,8 +23,9 @@ import {
   Button, IconButton, Input, Textarea, Select, Combobox,
   Badge, StatusDot, Tag, ProgressBar, Skeleton, KBD,
   EmptyState, Dialog, Drawer, Tooltip, Tabs, Toolbar,
-  DataTable, JobLogPanel, HealthCard,
+  DataTable, JobLogPanel, HealthCard, Popover,
 } from '../../components/ui'
+import { HelpBox } from '../../components/shared/HelpBox'
 
 export function DesignSystemPage() {
   return (
@@ -160,6 +161,40 @@ export function DesignSystemPage() {
           <Tooltip content="Топ tooltip"><Button variant="ghost">hover top</Button></Tooltip>
           <Tooltip content={<>Шорткат · <KBD>L</KBD></>}><IconButton icon={LinkIcon} aria-label="link" /></Tooltip>
         </Row>
+      </Section>
+
+      <Section title="Popover · HelpBox (WT-F13)">
+        <Row label="Popover (низкоуровневый)">
+          <Popover content={<div className="text-xs text-zinc-200">Произвольный JSX в popover'е. Закрывается по клику вне / Esc.</div>}>
+            <Button variant="ghost">click to open</Button>
+          </Popover>
+        </Row>
+        <Row label="HelpBox — иконка">
+          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-300">
+            T1 порог <HelpBox topic="matching.tier_t1" />
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-300">
+            bucket good <HelpBox topic="catalog.bucket_good" />
+          </span>
+          <span className="inline-flex items-center gap-1.5 text-xs text-zinc-300">
+            DLQ <HelpBox topic="dlq.what_is_dlq" />
+          </span>
+        </Row>
+        <Row label="HelpBox с label">
+          <HelpBox topic="matching.tier_t2" label="T2" />
+          <HelpBox topic="matching.tier_t3" label="T3" />
+        </Row>
+        <Row label="Стороны">
+          <HelpBox topic="matching.skipped_reasons" side="top" />
+          <HelpBox topic="matching.skipped_reasons" side="right" />
+          <HelpBox topic="matching.skipped_reasons" side="bottom" />
+          <HelpBox topic="matching.skipped_reasons" side="left" />
+        </Row>
+        <p className="text-[11px] text-zinc-500 mt-2">
+          Палитра + чек-лист добавления нового топика — в{' '}
+          <code className="font-mono text-indigo-300">frontend/CLAUDE.md</code>{' '}
+          секция «Help-контент».
+        </p>
       </Section>
 
       <Section title="EmptyState">

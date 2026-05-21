@@ -185,6 +185,26 @@ services/web-test/
   confirm. `window.confirm` только для truly destructive (delete observation,
   delete game, merge games, replay-all DLQ).
 
+### Help-контент (WT-F13)
+
+Контекстные подсказки оператору — через 6-уровневую палитру: `InfoTip`
+(1-line plain), `Tooltip` (Radix, short JSX), `HelpBox` (popover, 2-6
+предложений), `HowItWorks` (collapsible details), `MatchingHelpTab`
+(full inline-doc tab), `public/help.html` (standalone справочник).
+
+**Правило для любых изменений в web-test:** при добавлении нового
+scheduler-job'а, runtime-flag, статуса, bucket'а, tier'а, breaker'а,
+threshold'а, action-кнопки с неочевидным эффектом, или колонки с
+жаргоном проекта (T0/T1/T2/T3, match_status, breaker, DLQ, auto_t1,
+pg_trgm, bge-m3, qwen2.5) — **обязательно** добавить запись в
+`frontend/src/lib/help-topics.tsx` и врезать `<HelpBox topic="..." />`
+рядом с местом первой встречи концепта.
+
+Полная палитра + чек-лист + конвенция именования topic_id — в
+`frontend/CLAUDE.md` секция «Help-контент». `TopicId` — string literal
+union из ключей `HELP_TOPICS`: несуществующий topic = TS-ошибка
+компиляции на месте вызова (enforcement без lint-скриптов).
+
 ### Design system (`src/components/ui/*` · ветка `feat/admin-panel-redesign`)
 
 В ветке `feat/admin-panel-redesign` создана **новая UI-система** под

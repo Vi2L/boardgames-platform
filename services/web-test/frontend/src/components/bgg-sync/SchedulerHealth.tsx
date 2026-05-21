@@ -40,6 +40,21 @@ import {
 import { CronInput } from './CronInput'
 import { SchemaForm } from './SchemaForm'
 import { GlobalBggSettings } from './GlobalBggSettings'
+import { HelpBox } from '../shared/HelpBox'
+import type { TopicId } from '../../lib/help-topics'
+
+/**
+ * Маппинг scheduler-job_id → help-topic. Не у каждого job'а есть HelpBox —
+ * только у тех, чьи концепты неочевидны оператору. Список синхронизируется
+ * с `HELP_TOPICS` в `lib/help-topics.tsx`.
+ */
+const JOB_HELP_TOPICS: Partial<Record<string, TopicId>> = {
+  bgg_top_sync: 'bgg_sync.bgg_top_sync',
+  bgg_hotness_sync: 'bgg_sync.bgg_hotness_sync',
+  bgg_mini_batch: 'bgg_sync.bgg_mini_batch',
+  bgg_family_refresh: 'bgg_sync.bgg_family_refresh',
+  bgg_yearly_releases: 'bgg_sync.bgg_yearly_releases',
+}
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -246,8 +261,11 @@ function JobCard({ job }: { job: SchedulerJob }) {
       <div className="flex items-start gap-3">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
-            <h3 className="text-sm font-semibold text-gray-100">
+            <h3 className="text-sm font-semibold text-gray-100 inline-flex items-center gap-1.5">
               {job.display_name ?? job.job_id}
+              {JOB_HELP_TOPICS[job.job_id] && (
+                <HelpBox topic={JOB_HELP_TOPICS[job.job_id]!} />
+              )}
             </h3>
             {!job.enabled && (
               <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-gray-500">
@@ -404,8 +422,9 @@ function CronEditor({ job, onClose }: { job: SchedulerJob; onClose: () => void }
       </div>
 
       <div>
-        <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1.5">
+        <label className="block text-[10px] uppercase tracking-wide text-gray-500 mb-1.5 inline-flex items-center gap-1.5">
           Параметры
+          <HelpBox topic="bgg_sync.retention_params" />
         </label>
         {hasSchema ? (
           <SchemaForm

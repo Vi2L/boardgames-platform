@@ -28,6 +28,7 @@ export { EmptyState, type EmptyStateProps } from './EmptyState'
 export { Dialog, type DialogProps } from './Dialog'
 export { Drawer, type DrawerProps } from './Drawer'
 export { Tooltip, TooltipProvider, type TooltipProps } from './Tooltip'
+export { Popover, type PopoverProps } from './Popover'
 
 // ─── Navigation / containers ───────────────────────────────────────────────
 export { Tabs, type TabsProps } from './Tabs'

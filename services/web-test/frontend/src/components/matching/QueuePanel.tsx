@@ -35,6 +35,8 @@ import { HowItWorks, TierChip } from './HowItWorks'
 import { InfoTip } from './InfoTip'
 import { MetricSpark } from './MetricSpark'
 import { ConfirmPanel } from './ConfirmPanel'
+import { HelpBox } from '../shared/HelpBox'
+import type { TopicId } from '../../lib/help-topics'
 
 // ── Main ──────────────────────────────────────────────────────────────────
 
@@ -85,7 +87,8 @@ function QueueStrip() {
         <QueueCell label="processing" value={q?.processing} accent="violet"
           hint="Сейчас в работе у воркера" />
         <QueueCell label="skipped" value={q?.skipped} accent="gray"
-          hint="ML дошёл до T4 — оператор должен ручно сматчить или re-enqueue" />
+          hint="ML дошёл до T4 — оператор должен ручно сматчить или re-enqueue"
+          helpTopic="matching.skipped_reasons" />
         <QueueCell label="failed" value={q?.failed} accent="red"
           hint="Исчерпан retry backoff — error_detail хранит последнюю ошибку" />
         <QueueCell label="done" value={q?.done} accent="green"
@@ -95,16 +98,18 @@ function QueueStrip() {
   )
 }
 
-function QueueCell({ label, value, accent, hint }: {
+function QueueCell({ label, value, accent, hint, helpTopic }: {
   label: string; value: number | undefined
   accent: 'amber' | 'violet' | 'gray' | 'red' | 'green'
   hint: string
+  helpTopic?: TopicId
 }) {
   return (
     <div className="bg-gray-900/40 px-4 py-3 space-y-1 group">
       <div className="text-[9px] uppercase tracking-widest text-gray-500 font-mono flex items-center gap-1">
         {label}
         <InfoTip text={hint} side="bottom" />
+        {helpTopic && <HelpBox topic={helpTopic} side="bottom" />}
       </div>
       <div className={clsx(
         'font-mono text-2xl tabular-nums',
