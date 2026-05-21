@@ -70,6 +70,7 @@ _(пусто)_
   `t2_confidence_margin` (зашит как 0.05 в `embeddings.py:153`).
   **Зачем:** для магазинов с шумным title (Wildberries добавляет SKU/серию —
   нужен более низкий T1 порог) vs HobbyGames (чистые title — можно поднять T2).
+  → Объединено с [CAT-17.4] в плане Matching v3.
 - [CAT-4.2] **Structured embedding text** — `embedder.build_text` сейчас
   просто конкатенирует `title_ru + title + aliases[:5]`. Лучше bge-m3
   понимает структурированный текст: `"GAME: {title_ru} ALSO: {title}
@@ -84,6 +85,8 @@ _(пусто)_
   «expansion»/«big box» в title; передавать `kind_filter` в `vec_search_top_k`
   ещё до первого embed-вызова. Точка вставки: `engine.py:103` перед
   `tier_2_vector`. Сэкономит embed-вызовы на офферах, где kind виден из title.
+  → Объединено с [CAT-17.1] в плане Matching v3 — там же acceptance-criteria
+  и метрики (baseline embed-вызовов на 1K офферах).
 - [CAT-4.6] **Snapshot-таблица queue_depth для точного `depth_history`**.
   **Сейчас:** `GET /matching/queue/depth` реконструирует depth по
   `created_at`/`processed_at` (`queue_repo.depth_history`) — аппроксимация,
@@ -95,6 +98,42 @@ _(пусто)_
   hover-actions (re-enqueue / view in journal / run v2), shift+click range
   select, relative time для `processed_at` (живо обновляемое). Сейчас оставлено
   как в предыдущей версии — только checkbox-выделение.
+
+### Catalog (matching v3 — переработка матчинга названий)
+
+Подзадачи объединены в эпик «Matching v3». Закрывают остатки CAT-4.1
+и CAT-4.3 и добавляют морфологию + edition-dedup. Порядок выполнения
+17.1 → 17.2 → 17.3 → 17.4 → 17.5; перед стартом — baseline-замер на
+1K unmatched-офферов (T1 hit-rate, среднее число embed-вызовов на
+оффер, T2-auto precision на выборке 100).
+
+- [CAT-17.1] **pre-T2 kind_classifier** (close-out CAT-4.3). Rule-based
+  regex по словам «дополнение»/«expansion»/«big box»/«promo»/«accessory»
+  в `title.lower()`; передавать `predicted_kind` в `tier_2_vector(ctx)`
+  ещё до первого embed'а. Точка вставки: `matching/v2/engine.py` перед
+  вызовом `tier_2_vector`. Цель — −30...50% embed-вызовов на офферах
+  expansion/promo, без потери precision (валидация на baseline-выборке).
+- [CAT-17.2] **Title pre-processing pipeline**. Новый модуль
+  `catalog/matching/title_pipeline.py`: `strip_publisher_prefix →
+  strip_year → strip_edition_marker → normalize_punctuation →
+  normalize_title`. Префиксы — из новой таблицы `match_publisher_prefixes`
+  (CSV-seed: «Hobby World:», «GaGa Games -», «Лавка Игр:», «Звезда:»,
+  «GaGa Games |» и т.п.). Применяется и для `title_norm`, и для
+  embed_text. Эффект — выше hit-rate на маркетплейсах WB/Avito (где
+  издатель часто в title).
+- [CAT-17.3] **Морфологическая нормализация русских названий**.
+  Через `pymorphy3`: лемматизация ru-токенов перед `title_norm`. Поле
+  `title_lemma` (денормализованное в `games` + GIN trgm). В
+  `find_match_candidates` — двойной search: pg_trgm по `title_lemma`
+  + по `title_norm`, MAX(score). Решает «Каркассона» (родительный) ≠
+  «Каркассон». Trade-off: pymorphy3 ≈30MB в зависимости catalog'а.
+- [CAT-17.4] **MatchProfileLoader** (close-out CAT-4.1). См. описание
+  выше; per-store пороги через `MatchEngine.__init__(profile=...)`.
+- [CAT-17.5] **Edition / version dedup**. Новая таблица
+  `game_editions(parent_game_id FK games, label, year, publisher,
+  productcode, is_canonical)` — связь с `bgg_versions` (CAT-9). При
+  матчинге edition резолвится в `parent_game_id`, но UI показывает
+  конкретное издание. Завязано на CAT-9.
 
 ### Catalog (BGG enrichment)
 
@@ -113,6 +152,37 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   не всегда explicit, часто через publisher (Hobby World, Звезда, GaGa).
   Хранить в новой таблице `bgg_versions (game_id, bgg_id, version_id,
   language, year, publisher, productcode, dimensions, ...)`.
+
+### User-facing features (новое — фундамент для apps/web)
+
+Платформа сейчас — B2B-инструмент (web-test для оператора). Без
+публичного фронтенда (`apps/web/` — stub) consumer-фичи добавляем
+в catalog как API + временный UI в web-test, готовый под перенос.
+
+- [CAT-16] **User-facing избранное / wishlist**. Таблица
+  `catalog.user_favorites(user_id, game_id, added_at, target_price,
+  target_stores[], note)` + CRUD endpoints. user_id пока — UUID
+  устройства (Bearer token), после auth — JWT `sub`. Список с JOIN
+  last_price per store. Временный UI — таб «Избранное» в `/search`
+  web-test (отдельная сущность от `favorites` QA-saved-searches).
+  Долгосрочно — основной экран в `apps/web/`. Связан с CAT-18.
+- [CAT-18] **Price-drop webhook subscriptions**. Триггер на CAT-16:
+  при падении `last_price` < `target_price` отправлять event.
+  Таблица `notification_subscriptions(user_id, channel, target)` —
+  channel ∈ {telegram, email, webhook}. Scheduler-job
+  `price_alert_runner` (interval 5 мин): JOIN favorites ↔ last_price
+  → unsent → send. Idempotency через `notification_log(user_id,
+  game_id, store_slug, price, sent_at)`; одна нотификация на
+  пробитие порога вниз, ресет при возврате цены > порога +5%.
+  MVP — Telegram-бот (`python-telegram-bot` listener /subscribe).
+- [CAT-19] **Price history charts на карточке игры**. Endpoint
+  `GET /games/{id}/price-history?days=90&store=...` агрегирует
+  `offer_prices` в дневные точки `{date, min, max}` per store.
+  UI — таб «История цен» в `GameDetailDrawer` через существующий
+  `<PriceChart>` (используется на `/products/:id`). Бонус — при
+  добавлении в избранное preset `target_price` = min-30д.
+  Open question: daily агрегация в отдельной таблице vs on-the-fly
+  из `offer_prices` (storage vs CPU).
 
 ### web-test
 
@@ -173,14 +243,36 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   (источники = «что подключено», debug = «как это диагностировать»).
 
 **Кросс-страничные UX-паттерны**
-- [WT-F12] **Bulk-actions sticky toolbar pattern.** Базовый примитив
-  `components/ui/Toolbar.tsx` уже есть, но применён точечно. Привести
-  к единому виду на 3 страницах с множественным выбором: matching queue
-  (link/reject N), DLQ (re-enqueue N), snapshots (compare/delete N).
-  Логика: checkbox-колонка → sticky-снизу toolbar
+- [WT-F12] **Bulk-actions sticky toolbar pattern.**
+  **Готово:** базовый примитив `components/ui/Toolbar.tsx` и его применение
+  в `components/bgg-sync/SchedulerHealth.tsx` (pause-all / resume-all /
+  trigger-overdue), сделанное в рамках WT-F7.
+  **Осталось:** раскатать тот же паттерн на 3 страницах с множественным
+  выбором: matching queue (link/reject N), DLQ (re-enqueue N), snapshots
+  (compare/delete N). Логика: checkbox-колонка → sticky-снизу toolbar
   `Selected: N · [Action 1] [Action 2] · Clear` → **один confirm** на
   весь batch (не N модалок). Связать с keyboard-shortcuts: Shift+click
   для range-select, Cmd+A для select-all-visible, Esc для clear-selection.
+
+**Справка и onboarding**
+- [WT-F13] **Контекстные help-боксы и onboarding-tooltips**. Сейчас
+  пояснения дают точечно: info-блоки на `/database`, html-инструкция
+  в разделе «Помощь» (WT-HELP), tooltip-ы Radix в отдельных местах.
+  Системы нет — оператор должен догадаться, что значит «T2 confidence
+  margin» или «breaker open_for_sec». Дизайн:
+  - Примитив `<HelpBox topic="...">` (`components/ui/HelpBox.tsx`) —
+    Radix Popover + react-markdown.
+  - Контент в `src/lib/help-topics.ts`: словарь
+    `topic_id → {title, body_md, related_links?, learn_more_url?}`.
+  - Раскатка по 5 страницам в порядке приоритета: `/matching`
+    SettingsDrawer (T0/T1/T2/T3, thresholds, profiles) →
+    `/catalog → Очередь` (tier/score/buckets) → `/bgg-sync`
+    (scheduler-job'ы) → `/debug → Контракт` (heatmap field-coverage)
+    → `/dlq` (когда replay/удалять).
+  - Опционально `<OnboardingTour>` для первого визита
+    (`localStorage:onboarding.seen=true`).
+  Trade-off: `react-markdown` ≈50KB в bundle; альтернатива — plain
+  text с базовым `**bold**` через regex.
 
 **Технический долг**
 - [WT-T3] **`useInvalidate(domain)` хук** — единая точка
@@ -206,6 +298,31 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
   cleanup, делается при следующем касании любого из этих файлов.
 
 ### Parsers
+- [PRS-8] **Универсальный category-whitelist для всех парсеров**.
+  Сейчас фильтр не-настолок неоднороден: WB — `subjectId == 120`,
+  Avito — `microCategoryId ∈ {2301995, 2301997, 2301999}`, Ozon —
+  URL зашит на категорию, OnlineTrade — URL зашит на раздел; для
+  HobbyGames / Лавка / GaGa / CrowdGames никаких guard'ов (полагаемся
+  на специализацию магазина). После CAT-FILTER (2026-05-18,
+  `_ALLOWED_CATEGORIES` в catalog ingest) контракт `category` стал
+  обязательным, но не единообразным. Дизайн:
+  - В `StoreParser` (ABC) — классовый атрибут
+    `fixed_category: Literal["boardgames","expansion","accessory"] | None = "boardgames"`.
+  - В `service.py:_run_one` после `parser.search(...)`: если
+    `parser.fixed_category and product.category is None` —
+    `replace(product, category=parser.fixed_category)`.
+  - Маркетплейсы (avito/wb/ozon/onlinetrade) — `fixed_category=None`,
+    но в `_build_products`/`_parse_cards` явно ставят
+    `category="boardgames"` после своего фильтра.
+  - Magic-числа (`subjectId`, `microCategoryId`) — в module-level
+    constants с docstring о том, какой probe-скрипт перепроверяет
+    актуальность (`bin/probe_avito_microcategory.py` и т.п.).
+  - `catalog_publisher._build_offer` — берёт `category` из
+    `ParsedProduct`, не литерал `"boardgames"`.
+  Эффект: единообразный контракт; если магазин расширит ассортимент
+  (HobbyGames добавит книги/мерч), catalog `_ALLOWED_CATEGORIES`
+  отсечёт мусор без ручной правки парсера.
+
 - [PRS-1] **DLQ retry с backoff** — cron-таск в parsers,
   пробующий replay'нуть DLQ-записи с экспоненциальным backoff;
   алерт при `attempt_count > 10`.
@@ -254,6 +371,30 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 - [INFRA-4] **`.github/workflows/`** — CI с change detection
   (пересобирать только то, что менялось).
 
+- [INFRA-7] **Минимальный CI (GitHub Actions)**. Сейчас CI нет —
+  `bin/test-all.sh` требует ручного запуска; ruff/тесты не блокируют
+  merge. Первая версия (без change-detection):
+  `.github/workflows/ci.yml` — trigger PR + push в main; jobs:
+  `ruff check .`, `bin/test-all.sh` (pytest per-сервис),
+  `docker compose --profile full build` (smoke). `npx tsc --noEmit`
+  во frontend — non-blocking warning, пока не зелёный полностью.
+  Change-detection (INFRA-4) — отдельный шаг 2, когда базовый CI
+  устоится.
+
+- [INFRA-8] **Retention для растущих таблиц**. По аналогии с CAT-11
+  (match_log, 90 дней) добавить retention-job'ы для остальных
+  потенциально неограниченно растущих таблиц:
+  - `parsers/parser_log` — 30 дней (scheduler внутри parsers либо
+    cron на хосте через `bin/`-скрипт). Размер сжимается ×10.
+  - `parsers/parser_snapshot` — 7 дней (накапливается только при
+    `ENABLE_RAW_SNAPSHOTS=1`).
+  - `catalog/dicefest_raw_games` — 14 дней с момента promote
+    (`promotion_log.action ∈ {link, create}` → raw можно удалять).
+  - `parsers/request_log` — 30 дней.
+  Acceptance: каждая retention-стратегия имеет либо scheduler-job
+  с записью в ImportJob payload (catalog), либо `bin/`-скрипт +
+  пример cron-строки в README (parsers).
+
 - [INFRA-6] **Процессный аудит `.claude/settings.json`.** Файл накапливает
   Bash-разрешения и pre-commit-хуки от старых страниц и команд web-test.
   Раз в квартал (или после крупного merge типа admin-panel редизайна) —
@@ -278,6 +419,41 @@ mechanics, players, age, playtime, cover/thumbnail. Не сохраняем
 
 ## Архив решений (ADR-style, append-only)
 
+- **2026-05-18** — Трёхслойный фильтр «только настолки»
+  (CAT-FILTER): parsers (microCategoryId/subjectId/URL-категория) +
+  catalog ingest (`_ALLOWED_CATEGORIES = {boardgames, expansion,
+  accessory, None}`) + LLM T3 (`not_a_boardgame: ...` reason).
+  Defence-in-depth: каждый слой ловит мусор, который проскочил
+  предыдущий. См. devlog 2026-05-18 [CAT-FILTER].
+- **2026-05-18** — Per-store Circuit Breaker для wb/ozon/avito
+  (PRS-7). Sliding-window failure-rate breaker
+  (`parsers/utils/breaker.py`): `closed → open` при ≥50% failures
+  в окне 60с, lazy half-open probe через 300с. State per-process
+  (multi-worker деплой держит свои breaker'ы). Заменяет 30+ сек
+  гарантированного провала на fail-fast. См. devlog 2026-05-18.
+- **2026-05-18** — `match_log` retention 90 дней (CAT-11).
+  APScheduler-job ежедневно 02:00 UTC удаляет завершённые записи
+  (`reverted_at IS NOT NULL OR action='revert'`). Активные
+  auto-match'и не трогаются — нужны для будущего revert.
+  Override через `Settings.match_log_retention_days` или params
+  в `scheduler_configs`. См. devlog 2026-05-18.
+- **2026-05-18** — T0 cache invalidation API (CAT-12).
+  `DELETE /matching/decisions/{title_norm}` + `POST /matching/
+  decisions/invalidate` (bulk с защитой от wipe-all). Миграция
+  0016 сделала `match_log.offer_id` nullable (invalidate относится
+  к title_norm, не к оферу). Оператор может пересмотреть ошибочный
+  reject или auto_t3 без прямого SQL DELETE. См. devlog 2026-05-18.
+- **2026-05-18** — Auto Recovery Runner (CAT-4.5).
+  Scheduler-job (interval 60с) читает правила из
+  `auto_recovery_rules` (миграция 0014) и применяет actions
+  (`re_enqueue_skipped`, `trigger_job`) при выполнении condition'ов
+  (`circuit_state`, `breaker_state`, `job_completed`). Дедуп через
+  `last_triggered_at + dedup_minutes`. См. devlog 2026-05-18.
+- **2026-05-18** — WB exp-backoff + chrome131 impersonate (PRS-6).
+  4 попытки с jitter (`delay = 1.5 * 2**attempt + random(0, 0.5)`)
+  вместо 1 retry × фикс 2с. TLS-impersonation `chrome131` (JA3 для
+  актуального Chrome 2026). UA + Sec-Ch-Ua подняты синхронно.
+  Override через env `WB_IMPERSONATE`. См. devlog 2026-05-18.
 - **2026-05-08** — `docs/parallel-agents.md`: дизайн параллельной
   работы нескольких Claude Code-сессий (split C, worktrees,
   subagents).
