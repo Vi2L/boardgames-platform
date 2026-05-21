@@ -41,6 +41,7 @@ import { CronInput } from './CronInput'
 import { SchemaForm } from './SchemaForm'
 import { GlobalBggSettings } from './GlobalBggSettings'
 import { HelpBox } from '../shared/HelpBox'
+import { ConfirmPanel } from '../shared/ConfirmPanel'
 import type { TopicId } from '../../lib/help-topics'
 
 /**
@@ -141,6 +142,10 @@ export function SchedulerHealth() {
 
 function BulkActionsToolbar({ jobs }: { jobs: SchedulerJob[] }) {
   const qc = useQueryClient()
+  // Активная inline-confirm-панель. Сейчас опасный action только один (Pause all),
+  // но enum-стиль оставляет место под Resume-конфликты или массовый Trigger.
+  const [pendingConfirm, setPendingConfirm] = useState<'pause' | null>(null)
+
   const enabledCount = jobs.filter(j => j.enabled).length
   const disabledCount = jobs.length - enabledCount
   const now = Date.now()
@@ -161,42 +166,75 @@ function BulkActionsToolbar({ jobs }: { jobs: SchedulerJob[] }) {
   }
   const onError = (e: Error) => toast.error(e.message)
 
-  const pause = useMutation({ mutationFn: pauseAllJobs, onSuccess: onSuccess('Pause all'), onError })
+  const pause = useMutation({
+    mutationFn: pauseAllJobs,
+    onSuccess: (res) => { onSuccess('Pause all')(res); setPendingConfirm(null) },
+    onError,
+  })
   const resume = useMutation({ mutationFn: resumeAllJobs, onSuccess: onSuccess('Resume all'), onError })
   const overdue = useMutation({ mutationFn: triggerOverdueJobs, onSuccess: onSuccess('Trigger overdue'), onError })
 
   const anyPending = pause.isPending || resume.isPending || overdue.isPending
 
+  // Список overdue-job_id'ов для preview в confirm-панели — оператор должен видеть,
+  // какие именно остановки случатся, прежде чем подтвердить.
+  const overdueJobIds = jobs
+    .filter(j => j.enabled && j.next_run_at && new Date(j.next_run_at).getTime() < now)
+    .map(j => j.job_id)
+
   return (
-    <div className="border border-gray-800 bg-gray-900/40 rounded-lg p-3 flex items-center gap-2">
-      <div className="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Bulk actions</div>
-      <BulkButton
-        icon={<Pause size={11} />}
-        label={`Pause all (${enabledCount})`}
-        disabled={anyPending || enabledCount === 0}
-        loading={pause.isPending}
-        onClick={() => {
-          if (!confirm(`Disable ${enabledCount} enabled-job(ы)? Это остановит все scheduled-запуски до Resume.`)) return
-          pause.mutate()
-        }}
-      />
-      <BulkButton
-        icon={<PlayCircle size={11} />}
-        label={`Resume all (${disabledCount})`}
-        disabled={anyPending || disabledCount === 0}
-        loading={resume.isPending}
-        onClick={() => resume.mutate()}
-      />
-      <BulkButton
-        icon={<Zap size={11} />}
-        label={`Trigger overdue (${overdueCount})`}
-        disabled={anyPending || overdueCount === 0}
-        loading={overdue.isPending}
-        onClick={() => overdue.mutate()}
-      />
-      <div className="text-[10px] text-gray-500 ml-auto">
-        Всего {jobs.length} · enabled {enabledCount} · overdue {overdueCount}
+    <div className="space-y-2">
+      <div className="border border-gray-800 bg-gray-900/40 rounded-lg p-3 flex items-center gap-2">
+        <div className="text-[10px] uppercase tracking-wide text-gray-500 mr-1">Bulk actions</div>
+        <BulkButton
+          icon={<Pause size={11} />}
+          label={`Pause all (${enabledCount})`}
+          disabled={anyPending || enabledCount === 0 || pendingConfirm === 'pause'}
+          loading={pause.isPending}
+          onClick={() => setPendingConfirm('pause')}
+        />
+        <BulkButton
+          icon={<PlayCircle size={11} />}
+          label={`Resume all (${disabledCount})`}
+          disabled={anyPending || disabledCount === 0}
+          loading={resume.isPending}
+          onClick={() => resume.mutate()}
+        />
+        <BulkButton
+          icon={<Zap size={11} />}
+          label={`Trigger overdue (${overdueCount})`}
+          disabled={anyPending || overdueCount === 0}
+          loading={overdue.isPending}
+          onClick={() => overdue.mutate()}
+        />
+        <div className="text-[10px] text-gray-500 ml-auto">
+          Всего {jobs.length} · enabled {enabledCount} · overdue {overdueCount}
+        </div>
       </div>
+
+      <ConfirmPanel
+        open={pendingConfirm === 'pause'}
+        variant="amber"
+        title={`Disable ${enabledCount} scheduler-job'ов`}
+        description="Все scheduled-запуски остановятся до явного Resume. Manual trigger из карточки job'а продолжит работать."
+        filterSummary={[
+          { tone: 'amber', label: `enabled · ${enabledCount}` },
+          ...(overdueCount > 0
+            ? [{ tone: 'red' as const, label: `overdue · ${overdueCount}` }]
+            : []),
+        ]}
+        impact={[
+          `${enabledCount} job'ов → enabled=false`,
+          overdueJobIds.length > 0
+            ? `пропустят следующий запуск: ${overdueJobIds.slice(0, 3).join(', ')}${overdueJobIds.length > 3 ? `, +${overdueJobIds.length - 3}` : ''}`
+            : "overdue-job'ов нет, потерь следующего тика не будет",
+          'Reverse — кнопка Resume all',
+        ]}
+        confirmLabel={`Disable ${enabledCount}`}
+        loading={pause.isPending}
+        onConfirm={() => pause.mutate()}
+        onCancel={() => setPendingConfirm(null)}
+      />
     </div>
   )
 }

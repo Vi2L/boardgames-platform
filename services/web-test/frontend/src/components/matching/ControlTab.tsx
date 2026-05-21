@@ -36,7 +36,7 @@ import { InfoTip } from './InfoTip'
 import { HelpBox } from '../shared/HelpBox'
 import type { TopicId } from '../../lib/help-topics'
 import { MetricSpark } from './MetricSpark'
-import { ConfirmPanel } from './ConfirmPanel'
+import { ConfirmPanel } from '../shared/ConfirmPanel'
 
 // ── Small format helpers ───────────────────────────────────────────────────
 

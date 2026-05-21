@@ -34,7 +34,7 @@ import {
 import { HowItWorks, TierChip } from './HowItWorks'
 import { InfoTip } from './InfoTip'
 import { MetricSpark } from './MetricSpark'
-import { ConfirmPanel } from './ConfirmPanel'
+import { ConfirmPanel } from '../shared/ConfirmPanel'
 import { HelpBox } from '../shared/HelpBox'
 import type { TopicId } from '../../lib/help-topics'
 
