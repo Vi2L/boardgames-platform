@@ -15,6 +15,7 @@ from fastapi import FastAPI
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s:%(message)s")
 from sqlalchemy import text
 
+from catalog.background import init_background_state, wait_background_tasks
 from catalog.config import get_settings
 from catalog.db import dispose_engine, get_engine
 from catalog.routers import bgg_lists as bgg_lists_router
@@ -35,6 +36,10 @@ from catalog.scheduler import create_scheduler
 async def lifespan(app: FastAPI):
     # Startup: создаём engine заранее, чтобы первый запрос не платил за инициализацию.
     get_engine()
+
+    # Инициализируем хранилище tracked background-тасок. Должно произойти
+    # ДО любого track_task() — иначе AttributeError на app.state.
+    init_background_state(app)
 
     # ── Matching v2: recovery + health check ─────────────────────────────────
     # При старте: вернуть зависшие 'processing' записи match_queue в 'pending'.
@@ -79,6 +84,9 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    # Сначала ждём fire-and-forget таски (ingest-enrich и т.п.) — у них есть
+    # шанс докоммитить транзакцию. Только потом гасим scheduler и engine.
+    await wait_background_tasks(app, timeout=10.0)
     scheduler.shutdown(wait=False)
     await dispose_engine()
 

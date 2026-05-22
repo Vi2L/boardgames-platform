@@ -15,11 +15,10 @@ manual-связь.
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -27,6 +26,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from bg_shared.ingest import IngestRequest
 
 from catalog.auth import require_scope
+from catalog.background import track_task
 from catalog.db import get_engine, get_session
 from catalog.matching.v2 import MatchAction, MatchContext, match_sync, normalize_title
 from catalog.matching.v2.auditor import log_change, log_progress
@@ -91,7 +91,9 @@ async def _enrich_one_background(bgg_id: int) -> None:
     dependencies=[Depends(require_scope("ingest"))],
 )
 async def ingest_offers(
-    payload: IngestRequest, session: AsyncSession = Depends(get_session)
+    payload: IngestRequest,
+    request: Request,
+    session: AsyncSession = Depends(get_session),
 ) -> IngestResult:
     fetched_at = payload.fetched_at or _utcnow()
     items: list[IngestResultItem] = []
@@ -296,7 +298,11 @@ async def ingest_offers(
                         .where(GameBgg.game_id == new_game_id)
                     )).one_or_none()
                     if bgg_row is not None and bgg_row.fetched_at < cutoff:
-                        asyncio.create_task(
+                        # track_task регистрирует таску в app.state — lifespan
+                        # дождётся её на shutdown с таймаутом, чтобы не оборвать
+                        # session.commit() на середине.
+                        track_task(
+                            request.app,
                             _enrich_one_background(bgg_row.bgg_id),
                             name=f"ingest-stale-enrich-{bgg_row.bgg_id}",
                         )
