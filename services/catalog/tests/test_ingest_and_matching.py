@@ -253,8 +253,10 @@ async def test_matching_queue_shows_unmatched(client: AsyncClient):
     assert body["items"][0]["match_status"] == "unmatched"
 
 
-async def test_manual_link_freezes_match(client: AsyncClient):
-    """После manual-link повторный ingest не должен сдвинуть game_id."""
+async def test_manual_link_freezes_match(client: AsyncClient, session: AsyncSession):
+    """После manual-link повторный ingest не должен сдвинуть game_id и не должен
+    стирать диагностику (match_score/match_tier/match_reason) — оператор
+    использует эти поля как след принятого решения."""
     gid = await _seed_carcassonne(client)
     # Загружаем оффер, который не сматчится автоматически.
     ing = await client.post(
@@ -277,6 +279,19 @@ async def test_manual_link_freezes_match(client: AsyncClient):
     assert r.status_code == 200
     assert r.json()["match_status"] == "manual"
 
+    # Снимок диагностических полей в БД сразу после manual-link. Что бы туда
+    # ни записал link (NULL или конкретные значения) — повторный ingest не
+    # должен это значение менять.
+    snap = (
+        await session.execute(
+            text(
+                "SELECT match_score, match_tier, match_reason "
+                "FROM offers WHERE id = :id"
+            ),
+            {"id": offer_id},
+        )
+    ).one()
+
     # Повторный ingest того же оффера (с похожим title) не должен ничего
     # переопределить — manual фиксируется.
     r2 = await client.post(
@@ -295,6 +310,18 @@ async def test_manual_link_freezes_match(client: AsyncClient):
     item = r2.json()["items"][0]
     assert item["match_status"] == "manual"
     assert item["game_id"] == gid
+
+    # Регрессия: до фикса безусловный UPDATE сбрасывал поля в NULL.
+    after = (
+        await session.execute(
+            text(
+                "SELECT match_score, match_tier, match_reason "
+                "FROM offers WHERE id = :id"
+            ),
+            {"id": offer_id},
+        )
+    ).one()
+    assert after == snap, "повторный ingest не должен трогать match-диагностику manual-оффера"
 
 
 async def test_ingest_writes_normalized_offer_fields(client: AsyncClient):

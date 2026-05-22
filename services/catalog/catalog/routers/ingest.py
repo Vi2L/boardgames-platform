@@ -320,18 +320,22 @@ async def ingest_offers(
                 new_game_id = result.game_id  # может быть None
                 new_status = "rejected" if result.action == MatchAction.REJECT else "unmatched"
 
-            # Один UPDATE для всех веток (DRY)
-            await session.execute(
-                Offer.__table__.update()
-                .where(Offer.__table__.c.id == offer_id)
-                .values(
-                    game_id=new_game_id,
-                    match_status=new_status,
-                    match_score=new_score,
-                    match_tier=new_tier,
-                    match_reason=result_reason,
+            # UPDATE только для веток, где matcher реально работал.
+            # Для manual/rejected все новые значения — дефолтные None: безусловный
+            # UPDATE стирал бы существующие match_score/match_tier/match_reason
+            # (диагностику, по которой видно, почему оффер попал в этот статус).
+            if current_status not in ("manual", "rejected"):
+                await session.execute(
+                    Offer.__table__.update()
+                    .where(Offer.__table__.c.id == offer_id)
+                    .values(
+                        game_id=new_game_id,
+                        match_status=new_status,
+                        match_score=new_score,
+                        match_tier=new_tier,
+                        match_reason=result_reason,
+                    )
                 )
-            )
 
         # История цен — отдельная точка на каждый ingest. ON CONFLICT по
         # композитному PK (offer_id, fetched_at) — если за тот же миг уже
