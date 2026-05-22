@@ -178,6 +178,9 @@ async def _upsert_not_found(
 ) -> None:
     if dry_run:
         return
+    # Один now на оба пути upsert'а — иначе INSERT-путь и UPDATE-путь получают
+    # разные timestamp'ы (микросекундная разница) и идемпотентность нарушается.
+    now = _utcnow()
     await session.execute(
         pg_insert(GameWikidata.__table__)
         .values(
@@ -190,13 +193,13 @@ async def _upsert_not_found(
             descriptions={},
             matched_entities=[],
             raw={},
-            fetched_at=_utcnow(),
+            fetched_at=now,
         )
         .on_conflict_do_update(
             index_elements=["game_id"],
             set_={
                 "found": False,
-                "fetched_at": _utcnow(),
+                "fetched_at": now,
             },
         )
     )

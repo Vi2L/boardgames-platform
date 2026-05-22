@@ -13,9 +13,10 @@ TTL стратегия:
 """
 from __future__ import annotations
 
-from sqlalchemy import text
+from sqlalchemy import and_, delete, text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.sql import ColumnElement
 
 from catalog.config import get_settings
 from catalog.models import MatchDecision
@@ -115,14 +116,15 @@ async def invalidate_bulk(
     if title_contains is None and not only_negative:
         return 0
 
-    conditions: list[str] = []
-    params: dict = {}
+    # Core API через and_() — параметризация SQL берётся на себя SQLAlchemy,
+    # включая безопасный escape подстановки в ILIKE.
+    conditions: list[ColumnElement[bool]] = []
     if title_contains is not None:
-        conditions.append("title_norm ILIKE :pattern")
-        params["pattern"] = f"%{title_contains}%"
+        conditions.append(MatchDecision.title_norm.ilike(f"%{title_contains}%"))
     if only_negative:
-        conditions.append("game_id IS NULL")
+        conditions.append(MatchDecision.game_id.is_(None))
 
-    sql = f"DELETE FROM match_decisions WHERE {' AND '.join(conditions)}"
-    result = await session.execute(text(sql).bindparams(**params))
+    result = await session.execute(
+        delete(MatchDecision).where(and_(*conditions))
+    )
     return result.rowcount or 0
