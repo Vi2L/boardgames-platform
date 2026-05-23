@@ -8,6 +8,148 @@
 
 ---
 
+## 2026-05-23 · [CAT-17 follow-up] Token-overlap penalty, regex расширения, cursor reassess + bulk cleanup
+
+**Что сделано:** серия follow-up'ов к [CAT-17] после реального прогона
+`reassess-all` на 853 unmatched-офферах. Выявлены два класса проблем:
+false-positives типа `«Чудеса света новых времен» → «7 Wonders»` (trgm 0.81,
+но это разные игры) и false-negatives типа `«В поисках Эльдорадо (база)»`,
+где pipeline не вырезал «(база)» и penalty считала её лишним токеном.
+
+**Что добавлено в код (2 commit'а):**
+
+1. `0d9cd5e` — **token-overlap penalty + порядковые слова в edition regex**:
+   - Новый `catalog/matching/scoring.py`: `token_overlap_penalty(query, matched_text)`
+     возвращает штраф ∈ [0, 0.6] на основе symmetric difference токенов.
+     Формула: `α=0.6 × |q_tokens Δ m_tokens| / max(|q|, |m|)`. Закрывает
+     классический pg_trgm-bug, когда `q ⊂ m` (короткое имя «Чудеса света»
+     поглощается длинным «Чудеса света новых времен») даёт 0.5+ trgm score
+     без сигнала, что слова не пересекаются.
+   - `tier_1_trgm`: post-process для каждого candidate — `adjusted_score =
+     raw_score - penalty`. Пересортировка по adjusted, фильтр < 0.30
+     (отрезаем потенциальные false-positives ниже candidate threshold).
+     `raw_score` сохраняется в candidate dict для диагностики UI.
+   - `title_pipeline._EDITION_RE`: расширен на порядковые слова —
+     «первое», «второе», «третья», «четвёртая» и т.д. + редакция/версия.
+     Реальный кейс WB: «Великий западный путь второе издание с допом».
+
+2. `ad68df6` — **«база»/«base» в pipeline + cursor pagination для reassess-all**:
+   - `_EDITION_RE`: добавлены варианты одиночного «база»/«base» в
+     контекстных позициях — в скобках или в конце title. Не цепляет
+     «база» в середине (false-friend кейсы: «военная база», «база данных»).
+     Закрывает 5+ вариантов `«В поисках Эльдорадо (база)»`,
+     `«В поисках Эльдорадо настольная игра»`, `«Catan base»`.
+   - `reassess_all`: добавлен query-параметр `after_id` + поле
+     `next_after_id` в response. Решает архитектурный баг: без cursor
+     `ORDER BY id ASC` возвращал **те же** первые 500 unmatched в каждом
+     batch (после reassess они остаются unmatched → следующий batch берёт
+     их же). 30 батчей × 500 = 15K scanned / 0 promoted в первом прогоне.
+     С cursor — 2 batches × 500/352 = 852 scanned (все unmatched в БД).
+
+**Что сделано в БД (две bulk-операции, audit в match_log):**
+
+3. **Bulk T0 cache invalidate** (36 auto_t3-записей score<0.85 с
+   game_id IS NOT NULL): SQL DELETE из `match_decisions` через
+   транзакцию + audit-запись `action='invalidate'`. Это были старые
+   решения LLM-арбитра, накопленные до моего pipeline — низкая
+   confidence + новые правила pipeline могли бы переоценить эти кейсы.
+   Negative cache (game_id=NULL) не трогали — это правильные rejects
+   («не настолка», «no match»).
+
+4. **Bulk unmatch suspicious auto** (22 оффера со score<0.85 tier∈{1,2,3}):
+   `UPDATE offers SET match_status='unmatched', game_id=NULL,
+   was_linked=true` + 22 audit-записи `action='unlink'` для возможного
+   revert. Это позволило reassess'у переоценить их через новый pipeline.
+   Результат: 7 валидных вернулись в auto 1.00 (через T0/T1), 15 ложных
+   остались unmatched (penalty снизила score < 0.30).
+
+**Эффект на 7-дневный SLA snapshot:**
+
+| Tier      | Baseline до CAT-17 | После всех правок | Δ |
+|-----------|---|---|---|
+| T0 cache  | 151 (18.9%) | 171 (21.4%) | +20 (+13%) |
+| **T1 trgm** | **12 (1.5%)** | **34 (4.3%)** | **+22 (+183%)** |
+| T2 vec    | 0 (0.0%) | 0 (0.0%) | 0 (ML off) |
+| T3 LLM    | 7 (0.9%) | 0 (0.0%) | −7 (low-confidence сняты) |
+| unmatched | 601 (75.2%) | 566 (70.8%) | **−35 (−6%)** |
+| rejected  | 28 (3.5%) | 28 (3.5%) | 0 |
+
+Coverage by store: hobbygames 53.9% → 62.8% (+8.9%), wildberries
+19.7% → 25.5% (+5.8%), ozon 2.2% → 6.5% (×3), avito 11.5% → 14.3%
+(+2.8%). Самый сильный относительный прирост у ozon (+196%) —
+у него SSR-парсинг даёт самый шумный title («Настольная игра
+JUEGOS 7 Wonders Architects Medals»), pipeline режет marketing-слова
+и вытаскивает базу.
+
+**Архитектурные решения:**
+
+- **Penalty α=0.6** подобрана эмпирически: при полностью неперекрывающихся
+  токенах падение score ≈0.6 (например, trgm 0.81 → 0.21, явно ниже T1
+  0.92). Меньше — пропускает спин-оффы как auto, больше — отсекает
+  валидные extensions с одним лишним словом.
+- **Cursor через `after_id`, не offset**: offset-pagination ломается, если
+  между batches удаляются/добавляются строки. Cursor по UNIQUE id
+  стабилен под параллельный ingest.
+- **Bulk unmatch не трогает T0 cache hit'ы** (`match_tier=0`): эти
+  решения уже инвалидированы через шаг 3. После шага 3 они исчезли из
+  cache, при reassess пройдут через T1 заново. Логика последовательная.
+- **Score сохраняется при bulk unmatch** (`match_score` остаётся): помогает
+  UI «лучший кандидат» в очереди для оператора. `was_linked=true`
+  поднимает оффер выше в очереди (повторное внимание).
+- **«база»/«base» только в контекстных позициях** (скобки или конец):
+  protect от false-friend «военная база», «база данных». Negative-тесты
+  в `test_title_pipeline.py` гарантируют, что эти кейсы не цепляются.
+
+**Тесты:** 95 проходят (88 → 95):
+- `test_title_pipeline.py`: +7 (`база` × 5 positive + 2 false-friend
+  negative, порядковые слова × 3).
+- `test_scoring.py`: 17 новых (token-overlap penalty + adjust_score).
+
+**Как пользоваться** (для оператора):
+
+```bash
+# Reassess всех unmatched (после крупного импорта BGG/Tesera или после
+# любых правок алиасов). Cursor итерируется до limit_hit=false.
+after_id=""
+while true; do
+  url="http://localhost:8002/matching/reassess-all?limit=500"
+  [ -n "$after_id" ] && url="${url}&after_id=${after_id}"
+  resp=$(curl -sf -X POST "$url")
+  next=$(echo "$resp" | jq -r .next_after_id)
+  [ "$next" = "null" ] && break
+  after_id="$next"
+done
+
+# Если в `/matching → Журнал` видны подозрительные auto_t3-матчи с низким
+# score — bulk invalidate (точечно через UI или массово SQL):
+docker exec bg-postgres psql -U catalog -d catalog -c \
+  "DELETE FROM match_decisions WHERE source='auto_t3' AND score<0.85 AND game_id IS NOT NULL"
+```
+
+**Что осталось как technical debt:**
+
+- **Auto-офферы со score 0.85-0.91** не пересматриваются — reassess
+  обрабатывает только `unmatched`. Если был старый ошибочный auto с
+  score ≥0.85, его обнаружит только оператор через ручной unlink.
+  Возможный фикс: расширить `reassess-all?include_auto=true&max_score=0.92`.
+- **ML отключен** (`runtime_flag ml_enabled=false`). T2/T3 пайплайн готов
+  и здоров (Ollama+circuit closed), но не работает. Включение даст
+  +20-50 авто-матчей в неделю на текущем объёме unmatched.
+- **Edition dedup (CAT-17.5)** заблокирован CAT-9 (bgg_versions). Без
+  него expansion-офферы типа «Каркассон: Сафари» матчатся с базой,
+  что технически верно, но UI показывает базу, а это не то, что в коробке.
+
+**Затронутые файлы:**
+- Backend (изменены): `catalog/matching/title_pipeline.py`,
+  `catalog/matching/v2/tiers.py`, `catalog/routers/matching.py`.
+- Backend (созданы): `catalog/matching/scoring.py`,
+  `tests/test_scoring.py`.
+- Тесты (изменены): `tests/test_title_pipeline.py`.
+- БД: 36 строк удалены из `match_decisions`, 22 строки UPDATE в `offers`
+  с 44 audit-записями в `match_log` (22 invalidate + 22 unlink).
+
+---
+
 ## 2026-05-23 · [CAT-17] Matching v3 Pragmatic — title pipeline, морфология, kind_classifier, страница отчёта, унификация reassess
 
 **Что сделано:** закрыта Pragmatic-часть эпика «Matching v3» — улучшение качества алгоритма матчинга названий + страница отчёта `/matching → Отчёт` для оператора + расширенный runbook.
