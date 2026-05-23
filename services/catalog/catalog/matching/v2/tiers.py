@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from catalog.matching.scoring import adjust_score, token_overlap_penalty
 from catalog.matching.v2.domain import MatchAction, MatchResult
 
 
@@ -190,20 +191,46 @@ async def tier_1_trgm(
     if not rows:
         return None
 
-    best = rows[0]
-    candidates = [
-        {
+    # CAT-17 follow-up: применяем token-overlap penalty к каждому кандидату.
+    # pg_trgm не различает «база» и «спин-офф» (см. catalog/matching/scoring.py).
+    # Penalty штрафует score когда query содержит токены, которых нет в
+    # matched_text (или наоборот) — это сигнал «возможно другая игра».
+    candidates = []
+    for r in rows:
+        raw_score = float(r["score"])
+        matched_text = r["matched_text"] or r["title"] or ""
+        adjusted = adjust_score(raw_score, title_raw, matched_text)
+        candidates.append({
             "game_id": int(r["game_id"]),
             "title": r["title"],
             "title_ru": r["title_ru"],
             "year": r["year"],
             "kind": r["kind"],
-            "score": float(r["score"]),
+            # `score` — это adjusted (используется для решения auto/non-auto).
+            # `raw_score` — оригинальный trgm для диагностики в UI/log.
+            "score": adjusted,
+            "raw_score": raw_score,
+            "penalty": round(raw_score - adjusted, 4),
             "via": r["via"],
-            "matched_text": r["matched_text"],
-        }
-        for r in rows
-    ]
+            "matched_text": matched_text,
+        })
+
+    # После penalty порядок мог поменяться — сортируем по adjusted score.
+    candidates.sort(key=lambda c: c["score"], reverse=True)
+    best = candidates[0]
+
+    # Отфильтровываем кандидатов с adjusted score < 0.30 (старый MIN_CANDIDATE_THRESHOLD).
+    # SQL фильтр срабатывает на сыром score; после penalty многие
+    # «слабые match'и спин-оффов» падают ниже 0.30 — их не показываем
+    # оператору как кандидатов.
+    candidates = [c for c in candidates if c["score"] >= 0.30]
+    if not candidates:
+        # Все кандидаты схлопнулись penalty'ями — это значит, что в каталоге
+        # нет ни одной игры с похожим набором токенов. Возвращаем None
+        # как при полном отсутствии кандидатов.
+        return None
+
+    best = candidates[0]
 
     if best["score"] >= auto_threshold:
         return MatchResult(
