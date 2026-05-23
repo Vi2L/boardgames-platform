@@ -10,7 +10,7 @@ POST /matching/{offer_id}/reject — это не игра / спам / коро�
 """
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from typing import Any
 
@@ -263,6 +263,105 @@ async def link(
     return OfferOut.model_validate(offer)
 
 
+async def _apply_match_result(
+    session: AsyncSession,
+    offer: Offer,
+    result,  # MatchResult из catalog.matching.v2.domain
+    *,
+    prev_game_id: int | None,
+    prev_status: str | None,
+    performed_by: str,
+    batch_id: UUID | None = None,
+) -> str:
+    """Применяет MatchResult к Offer + пишет save_decision + log_change.
+
+    Используется и `reassess_offer` (single), и `reassess_all` (batch).
+    Возвращает строковый идентификатор итога:
+      - "matched_auto"   — установлен game_id, match_status='auto'
+      - "queued_ml"      — отправлен в match_queue (ML on, нет уверенного матча)
+      - "unmatched"      — match_status='unmatched' (ML off / no candidates)
+      - "rejected_cache" — T0 cache вернул negative (cached_reject)
+    """
+    if result.matched:
+        # T0/T1/T2/T3 нашёл матч.
+        offer.game_id = result.game_id
+        offer.match_score = result.score
+        offer.match_tier = result.tier
+        offer.match_reason = result.reason
+        offer.match_status = "auto"
+        # Cache решение в match_decisions — НО только если это новый матч (T1+),
+        # для T0 запись уже существует, повторный save_decision — лишний UPDATE.
+        if result.tier and result.tier >= 1:
+            await save_decision(
+                session,
+                title_norm=normalize_title(offer.title_raw),
+                game_id=result.game_id,
+                source=f"auto_t{result.tier}",
+                tier=result.tier,
+                score=result.score,
+            )
+        outcome = "matched_auto"
+    elif result.action == MatchAction.REJECT:
+        # T0 negative cache — оператор когда-то отверг этот title (либо LLM
+        # T3 решил «не настолка»). Синхронизируем `match_status='rejected'`,
+        # чтобы оффер не оставался в `unmatched`-очереди после reassess.
+        # Раньше (до CR-A) обновлялся только match_reason — это приводило к
+        # «зомби-офферам»: T0 продолжал возвращать cached_reject, оффер
+        # бесконечно висел в unmatched, оператор видел его при каждом reassess.
+        offer.game_id = None
+        offer.match_status = "rejected"
+        offer.match_tier = result.tier
+        offer.match_reason = result.reason
+        outcome = "rejected_cache"
+    elif result.needs_async:
+        # ML on + sync tier'ы не сошлись — отправляем в очередь воркера.
+        # match_status стайл 'pending_ml' — UI не будет показывать оффер в
+        # unmatched-очереди, а воркер подберёт.
+        offer.match_score = result.score
+        offer.match_tier = result.tier
+        offer.match_reason = result.reason
+        offer.match_status = "pending_ml"
+        # priority=5 (выше дефолтного ingest=0) — reassess обычно делает оператор
+        # и он ждёт результата быстрее, чем фоновый ingest.
+        await v2_enqueue(
+            session,
+            offer_id=offer.id,
+            store_slug=offer.store_slug,
+            title_raw=offer.title_raw,
+            title_norm=normalize_title(offer.title_raw),
+            priority=5,
+        )
+        outcome = "queued_ml"
+    else:
+        # ML off + не сошлись tier'ы — оставляем в unmatched с лучшим score.
+        offer.game_id = None
+        offer.match_score = result.score
+        offer.match_tier = result.tier
+        offer.match_reason = result.reason
+        offer.match_status = "unmatched"
+        outcome = "unmatched"
+
+    # Аудит — для всех исходов, включая `rejected_cache`: после фикса CR-A
+    # status может измениться (`unmatched → rejected`), это важно для revert.
+    # Если оффер был уже `rejected` до reassess — log_change запишет всё равно,
+    # но с одинаковыми prev/new — UI может фильтровать через only_active.
+    await log_change(
+        session,
+        offer_id=offer.id,
+        action=MatchAction.REASSESS,
+        prev_game_id=prev_game_id,
+        new_game_id=offer.game_id,
+        prev_status=prev_status,
+        new_status=offer.match_status,
+        tier=result.tier,
+        score=result.score,
+        reason=result.reason,
+        batch_id=batch_id,
+        performed_by=performed_by,
+    )
+    return outcome
+
+
 @router.post(
     "/{offer_id}/reassess",
     response_model=OfferOut,
@@ -270,14 +369,17 @@ async def link(
 )
 async def reassess_offer(
     offer_id: int,
+    request: Request,
     session: AsyncSession = Depends(get_session),
 ) -> OfferOut:
-    """Пересчитать матчинг для одного offer — после правки алиасов или
-    добавления BGG-импорта score у offer мог вырасти.
+    """Пересчитать матчинг для одного offer через v2 pipeline (CAT-17).
+
+    Запускает синхронный T0 → T1 (с title_pipeline + лемматизация). При
+    промахе и включённом ML — отправляет в очередь воркера (T2/T3),
+    match_status становится 'pending_ml'. UI должен polling'ить queue item.
 
     Не трогает manual / rejected — оператор уже принял решение.
-    Если новый score ≥ AUTO_MATCH_THRESHOLD — статус становится 'auto',
-    иначе остаётся 'unmatched' с обновлённым score.
+    Изменения пишутся в `match_log` с `action=REASSESS` для возможности revert.
     """
     offer = (
         await session.execute(select(Offer).where(Offer.id == offer_id))
@@ -288,22 +390,27 @@ async def reassess_offer(
         raise HTTPException(
             status_code=409,
             detail=f"offer already {offer.match_status}; reassess only "
-                   "unmatched/auto",
+                   "unmatched/auto/pending_ml",
         )
 
-    cand = await find_best_match(session, offer.title_raw)
-    if cand is None:
-        offer.game_id = None
-        offer.match_score = None
-        offer.match_status = "unmatched"
-    else:
-        offer.match_score = cand.score
-        offer.match_status = classify(cand.score)
-        offer.game_id = cand.game_id if cand.score >= AUTO_MATCH_THRESHOLD else None
+    prev_game_id = offer.game_id
+    prev_status = offer.match_status
+
+    result = await match_sync(session, offer.title_raw, store_slug=offer.store_slug)
+    await _apply_match_result(
+        session, offer, result,
+        prev_game_id=prev_game_id, prev_status=prev_status,
+        performed_by=_performed_by_from_request(request),
+    )
 
     await session.commit()
     await session.refresh(offer)
     return OfferOut.model_validate(offer)
+
+
+# Лимит batch'а reassess-all — защита от OOM на больших unmatched-очередях.
+# При >500 unmatched оператор должен запускать несколько раз / итерационно.
+_REASSESS_ALL_LIMIT = 500
 
 
 @router.post(
@@ -311,49 +418,91 @@ async def reassess_offer(
     dependencies=[Depends(require_scope("admin"))],
 )
 async def reassess_all(
+    request: Request,
     store: str | None = Query(None, description="ограничить магазином"),
     max_score: float | None = Query(
         None,
         description="только оффер'ы со score < max_score (или NULL)",
     ),
+    limit: int = Query(
+        _REASSESS_ALL_LIMIT, ge=1, le=_REASSESS_ALL_LIMIT,
+        description=f"максимум офферов за один прогон (потолок {_REASSESS_ALL_LIMIT})",
+    ),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Batch-reassess: прогоняет find_best_match по всем unmatched.
+    """Batch-reassess: прогоняет match_sync v2 по unmatched-офферам (CAT-17).
 
-    Полезно после массового импорта BGG/Tesera или ручной правки алиасов.
+    Один прогон = один `batch_id` (UUID). Это позволяет одной командой
+    `POST /matching/log/batch-revert` откатить весь batch если оператор
+    обнаружил систематическую ошибку.
+
+    Лимит на batch — 500 (`_REASSESS_ALL_LIMIT`). Для большего объёма —
+    запускать несколько раз с фильтром по `store` или после ингеста новых
+    данных. Это защита от OOM и от чрезмерной нагрузки на Ollama (если
+    много офферов улетит в `pending_ml`).
+
     Не трогает manual / rejected — там уже есть решение оператора.
     """
-    stmt = select(Offer).where(Offer.match_status == "unmatched")
+    stmt = (
+        select(Offer)
+        .where(Offer.match_status == "unmatched")
+        .order_by(Offer.id)
+        .limit(limit)
+    )
     if store:
         stmt = stmt.where(Offer.store_slug == store)
     if max_score is not None:
         # NULL включаем (offer без score = ещё не матчился)
-        from sqlalchemy import or_
-        stmt = stmt.where(or_(Offer.match_score < max_score, Offer.match_score.is_(None)))
+        stmt = stmt.where(
+            or_(Offer.match_score < max_score, Offer.match_score.is_(None))
+        )
 
     offers = (await session.execute(stmt)).scalars().all()
+    if not offers:
+        return {
+            "scanned": 0, "promoted_to_auto": 0, "queued_ml": 0,
+            "score_improved": 0, "unchanged": 0,
+            "batch_id": None, "limit_hit": False,
+        }
+
+    batch_id = uuid4()
+    performed_by = _performed_by_from_request(request)
+    # Загружаем pipeline один раз — переиспользуем для всех офферов batch'а.
+    # Это критично: load_pipeline() кешируется на 5 мин, но первый вызов
+    # делает SELECT из match_publisher_prefixes — если делать его в каждой
+    # итерации, это лишние 500 round-trip'ов к БД.
+    from catalog.matching.title_pipeline import load_pipeline
+    pipeline = await load_pipeline(session)
 
     promoted = 0
+    queued = 0
     improved = 0
     unchanged = 0
+
     for offer in offers:
         prev_score = offer.match_score
         prev_status = offer.match_status
-        cand = await find_best_match(session, offer.title_raw)
-        if cand is None:
-            new_score, new_status, new_gid = None, "unmatched", None
-        else:
-            new_score = cand.score
-            new_status = classify(cand.score)
-            new_gid = cand.game_id if new_status == "auto" else None
+        prev_game_id = offer.game_id
 
-        offer.match_score = new_score
-        offer.match_status = new_status
-        offer.game_id = new_gid
+        result = await match_sync(
+            session, offer.title_raw,
+            store_slug=offer.store_slug,
+            pipeline=pipeline,
+        )
+        outcome = await _apply_match_result(
+            session, offer, result,
+            prev_game_id=prev_game_id, prev_status=prev_status,
+            performed_by=performed_by,
+            batch_id=batch_id,
+        )
 
-        if prev_status == "unmatched" and new_status == "auto":
+        if outcome == "matched_auto":
             promoted += 1
-        elif new_score and (prev_score is None or new_score > prev_score):
+        elif outcome == "queued_ml":
+            queued += 1
+        elif outcome == "unmatched" and result.score and (
+            prev_score is None or result.score > prev_score
+        ):
             improved += 1
         else:
             unchanged += 1
@@ -362,8 +511,12 @@ async def reassess_all(
     return {
         "scanned": len(offers),
         "promoted_to_auto": promoted,
+        "queued_ml": queued,
         "score_improved": improved,
         "unchanged": unchanged,
+        "batch_id": str(batch_id),
+        # Подсказка UI: пользователь видит, что лимит достигнут и надо запустить ещё раз.
+        "limit_hit": len(offers) == limit,
     }
 
 
@@ -1533,3 +1686,157 @@ def _performed_by_from_request(request: Request) -> str:
     if user:
         return user[:64]
     return "operator"
+
+
+# ─── CAT-17.2: CRUD для match_publisher_prefixes ─────────────────────────────
+
+
+class PublisherPrefixOut(BaseModel):
+    id: int
+    prefix: str
+    normalized: str | None = None
+    source: str
+    is_active: bool
+    created_at: str
+
+
+class PublisherPrefixListOut(BaseModel):
+    items: list[PublisherPrefixOut]
+    total: int
+
+
+class PublisherPrefixCreateIn(BaseModel):
+    prefix: str = Field(min_length=1, max_length=128)
+    normalized: str | None = Field(default=None, max_length=128)
+    source: str = Field(default="manual", max_length=32)
+
+
+@router.get(
+    "/publisher-prefixes",
+    response_model=PublisherPrefixListOut,
+    dependencies=[Depends(require_scope("read"))],
+)
+async def list_publisher_prefixes(
+    is_active: bool | None = Query(None, description="фильтр по is_active"),
+    session: AsyncSession = Depends(get_session),
+) -> PublisherPrefixListOut:
+    """Список префиксов издателей для title pipeline.
+
+    UI отображает список с возможностью активации/деактивации (toggle).
+    Сортировка по длине DESC — это даёт preview того порядка, в котором
+    pipeline проверяет префиксы (greedy match по самому длинному).
+    """
+    from catalog.models import MatchPublisherPrefix
+
+    stmt = select(MatchPublisherPrefix)
+    if is_active is not None:
+        stmt = stmt.where(MatchPublisherPrefix.is_active.is_(is_active))
+    stmt = stmt.order_by(
+        func.length(MatchPublisherPrefix.prefix).desc(),
+        MatchPublisherPrefix.id,
+    )
+    rows = (await session.execute(stmt)).scalars().all()
+    items = [
+        PublisherPrefixOut(
+            id=r.id,
+            prefix=r.prefix,
+            normalized=r.normalized,
+            source=r.source,
+            is_active=r.is_active,
+            created_at=r.created_at.isoformat(),
+        )
+        for r in rows
+    ]
+    return PublisherPrefixListOut(items=items, total=len(items))
+
+
+@router.post(
+    "/publisher-prefixes",
+    response_model=PublisherPrefixOut,
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def create_publisher_prefix(
+    body: PublisherPrefixCreateIn,
+    session: AsyncSession = Depends(get_session),
+) -> PublisherPrefixOut:
+    """Добавить новый префикс. Дубликат (по prefix UNIQUE) → 409.
+
+    После создания pipeline-кеш не перегружается автоматически — оператор
+    должен явно дёрнуть `POST /matching/pipeline/reload`. Это сознательное
+    решение: при массовом добавлении префиксов несколько запросов подряд
+    не должны вызывать N reload'ов кеша.
+    """
+    from catalog.models import MatchPublisherPrefix
+
+    # Проверка дубликата ДО INSERT — даёт человекочитаемый 409 вместо
+    # IntegrityError 500.
+    existing = (await session.execute(
+        select(MatchPublisherPrefix).where(MatchPublisherPrefix.prefix == body.prefix)
+    )).scalar_one_or_none()
+    if existing is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=f"prefix {body.prefix!r} уже существует (id={existing.id})",
+        )
+
+    row = MatchPublisherPrefix(
+        prefix=body.prefix,
+        normalized=body.normalized,
+        source=body.source,
+        is_active=True,
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+    return PublisherPrefixOut(
+        id=row.id, prefix=row.prefix, normalized=row.normalized,
+        source=row.source, is_active=row.is_active,
+        created_at=row.created_at.isoformat(),
+    )
+
+
+@router.delete(
+    "/publisher-prefixes/{prefix_id}",
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def delete_publisher_prefix(
+    prefix_id: int,
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Удалить префикс (физическое DELETE). 404 если не найден.
+
+    Альтернатива — soft-delete через `is_active=FALSE`; используется когда
+    префикс может понадобиться вернуть. Жёсткий DELETE через DELETE-endpoint
+    — для seed'ов, оказавшихся false-positive (например, «АСТ» обрезал
+    реальные имена игр).
+    """
+    from catalog.models import MatchPublisherPrefix
+
+    row = await session.get(MatchPublisherPrefix, prefix_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"prefix {prefix_id} not found")
+    await session.delete(row)
+    await session.commit()
+    return {"deleted": True, "id": prefix_id, "prefix": row.prefix}
+
+
+@router.post(
+    "/pipeline/reload",
+    dependencies=[Depends(require_scope("admin"))],
+)
+async def reload_pipeline(
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Сбросить module-level кеш TitlePipeline + перечитать prefixes из БД.
+
+    Используется после CRUD-операций с `match_publisher_prefixes` — без
+    reload'а изменения войдут в силу через 5 минут (TTL кеша).
+    """
+    from catalog.matching.title_pipeline import load_pipeline, reset_cache
+
+    reset_cache()
+    pipeline = await load_pipeline(session, force_reload=True)
+    return {
+        "reloaded": True,
+        "prefixes_count": len(pipeline.prefixes),
+    }

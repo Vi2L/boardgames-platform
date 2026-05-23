@@ -70,6 +70,13 @@ class Game(Base):
     # как часть text_used для embedding и для прямого pg_trgm-матча.
     title_ru: Mapped[str | None] = mapped_column(Text)
 
+    # Лемматизированное название (CAT-17.3, миграция 0021) — нормальная форма
+    # русских слов через pymorphy3. Закрывает кейс «Каркассона» (родительный)
+    # vs «Каркассон» в pg_trgm. Заполняется backfill-скриптом + при импорте
+    # новых игр через BGG/Wikidata. NULL = ещё не лемматизировано (T1 SQL
+    # игнорирует такие строки в CTE from_title_lemma).
+    title_lemma: Mapped[str | None] = mapped_column(Text)
+
     year: Mapped[int | None] = mapped_column(Integer)
     designers: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
     publishers: Mapped[list[str] | None] = mapped_column(ARRAY(Text))
@@ -798,6 +805,39 @@ class RuntimeFlag(Base):
         DateTime(timezone=True), server_default=func.now(), default=_now,
     )
     updated_by: Mapped[str | None] = mapped_column(Text)
+
+
+class MatchPublisherPrefix(Base):
+    """Префиксы издателей для title pipeline (CAT-17.2, миграция 0020).
+
+    Используется `catalog/matching/title_pipeline.py:load_pipeline()` чтобы
+    срезать издательский префикс из сырых WB/Avito title'ов:
+      «Hobby World Каркассон базовая версия» → «Каркассон»
+
+    Сравнение в `strip_publisher_prefix` — case-insensitive, поэтому в БД
+    хранится «как есть» (с правильным регистром для UI). Greedy match по
+    длинному префиксу: «Hobby World -» победит «Hobby World» (избегает
+    висящего «-» в результате).
+
+    Operator может добавлять префиксы через UI без миграции (см. CRUD-эндпоинт
+    `POST /matching/publisher-prefixes`). Source-поле помечает откуда:
+    'seed' (миграция), 'manual' (UI), 'discovered' (auto-detection, в будущем).
+    """
+
+    __tablename__ = "match_publisher_prefixes"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    prefix: Mapped[str] = mapped_column(Text, nullable=False, unique=True)
+    normalized: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(
+        String(32), nullable=False, default="manual", server_default="manual",
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default="true",
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), default=_now,
+    )
 
 
 class AutoRecoveryRule(Base):

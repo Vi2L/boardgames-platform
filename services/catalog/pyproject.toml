@@ -27,6 +27,11 @@ dependencies = [
     # Matching v2: pgvector type adapter для SQLAlchemy.
     # Даёт Vector(dim) колонку и автоматическую конвертацию list[float] ↔ pgvector.
     "pgvector>=0.3",
+    # Matching v3 (CAT-17.3): морфологическая нормализация русских названий.
+    # Закрывает кейс «Каркассона» (родительный) vs «Каркассон» в pg_trgm.
+    # Словари ~30МБ, lazy-import + lru_cache singleton — не грузим пока не нужно.
+    # Используется в backfill_title_lemma.py + T1 query-time лемматизация.
+    "pymorphy3>=2.0",
 ]
 
 [project.optional-dependencies]

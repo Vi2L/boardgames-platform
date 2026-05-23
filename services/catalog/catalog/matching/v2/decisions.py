@@ -22,6 +22,14 @@ from catalog.config import get_settings
 from catalog.models import MatchDecision
 
 
+# CAT-17 fix: единое имя источника «оператор подтвердил вручную». Используется
+# для TTL=∞ и для guard'а в `save_decision` (защита manual-решений от
+# затирания auto-вызовами). Сейчас magic string `"manual"` встречается также
+# в `routers/matching.py` (link/reject) и в SQL `WHERE source != 'manual'`
+# в этом же файле — это согласовано через одну константу.
+SOURCE_MANUAL = "manual"
+
+
 def _ttl_days_for(source: str) -> int | None:
     """Возвращает TTL для записи match_decisions per source. None = бессрочно.
 
@@ -31,7 +39,7 @@ def _ttl_days_for(source: str) -> int | None:
     """
     settings = get_settings()
     return {
-        "manual": None,
+        SOURCE_MANUAL: None,
         "auto_t1": settings.match_decisions_ttl_t1_days,
         "auto_t2": settings.match_decisions_ttl_t2_days,
         "auto_t3": settings.match_decisions_ttl_t3_days,
@@ -48,9 +56,23 @@ async def save_decision(
     score: float | None = None,
 ) -> None:
     """Upsert в match_decisions. ON CONFLICT обновляет всё (новое решение
-    свежее старого).
+    свежее старого) — КРОМЕ случая «auto-source vs существующий manual».
 
     `game_id` может быть None — это negative cache (reject). Source='manual'.
+
+    Фикс CAT-17 (manual guard): раньше любой auto_t1/t2/t3 после manual
+    перезаписывал manual-decision (с бессрочного TTL=NULL на 7/14/30 дней).
+    Через TTL дней manual-связка стирала бы себя сама. Теперь предикат
+    ON CONFLICT WHERE гарантирует: manual-решение защищено, любой auto
+    проигнорируется (SKIP без ошибки). Manual может перезаписать manual
+    (оператор пере-link'ает на другую игру) — это допустимо.
+
+    WHERE-формула покрывает оба сценария единым предикатом:
+      - manual upsert → `EXCLUDED.source = 'manual'` истинно → UPDATE
+        выполнится (manual может перебить любое решение, включая другой
+        manual).
+      - auto upsert → первая часть FALSE, проверяется `match_decisions.source
+        != 'manual'` → UPDATE только если существующее не manual.
     """
     ttl = _ttl_days_for(source)
     stmt = (
@@ -73,6 +95,10 @@ async def save_decision(
                 "ttl_days": ttl,
                 "decided_at": text("now()"),
             },
+            where=text(
+                f"EXCLUDED.source = '{SOURCE_MANUAL}' "
+                f"OR match_decisions.source != '{SOURCE_MANUAL}'"
+            ),
         )
     )
     await session.execute(stmt)

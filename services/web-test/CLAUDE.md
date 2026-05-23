@@ -297,6 +297,8 @@ parsers/catalog с error mapping. Свои данные живут в локал
 | `/catalog/games/merge` | Merge двух игр | catalog |
 | `/catalog/import/{bgg,tesera}`, `/catalog/import/jobs/{id}` | BGG/Tesera импорт + polling | catalog |
 | `/catalog/matching/{queue,stats,candidates,{id}/{link,reject,reassess},reassess-all}` | Матчинг + dashboard | catalog |
+| `/catalog/matching/report/{top-unmatched,coverage,activity,sla}` | Отчёт CAT-17: top unmatched, coverage by store, activity, SLA per tier | catalog |
+| `/catalog/matching/publisher-prefixes` (GET/POST/DELETE), `/catalog/matching/pipeline/reload` | CRUD префиксов издателей для title pipeline + reload кеша | catalog |
 | `DELETE /catalog/matching/decisions/{title_norm}`, `POST /catalog/matching/decisions/invalidate` | Инвалидация T0 cache (CAT-12) | catalog |
 | `POST /catalog/matching/lookup-batch` | Batch резолв game_id для группировки SearchPage (WT-F11) | catalog |
 | `/health`, `/health/all` | Health-check (deep) | оба + локально |

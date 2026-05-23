@@ -403,6 +403,85 @@ export const HELP_TOPICS = defineTopics({
       </>
     ),
   },
+
+  // ── /matching → Отчёт (CAT-17) ────────────────────────────────────────────
+
+  'matching.report_top_unmatched': {
+    title: 'Top unmatched — что не сматчено',
+    body: (
+      <>
+        Группировка <code>offers</code> по <code>title_raw_norm</code> со{' '}
+        <code>match_status='unmatched'</code> за выбранный период.
+        Ранжирование по <strong>частоте появления</strong>: чем больше офферов
+        с этим title — тем выгоднее импортировать игру в catalog (один импорт
+        закроет N unmatched разом). <code>count</code> — сколько раз title
+        встречался, <code>stores</code> — в каких магазинах. Низкий{' '}
+        <code>min_count</code> (1) показывает все «единичные» промахи.
+      </>
+    ),
+  },
+
+  'matching.report_coverage': {
+    title: 'Coverage by store — % матча',
+    body: (
+      <>
+        Per-store: сколько офферов в каком <code>match_status</code> за период.
+        <code>coverage_pct</code> = (auto + manual) / total × 100.
+        <strong> Низкий coverage_pct + высокий unmatched</strong> — парсер
+        начал отдавать новые форматы title (после редизайна сайта); надо
+        проверить пайплайн или добавить prefix в{' '}
+        <code>match_publisher_prefixes</code>.
+        <strong> Высокий pending_ml</strong> — Ollama не справляется,
+        проверь /matching → Контроль.
+      </>
+    ),
+  },
+
+  'matching.report_activity': {
+    title: 'Activity timeline — действия оператора',
+    body: (
+      <>
+        Heatmap-таблица: ряды — action'ы (<code>auto_t1</code>,{' '}
+        <code>manual</code>, <code>reject</code>, <code>revert</code>,
+        <code>reassess</code>), колонки — дни, opacity ячейки = относительная
+        частота. Прогресс-action'ы (<code>t0/t1/t2/t3_progress</code>) не
+        показываются — это диагностика воркера, не операторская активность.
+        Полезно для выявления массовых паттернов: всплеск reject — парсер
+        прислал не-настолки; всплеск revert — оператор откатывает свои же
+        ошибки.
+      </>
+    ),
+  },
+
+  'matching.report_sla': {
+    title: 'SLA per tier',
+    body: (
+      <>
+        Левая таблица — <strong>распределение</strong> офферов по tier'ам за
+        период: T0 (cache hit), T1 (pg_trgm), T2 (embedding), T3 (LLM),
+        manual, unmatched, pending_ml, rejected. Health pipeline'а — это{' '}
+        <code>T0 + T1 ≥ 70%</code>: значит sync-tier'ы вытягивают большинство,
+        ML не перегружен. Правая таблица — <strong>latency воркера</strong>{' '}
+        в мс по percentiles (p50/p95/p99) для T2/T3 из{' '}
+        <code>match_queue</code> (created_at → processed_at). «—» = за период
+        не было completed-записей в этом tier'е.
+      </>
+    ),
+  },
+
+  'matching.publisher_prefixes': {
+    title: 'Publisher prefixes — префиксы издателей',
+    body: (
+      <>
+        Таблица <code>match_publisher_prefixes</code> (миграция 0020).
+        <code>title_pipeline.process()</code> срезает эти префиксы из
+        сырых title'ов до T1 trgm-матчинга:{' '}
+        «<code>Hobby World Каркассон базовая версия</code>» → «<code>Каркассон</code>».
+        Greedy match по самому длинному префиксу. После CRUD-изменений
+        нужно <strong>Reload</strong> — без него кеш живёт 5 минут.
+      </>
+    ),
+  },
 })
 
 // ─── Type-safe API ──────────────────────────────────────────────────────────

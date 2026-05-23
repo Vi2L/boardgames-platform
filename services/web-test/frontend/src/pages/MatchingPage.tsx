@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import {
   Cpu, ListChecks, ScrollText, Crosshair, HelpCircle, Keyboard, AlertTriangle,
+  BarChart3,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import clsx from 'clsx'
@@ -37,6 +38,7 @@ import { ControlTab } from '../components/matching/ControlTab'
 import { QueuePanel } from '../components/matching/QueuePanel'
 import { SingleMatchTab } from '../components/matching/SingleMatchTab'
 import { MatchingHelpTab } from '../components/matching/MatchingHelpTab'
+import { ReportTab } from '../components/matching/ReportTab'
 import { MatchLogTab } from '../components/catalog/MatchLogTab'
 import { CircuitStateBadge, type CircuitState } from '../components/matching/CircuitStateBadge'
 import { MetricSpark } from '../components/matching/MetricSpark'
@@ -45,18 +47,19 @@ import {
   KeyboardCheatsheet, MATCHING_SHORTCUT_GROUPS,
 } from '../components/matching/KeyboardCheatsheet'
 
-type Tab = 'control' | 'queue' | 'log' | 'single' | 'help'
+type Tab = 'control' | 'queue' | 'log' | 'single' | 'report' | 'help'
 
 const TABS: Array<{ id: Tab; label: string; icon: LucideIcon; shortcut: string; hint: string }> = [
   { id: 'control', label: 'Контроль', icon: Cpu,        shortcut: '1', hint: 'Kill-switch, модели, воркер, warmup' },
   { id: 'queue',   label: 'Очередь',  icon: ListChecks, shortcut: '2', hint: 'match_queue: re-enqueue + breakdown' },
   { id: 'log',     label: 'Журнал',   icon: ScrollText, shortcut: '3', hint: 'match_log: история + revert' },
   { id: 'single',  label: 'Штучный',  icon: Crosshair,  shortcut: '4', hint: 'Прогон одного offer через v2' },
-  { id: 'help',    label: 'Help',     icon: HelpCircle, shortcut: '5', hint: 'Документация + глоссарий' },
+  { id: 'report',  label: 'Отчёт',    icon: BarChart3,  shortcut: '5', hint: 'Top unmatched, coverage, activity, SLA (CAT-17)' },
+  { id: 'help',    label: 'Help',     icon: HelpCircle, shortcut: '6', hint: 'Документация + глоссарий' },
 ]
 
 const TAB_SHORTCUTS: Record<string, Tab> = {
-  '1': 'control', '2': 'queue', '3': 'log', '4': 'single', '5': 'help',
+  '1': 'control', '2': 'queue', '3': 'log', '4': 'single', '5': 'report', '6': 'help',
 }
 
 export function MatchingPage() {
@@ -98,6 +101,7 @@ export function MatchingPage() {
         {tab === 'queue'   && <QueuePanel />}
         {tab === 'log'     && <MatchLogTab />}
         {tab === 'single'  && <SingleMatchTab />}
+        {tab === 'report'  && <ReportTab />}
         {tab === 'help'    && <MatchingHelpTab />}
       </div>
 

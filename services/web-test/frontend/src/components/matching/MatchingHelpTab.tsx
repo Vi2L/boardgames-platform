@@ -28,6 +28,7 @@ const SECTIONS = [
   { id: 'kill',       label: 'Когда ML вкл/выкл' },
   { id: 'reenqueue',  label: 'Когда re-enqueue' },
   { id: 'log',        label: 'Чтение match_log' },
+  { id: 'report',     label: 'Чтение отчёта' },
   { id: 'troubles',   label: 'Troubleshooting' },
   { id: 'glossary',   label: 'Глоссарий' },
 ]
@@ -208,6 +209,165 @@ export function MatchingHelpTab() {
               (повторный bulk-revert не падает на уже откаченных).</li>
             <li><strong>Batch revert</strong>: по batch_id — откатывает целиком операцию (например,
               неудачный reassess-all). UUID берётся из любой строки batch'а.</li>
+          </ul>
+        </Section>
+
+        <Section id="report" title="Чтение отчёта (CAT-17)">
+          <p>
+            Вкладка <strong>Отчёт</strong> (<kbd>5</kbd>) — operational visibility по
+            всему pipeline матчинга. Без неё операционные решения («что
+            импортировать», «где деградирует магазин», «успевает ли воркер»)
+            принимаются по интуиции; с ней — по числам.
+          </p>
+
+          <SubHeading>1. Top unmatched — что чаще всего не сматчено</SubHeading>
+          <p>
+            Таблица сгруппирована по <code>title_raw_norm</code>: одинаковые
+            нормализованные title собираются вместе, ранжируются по{' '}
+            <code>count</code>. Каждая строка — один «кластер» офферов от
+            разных магазинов с похожими title.
+          </p>
+          <p>
+            <strong>Зачем смотреть:</strong> один импорт игры из BGG закроет
+            сразу N unmatched (по числу офферов с этим title). Например,
+            «Каркассон базовая версия» с count=23 — после добавления алиаса
+            «Каркассон базовая версия» к Carcassonne все 23 офера сматчатся
+            на следующем reassess-all.
+          </p>
+          <p>
+            <strong>Workflow оператора:</strong>
+          </p>
+          <ol>
+            <li>Открой Отчёт → Top unmatched (период 7-30д, min_count ≥ 2).</li>
+            <li>Возьми верхний title с большим count.</li>
+            <li>
+              Найди игру в BGG: открой <code>/catalog → Импорт BGG</code>{' '}
+              (вкладка «Поиск»), вбей title, кликни <strong>Импортировать</strong>.
+            </li>
+            <li>
+              После импорта — <code>POST /matching/reassess-all</code> в{' '}
+              <code>/catalog → Очередь матчинга → Reassess все</code>.
+            </li>
+            <li>
+              Проверь Отчёт ещё раз: этот title должен исчезнуть из top.
+            </li>
+          </ol>
+
+          <SubHeading>2. Coverage by store — % матча по магазинам</SubHeading>
+          <p>
+            Per-store breakdown по <code>match_status</code> + summary
+            coverage_pct. Сразу видно, у какого магазина какая «здоровая»
+            работа матчера.
+          </p>
+          <p>
+            <strong>Что смотреть:</strong>
+          </p>
+          <ul>
+            <li>
+              <span className="text-emerald-300">coverage_pct ≥ 80%</span> —
+              магазин хорошо обрабатывается, ничего делать не надо.
+            </li>
+            <li>
+              <span className="text-amber-300">coverage_pct 50-80%</span> —
+              средний; либо нужны новые алиасы, либо новые prefix'ы в{' '}
+              <code>match_publisher_prefixes</code>.
+            </li>
+            <li>
+              <span className="text-rose-300">coverage_pct &lt; 50%</span> —
+              что-то сломалось. Высокий <code>pending_ml</code> → Ollama не
+              справляется (Контроль). Высокий <code>unmatched</code> →
+              парсер отдаёт новые форматы title (Live Test через{' '}
+              <code>/debug → По URL</code>).
+            </li>
+            <li>
+              Высокий <code>rejected</code> + высокий <code>auto</code> у
+              того же магазина — категорийный фильтр на парсере слишком
+              широкий, не-настолки попадают в catalog и отвергаются LLM-арбитром.
+            </li>
+          </ul>
+
+          <SubHeading>3. Activity timeline — productivity оператора</SubHeading>
+          <p>
+            Heatmap «action × день», opacity ячейки = относительная частота
+            этого action в этот день.
+          </p>
+          <p>
+            <strong>Что смотреть:</strong>
+          </p>
+          <ul>
+            <li>
+              Всплеск <code>auto_t1</code> / <code>auto_t2</code> в один день —
+              был массовый ingest или reassess-all.
+            </li>
+            <li>
+              Всплеск <code>reject</code> — оператор массово отвергал
+              не-настолки; повод проверить категорийный фильтр на конкретном
+              парсере.
+            </li>
+            <li>
+              Всплеск <code>revert</code> — оператор откатывал ошибочные
+              auto-матчи; возможно нужно подкрутить threshold (T1 0.92, T2
+              0.85, T3 0.75) или добавить негативный кейс в pipeline.
+            </li>
+            <li>
+              <code>auto_t3</code> &gt; <code>auto_t2</code> — LLM делает
+              много работы, может быть стоит обогатить эмбеддинги (warmup) или
+              добавить алиасы.
+            </li>
+          </ul>
+
+          <SubHeading>4. SLA per tier — где работает матчер</SubHeading>
+          <p>
+            Левая таблица — распределение офферов по tier'ам за период.
+            Healthy pipeline: <code>T0 + T1 ≥ 70%</code> (sync-tier'ы вытягивают
+            большинство), <code>T2 + T3 ≤ 20%</code> (ML — для «честных» сложных
+            случаев), <code>unmatched ≤ 10%</code> (остаток для оператора).
+          </p>
+          <p>
+            Правая таблица — latency T2/T3 percentiles из{' '}
+            <code>match_queue.processed_at - created_at</code>:
+          </p>
+          <ul>
+            <li>
+              <strong>T2 p50 ≈ 1-2 сек, p95 ≈ 5 сек</strong> — нормально для
+              bge-m3 на m1/m2.
+            </li>
+            <li>
+              <strong>T3 p50 ≈ 8-12 сек, p95 ≈ 20-30 сек</strong> — нормально
+              для qwen2.5:7b на той же машине.
+            </li>
+            <li>
+              <strong>T2/T3 p95 &gt; 60 сек</strong> — Ollama под нагрузкой
+              или OOM; проверь Контроль → ML-модели → metrics, рестарти
+              Ollama.
+            </li>
+          </ul>
+          <p>
+            «—» в latency означает, что за период не было completed-записей
+            нужного tier'а. Это нормально для маленьких периодов или после
+            рестарта.
+          </p>
+
+          <SubHeading>Действия после анализа</SubHeading>
+          <ul>
+            <li>
+              <strong>Top unmatched большой</strong> → импортировать топ-10
+              из BGG + reassess-all.
+            </li>
+            <li>
+              <strong>Coverage магазина деградирует</strong> → добавить prefix
+              в <code>match_publisher_prefixes</code> +{' '}
+              <code>POST /matching/pipeline/reload</code>.
+            </li>
+            <li>
+              <strong>SLA T2/T3 деградирует</strong> → Контроль → ML-модели →
+              probe; при <CircuitStateBadge state="open" /> — рестартить Ollama.
+            </li>
+            <li>
+              <strong>Activity reject всплеск</strong> → проверить парсер
+              в <code>/debug → Live Test</code>: возможно начал слать
+              не-настолки.
+            </li>
           </ul>
         </Section>
 

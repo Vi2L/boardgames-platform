@@ -18,6 +18,9 @@ import logging
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from catalog.config import get_settings
+from catalog.matching.kind_classifier import classify_kind
+from catalog.matching.morphology import safe_lemmatize_ru
+from catalog.matching.title_pipeline import TitlePipeline, load_pipeline
 from catalog.matching.v2.domain import (
     MatchAction,
     MatchContext,
@@ -49,8 +52,21 @@ class MatchEngine:
         title_raw: str,
         *,
         store_slug: str | None = None,
+        pipeline: TitlePipeline | None = None,
     ) -> MatchResult:
         """Sync pipeline: Tier 0 → Tier 1.
+
+        Title pre-processing (CAT-17.2):
+          1. Загружаем pipeline из match_publisher_prefixes (cached 5 мин).
+          2. pipeline.process(title_raw) → title_clean — без префикса, без
+             маркетинговых слов, без артикулов и edition markers.
+          3. normalize_title(title_clean) → title_norm для T0 cache lookup.
+          4. tier_1_trgm получает title_clean (PG сам сделает unaccent) и
+             опционально title_lemma_query (CAT-17.3) для морфологического
+             CTE.
+
+        Caller может передать готовый `pipeline` — экономит на повторной
+        загрузке внутри batch-операций (`reassess_all`).
 
         Возвращает:
           - matched MatchResult если T0 cache hit (даже negative cache)
@@ -61,18 +77,28 @@ class MatchEngine:
         Не пишет в БД — только читает. Caller (ingest router) делает UPDATE
         offers + INSERT match_log + INSERT match_queue в своей транзакции.
         """
-        title_norm = normalize_title(title_raw)
+        # Title pre-processing (CAT-17.2).
+        if pipeline is None:
+            pipeline = await load_pipeline(self.session)
+        title_clean = pipeline.process(title_raw)
+        title_norm = normalize_title(title_clean)
 
-        # Tier 0: cache hit
+        # Tier 0: cache hit по «чистому» title_norm.
         t0 = await tier_0_cache(self.session, title_norm)
         if t0 is not None:
             # Cache может быть negative (cached_reject) — тоже возвращаем.
             return t0
 
-        # Tier 1: pg_trgm ≥ 0.92
+        # Tier 1: pg_trgm ≥ 0.92.
+        # title_lemma_query (CAT-17.3) — query-time лемматизация для
+        # сопоставления с games.title_lemma. Если pymorphy3 недоступен или
+        # title_clean чисто латинский — None (CTE from_title_lemma пропустится).
+        title_lemma_query = safe_lemmatize_ru(title_clean)
+
         t1 = await tier_1_trgm(
-            self.session, title_raw,
+            self.session, title_clean,
             auto_threshold=self.settings.match_t1_auto_threshold,
+            title_lemma_query=title_lemma_query,
         )
         if t1 is not None and t1.matched:
             return t1
@@ -91,6 +117,14 @@ class MatchEngine:
                 needs_async=False,
             )
 
+        # CAT-17.1: rule-based kind_classifier ДО enqueue. Воркер передаст
+        # predicted_kind в `tier_2_vector(kind_filter=...)` — это экономит
+        # embed-вызовы и улучшает precision на expansion/promo.
+        # ВАЖНО: вызываем с title_raw (до pipeline), а не title_clean —
+        # pipeline вырезает «big box» как edition marker, и classify_kind
+        # его потеряет. На raw маркер сохраняется. См. title_pipeline._EDITION_RE.
+        predicted_kind = classify_kind(title_raw)
+
         # ML включён — оффер должен попасть в очередь воркера.
         # Реальная проверка доступности Ollama (circuit breaker) делается в
         # worker'е перед обработкой; здесь мы просто помечаем «нужен async».
@@ -101,6 +135,7 @@ class MatchEngine:
             reason="needs_ml",
             score=t1.score if t1 else None,
             candidates=t1.candidates if t1 else None,
+            predicted_kind=predicted_kind,
             needs_async=True,
         )
 
@@ -179,7 +214,14 @@ async def match_sync(
     title_raw: str,
     *,
     store_slug: str | None = None,
+    pipeline: TitlePipeline | None = None,
 ) -> MatchResult:
-    """Shortcut для ingest: создать engine + match_sync."""
+    """Shortcut для ingest: создать engine + match_sync.
+
+    `pipeline` опционален — caller (например, reassess_all) может передать
+    один экземпляр на весь batch чтобы избежать повторных SELECT'ов из БД.
+    """
     engine = MatchEngine(session)
-    return await engine.match_sync(title_raw, store_slug=store_slug)
+    return await engine.match_sync(
+        title_raw, store_slug=store_slug, pipeline=pipeline,
+    )

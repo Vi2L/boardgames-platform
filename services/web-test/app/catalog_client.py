@@ -99,6 +99,76 @@ class CatalogClient:
         resp = await self._client.get("/matching/stats")
         return _ok_or_raise(resp)
 
+    # ── Matching report (CAT-17) ─────────────────────────────────────────────
+
+    async def report_top_unmatched(
+        self,
+        *,
+        days: int = 7,
+        limit: int = 50,
+        min_count: int = 2,
+        store_slug: str | None = None,
+    ) -> dict[str, Any]:
+        """GET /matching/report/top-unmatched → ранкинг title-групп без матча."""
+        params: dict[str, Any] = {
+            "days": days, "limit": limit, "min_count": min_count,
+        }
+        if store_slug:
+            params["store_slug"] = store_slug
+        resp = await self._client.get("/matching/report/top-unmatched", params=params)
+        return _ok_or_raise(resp)
+
+    async def report_coverage(self, *, days: int = 7) -> dict[str, Any]:
+        """GET /matching/report/coverage → per-store breakdown по статусам."""
+        resp = await self._client.get(
+            "/matching/report/coverage", params={"days": days},
+        )
+        return _ok_or_raise(resp)
+
+    async def report_activity(self, *, days: int = 14) -> dict[str, Any]:
+        """GET /matching/report/activity → match_log GROUP BY day×action."""
+        resp = await self._client.get(
+            "/matching/report/activity", params={"days": days},
+        )
+        return _ok_or_raise(resp)
+
+    async def report_sla(self, *, days: int = 7) -> dict[str, Any]:
+        """GET /matching/report/sla → tier share % + latency T2/T3."""
+        resp = await self._client.get(
+            "/matching/report/sla", params={"days": days},
+        )
+        return _ok_or_raise(resp)
+
+    # ── Publisher prefixes CRUD (CAT-17.2) ───────────────────────────────────
+
+    async def list_publisher_prefixes(
+        self, *, is_active: bool | None = None,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {}
+        if is_active is not None:
+            params["is_active"] = str(is_active).lower()
+        resp = await self._client.get(
+            "/matching/publisher-prefixes", params=params,
+        )
+        return _ok_or_raise(resp)
+
+    async def create_publisher_prefix(self, payload: dict) -> dict[str, Any]:
+        resp = await self._client.post(
+            "/matching/publisher-prefixes", json=payload,
+        )
+        return _ok_or_raise(resp)
+
+    async def delete_publisher_prefix(self, prefix_id: int) -> dict[str, Any]:
+        resp = await self._client.delete(
+            f"/matching/publisher-prefixes/{prefix_id}",
+        )
+        return _ok_or_raise(resp)
+
+    async def reload_pipeline(self) -> dict[str, Any]:
+        """POST /matching/pipeline/reload → invalidate TitlePipeline cache."""
+        resp = await self._client.post("/matching/pipeline/reload")
+        return _ok_or_raise(resp)
+
     async def match_candidates(
         self, title: str, limit: int = 10,
     ) -> dict[str, Any]:

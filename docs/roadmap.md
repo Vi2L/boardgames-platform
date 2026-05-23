@@ -99,41 +99,28 @@ _(пусто)_
   select, relative time для `processed_at` (живо обновляемое). Сейчас оставлено
   как в предыдущей версии — только checkbox-выделение.
 
-### Catalog (matching v3 — переработка матчинга названий)
+### Catalog (matching v3 — остатки)
 
-Подзадачи объединены в эпик «Matching v3». Закрывают остатки CAT-4.1
-и CAT-4.3 и добавляют морфологию + edition-dedup. Порядок выполнения
-17.1 → 17.2 → 17.3 → 17.4 → 17.5; перед стартом — baseline-замер на
-1K unmatched-офферов (T1 hit-rate, среднее число embed-вызовов на
-оффер, T2-auto precision на выборке 100).
+Pragmatic-часть эпика «Matching v3» закрыта 2026-05-23 (см. devlog
+[CAT-17]): сделаны CAT-17.1 (kind_classifier), CAT-17.2 (title pipeline +
+`match_publisher_prefixes`), CAT-17.3 (морфология pymorphy3 + `title_lemma`)
+плюс страница отчёта `/matching → Отчёт`, runbook в MatchingHelpTab и
+унификация `reassess` на v2 `match_sync`. Остались два пункта эпика:
 
-- [CAT-17.1] **pre-T2 kind_classifier** (close-out CAT-4.3). Rule-based
-  regex по словам «дополнение»/«expansion»/«big box»/«promo»/«accessory»
-  в `title.lower()`; передавать `predicted_kind` в `tier_2_vector(ctx)`
-  ещё до первого embed'а. Точка вставки: `matching/v2/engine.py` перед
-  вызовом `tier_2_vector`. Цель — −30...50% embed-вызовов на офферах
-  expansion/promo, без потери precision (валидация на baseline-выборке).
-- [CAT-17.2] **Title pre-processing pipeline**. Новый модуль
-  `catalog/matching/title_pipeline.py`: `strip_publisher_prefix →
-  strip_year → strip_edition_marker → normalize_punctuation →
-  normalize_title`. Префиксы — из новой таблицы `match_publisher_prefixes`
-  (CSV-seed: «Hobby World:», «GaGa Games -», «Лавка Игр:», «Звезда:»,
-  «GaGa Games |» и т.п.). Применяется и для `title_norm`, и для
-  embed_text. Эффект — выше hit-rate на маркетплейсах WB/Avito (где
-  издатель часто в title).
-- [CAT-17.3] **Морфологическая нормализация русских названий**.
-  Через `pymorphy3`: лемматизация ru-токенов перед `title_norm`. Поле
-  `title_lemma` (денормализованное в `games` + GIN trgm). В
-  `find_match_candidates` — двойной search: pg_trgm по `title_lemma`
-  + по `title_norm`, MAX(score). Решает «Каркассона» (родительный) ≠
-  «Каркассон». Trade-off: pymorphy3 ≈30MB в зависимости catalog'а.
-- [CAT-17.4] **MatchProfileLoader** (close-out CAT-4.1). См. описание
-  выше; per-store пороги через `MatchEngine.__init__(profile=...)`.
+- [CAT-17.4] **MatchProfileLoader** (close-out CAT-4.1). Per-store
+  override порогов через `MatchEngine.__init__(profile=...)` —
+  таблица `match_profiles` уже есть (миграция 0007), endpoint
+  `GET /matching/profiles` есть; нужен только loader в `engine.py` и
+  пробрасывание через `match_sync(store_slug=...)`. **Заводить когда
+  появится магазин с систематически шумным title** (например, WB после
+  очередного редизайна) — сейчас trgm 0.92 + title pipeline даёт
+  одинаково хороший результат для всех 6 источников.
 - [CAT-17.5] **Edition / version dedup**. Новая таблица
   `game_editions(parent_game_id FK games, label, year, publisher,
   productcode, is_canonical)` — связь с `bgg_versions` (CAT-9). При
   матчинге edition резолвится в `parent_game_id`, но UI показывает
-  конкретное издание. Завязано на CAT-9.
+  конкретное издание. **Блокер: CAT-9** — без `bgg_versions` таблица
+  пустая, функциональность невозможна.
 
 ### Catalog (BGG enrichment)
 

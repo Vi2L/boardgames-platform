@@ -165,6 +165,106 @@ async def reassess_all(
         raise HTTPException(status_code=e.status_code, detail=e.detail) from e
 
 
+# ── Matching report (CAT-17) ───────────────────────────────────────────────
+
+
+@router.get("/matching/report/top-unmatched")
+async def report_top_unmatched(
+    days: int = Query(7, ge=1, le=90),
+    limit: int = Query(50, ge=1, le=500),
+    min_count: int = Query(2, ge=1, le=100),
+    store_slug: str | None = Query(None),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.report_top_unmatched(
+            days=days, limit=limit, min_count=min_count, store_slug=store_slug,
+        )
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/report/coverage")
+async def report_coverage(
+    days: int = Query(7, ge=1, le=90),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.report_coverage(days=days)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/report/activity")
+async def report_activity(
+    days: int = Query(14, ge=1, le=90),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.report_activity(days=days)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.get("/matching/report/sla")
+async def report_sla(
+    days: int = Query(7, ge=1, le=90),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.report_sla(days=days)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+# ── Publisher prefixes CRUD (CAT-17.2) ─────────────────────────────────────
+
+
+@router.get("/matching/publisher-prefixes")
+async def list_publisher_prefixes(
+    is_active: bool | None = Query(None),
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.list_publisher_prefixes(is_active=is_active)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/publisher-prefixes")
+async def create_publisher_prefix(
+    body: dict,  # {prefix: str, normalized?: str, source?: str}
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    if not isinstance(body.get("prefix"), str) or not body["prefix"].strip():
+        raise HTTPException(status_code=400, detail="prefix (non-empty str) required")
+    try:
+        return await client.create_publisher_prefix(body)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.delete("/matching/publisher-prefixes/{prefix_id}")
+async def delete_publisher_prefix(
+    prefix_id: int,
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.delete_publisher_prefix(prefix_id)
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
+@router.post("/matching/pipeline/reload")
+async def reload_pipeline(
+    client: CatalogClient = Depends(get_catalog_client),
+) -> dict:
+    try:
+        return await client.reload_pipeline()
+    except CatalogServiceError as e:
+        raise HTTPException(status_code=e.status_code, detail=e.detail) from e
+
+
 # ── Game CRUD (manual create / edit) ───────────────────────────────────────
 
 

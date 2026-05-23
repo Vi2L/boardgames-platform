@@ -8,6 +8,78 @@
 
 ---
 
+## 2026-05-23 · [CAT-17] Matching v3 Pragmatic — title pipeline, морфология, kind_classifier, страница отчёта, унификация reassess
+
+**Что сделано:** закрыта Pragmatic-часть эпика «Matching v3» — улучшение качества алгоритма матчинга названий + страница отчёта `/matching → Отчёт` для оператора + расширенный runbook.
+
+**Алгоритм матчинга:**
+- `catalog/matching/title_pipeline.py` — 6-ступенчатая чистка title ДО `normalize_title`: strip publisher prefix (из новой таблицы `match_publisher_prefixes`, миграция 0020) → marketing words («Настольная игра», «Н/И», «подарочное издание») → edition markers («2-е изд», «expansion», «big box») → артикулы → год в скобках → типографские тире. Кеш TTL 5 мин в module-level переменной. Решает кейс `«Hobby World Настольная игра Каркассон базовая версия» → «Каркассон»`.
+- `catalog/matching/morphology.py` — `lemmatize_ru()` через pymorphy3 (lazy-import + `@lru_cache` singleton, словари ~30МБ) + `safe_lemmatize_ru()` (graceful fallback на None при отказе) + `has_cyrillic()` (дешёвая эвристика «стоит ли вообще вызывать analyzer»). Закрывает кейс «Каркассона» (родительный) vs «Каркассон» — pg_trgm на этих формах ~0.73, после лемматизации обе → «каркассон» score 1.0.
+- `catalog/matching/kind_classifier.py` (CAT-17.1) — rule-based regex для `promo`/`expansion`/`accessory` по `title_raw`. Передаётся в `MatchResult.predicted_kind` для async-воркера → `tier_2_vector(kind_filter=...)` — экономит embed-вызовы на 30-50% и повышает precision (база vs дополнение не путаются).
+- `catalog/matching/v2/engine.py:match_sync()` — встроен pipeline + lemmatize + kind_classifier до T1. Pipeline передаётся опциональным параметром (для batch-операций — один `load_pipeline()` на 500 офферов вместо 500 SQL-запросов).
+- `catalog/matching/v2/tiers.py:tier_1_trgm()` — добавлен 4-й CTE `from_title_lemma` (UNION с существующими `from_title_en`/`from_title_ru`/`from_alias`). Условный CTE: добавляется в SQL только если caller передал `title_lemma_query` — backward compat для офферов без морфологии.
+- `catalog/matching/v2/decisions.py:save_decision()` — фикс T0 manual guard через `ON CONFLICT DO UPDATE WHERE` с единой формулой `EXCLUDED.source = 'manual' OR match_decisions.source != 'manual'`. Раньше любой `auto_t1/t2/t3` после `manual` перезаписывал manual-решение (TTL=∞ → 7-30 дней), через TTL дней manual-связка стирала себя сама. Теперь auto не может перебить manual. Константа `SOURCE_MANUAL` для согласованности.
+- `catalog/routers/matching.py` — `reassess_offer` и `reassess_all` переписаны с v1 `find_best_match` (порог 0.6) на v2 `match_sync` (T0 + T1 порог 0.92). Введён helper `_apply_match_result` — единая логика обработки всех исходов MatchResult: `matched_auto` / `queued_ml` / `unmatched` / `rejected_cache`. **Критичный фикс (после CR)**: `rejected_cache` теперь синхронизирует `offer.match_status='rejected'`, а не только обновляет `match_reason` — раньше оффер навсегда висел в `unmatched`-очереди после T0 negative-cache hit. `reassess_all` получил `batch_id` (UUID) для bulk-revert и лимит 500 на batch (защита от OOM).
+
+**Страница отчёта `/matching → Отчёт` (новый таб, хоткей `5`):**
+- `catalog/routers/matching_report.py` — 4 GET endpoint'а: `top-unmatched` (group by `title_raw_norm` для unmatched, ранжирование по count — что импортировать в catalog), `coverage` (per-store breakdown по статусам), `activity` (heatmap match_log action×day×performed_by), `sla` (tier share % + p50/p95/p99 latency T2/T3 из `match_queue.processed_at - created_at`).
+- `frontend/src/components/matching/ReportTab.tsx` — 4 секции в вертикальном стеке, каждая с фильтром по периоду (7/14/30/90 дней) и `staleTime: 60_000`. Coverage — inline stacked bar без Recharts (auto/manual/pending_ml/unmatched/rejected); Activity — компактный heatmap с opacity по count; SLA — двухколонная таблица tier_share + latency. HelpBox рядом с каждым заголовком.
+- Backend proxy: `web-test/app/catalog_client.py` + `app/api/catalog.py` — 8 новых endpoints (4 report + 3 prefixes CRUD + pipeline reload).
+
+**Памятка (runbook):**
+- `frontend/src/components/matching/MatchingHelpTab.tsx` — новый раздел «Чтение отчёта (CAT-17)» с 180+ строк документации: пошаговый workflow оператора по top-unmatched (импорт из BGG → reassess-all), интерпретация coverage цветов (≥80% / 50-80% / <50%), что значит каждый action в activity-heatmap, как читать SLA latency percentiles, runbook «действия после анализа». Anchor nav слева, секция между `log` и `troubles`.
+- `frontend/src/lib/help-topics.tsx` — 5 новых typed topics (`matching.report_*` + `matching.publisher_prefixes`).
+
+**Миграции + backfill:**
+- `alembic/versions/20260522_0020_match_publisher_prefixes.py` — таблица `match_publisher_prefixes(prefix UNIQUE, normalized, source, is_active)` + seed 26 префиксов из реальных WB/Avito (Hobby World вариации, GaGa Games, Лавка Игр, Звезда, Crowd Games, Стиль Жизни, Мосигра, Cosmodrome Games, Мир Хобби, Игромаг, Правильные игры). Партиал-индекс по `is_active=TRUE`.
+- `alembic/versions/20260522_0021_games_title_lemma.py` — колонка `games.title_lemma TEXT` + GIN trgm индекс с `WHERE title_lemma IS NOT NULL`. Backfill вынесен в CLI (10-15 мин на 162K игр через pymorphy3 — неприемлемо блокировать `alembic upgrade head` в Docker startup).
+- `catalog/scripts/backfill_title_lemma.py` — CLI с `--batch-size`, `--limit`, `--dry-run`. Идемпотентный (`WHERE title_lemma IS NULL`), можно прерывать. Прогресс через печать в stdout с rate/ETA.
+
+**Архитектурные решения:**
+- **Title pipeline применяется ДО `normalize_title()`** — это меняет ключ T0 cache lookup. При деплое старые `match_decisions` с «грязным» `title_norm` промахнутся, T1 заново оценит и запишет «чистый» ключ. TTL 7-30 дней самовосстановит cache; manual-связки в `game_aliases` сохраняются. Сознательный trade-off ради 80% улучшения hit-rate на WB/Avito.
+- **`safe_lemmatize_ru` возвращает None для пустых, не-кириллических и при ошибке** — caller (engine) передаёт None в `tier_1_trgm`, и тогда CTE `from_title_lemma` не добавляется в SQL. Pipeline работает даже когда pymorphy3 не установлен или словарь сломан — graceful degradation, не блокирует ingest.
+- **`classify_kind` вызывается с `title_raw`, не `title_clean`** — pipeline вырезает «big box» как edition marker, и classify_kind его потеряет. Закомментировано прямо в `engine.py` (предупреждение для будущих агентов).
+- **Отдельный роутер `matching_report.py`** — изоляция read-only логики отчёта от mutation-операций. Растущий `matching.py` уже 1500+ строк; отчёт жил бы там как chip on the shoulder.
+- **`reassess_all` лимит 500** — защита от OOM (раньше без лимита) + от лавины `pending_ml` enqueue (если 5000 офферов улетят в Ollama сразу — забьём очередь воркера на часы). Оператор видит `limit_hit=true` в response и запускает повторно при необходимости.
+- **`is_active` через partial-индекс** на `match_publisher_prefixes` — typical query `WHERE is_active = TRUE`, индекс маленький и точный.
+- **`pymorphy3` как required dep, не optional** — упрощает CLAUDE.md для следующих сессий (без extras-веток в `uv sync`). 30МБ image overhead приемлемы.
+
+**Как пользоваться:**
+
+```bash
+# 1. Зависимости (новый pymorphy3)
+uv sync --all-packages --group dev
+
+# 2. Миграции (0020 + 0021)
+cd services/catalog && uv run --package boardgames-catalog alembic upgrade head
+
+# 3. Backfill title_lemma (один раз; идемпотентный, можно прерывать)
+uv run --package boardgames-catalog python -m catalog.scripts.backfill_title_lemma --limit 1000  # пробный
+uv run --package boardgames-catalog python -m catalog.scripts.backfill_title_lemma              # полный (~15 мин на 162K)
+
+# 4. Рестарт catalog (новый router + pymorphy3 lazy-load)
+docker compose restart catalog
+
+# 5. UI
+cd services/web-test/frontend && npm run dev
+# → http://localhost:5173/matching → таб «Отчёт» (хоткей 5), «Help» (хоткей 6) раздел «Чтение отчёта»
+```
+
+**Что осталось от Matching v3:**
+- [CAT-17.4] MatchProfileLoader — таблица `match_profiles` уже есть (миграция 0007), нужен только loader. Откладывается до появления магазина с систематически шумным title.
+- [CAT-17.5] Edition dedup — блокирован CAT-9 (bgg_versions).
+
+**Тесты:** `tests/test_title_pipeline.py` (33 теста — реальные кейсы WB/Avito/Ozon), `tests/test_kind_classifier.py` (35 тестов — promo/expansion/accessory с приоритетами). Все 68 проходят.
+
+**Затронутые файлы:**
+- Backend catalog (созданы): `catalog/matching/{title_pipeline,morphology,kind_classifier}.py`, `catalog/routers/matching_report.py`, `catalog/scripts/backfill_title_lemma.py`, `alembic/versions/20260522_002{0,1}_*.py`, `tests/test_{title_pipeline,kind_classifier}.py`.
+- Backend catalog (изменены): `catalog/matching/v2/{engine,tiers,decisions}.py`, `catalog/routers/matching.py`, `catalog/models.py`, `catalog/api.py`, `pyproject.toml`.
+- Web-test backend: `app/{catalog_client.py, api/catalog.py}`, `CLAUDE.md`.
+- Frontend (созданы): `src/components/matching/ReportTab.tsx`, `src/lib/matching-report.ts`.
+- Frontend (изменены): `src/pages/MatchingPage.tsx`, `src/components/matching/MatchingHelpTab.tsx`, `src/lib/help-topics.tsx`.
+
+---
+
 ## 2026-05-21 · [WT-F13] Контекстные help-боксы (HelpBox + словарь топиков)
 
 **Что сделано:** в web-test frontend заведён новый UI-примитив для контекстной

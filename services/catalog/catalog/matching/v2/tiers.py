@@ -76,15 +76,26 @@ async def tier_1_trgm(
     title_raw: str,
     *,
     auto_threshold: float = 0.92,
+    title_lemma_query: str | None = None,
 ) -> MatchResult | None:
-    """pg_trgm similarity по games.title_norm + games.title_ru + game_aliases.
+    """pg_trgm similarity по games.title_norm + title_ru + title_lemma + aliases.
 
-    UNION четырёх источников с разными весами:
+    Параметр `title_raw` в реальности обычно уже title_clean (после
+    `title_pipeline.process()` в engine), но имя оставлено для backward
+    compat с тестами и внешними caller'ами.
+
+    UNION четырёх источников (CAT-17.3: добавлен `from_title_lemma`):
       - games.title (en canonical)            × 1.0
       - games.title_ru (ru canonical)         × 1.0
-      - game_aliases по ru-source             × 1.0  (manual/dicefest/wikidata)
-      - game_aliases остальные (auto-match, en) × 1.0
+      - games.title_lemma (морфологически нормализованный ru)  × 1.0  ← NEW
+      - game_aliases.alias_norm               × 1.0
     GROUP BY game_id + MAX(score) — одна игра = один кандидат с лучшим score.
+
+    `from_title_lemma` сравнивает с query, лемматизированной на стороне Python
+    (`title_lemma_query`), а не с pg_trgm-нормализацией. Это закрывает кейс
+    «Каркассона» (родительный) → «каркассон» (lemma) vs games.title_lemma=
+    «каркассон» score = 1.0. Если caller передал None — CTE пропускается
+    (старое поведение T1 без морфологии).
 
     Возвращает:
       MatchResult(tier=1, matched=True) — если best score >= auto_threshold (0.92).
@@ -95,8 +106,27 @@ async def tier_1_trgm(
     это делает LLM-арбитр в T3, который видит kind в кандидатах и принимает
     решение «база vs дополнение».
     """
-    stmt = text(
-        """
+    # Морфологический CTE добавляется условно — без него T1 работает как до
+    # CAT-17.3. Это значит, что обе версии SQL остаются совместимыми с
+    # миграцией 0021 в любом состоянии backfill'а (NULL title_lemma
+    # отфильтрован WHERE).
+    lemma_cte = ""
+    lemma_union = ""
+    if title_lemma_query:
+        lemma_cte = """,
+        from_title_lemma AS (
+            SELECT g.id AS game_id,
+                   similarity(g.title_lemma, :lemma_q) AS score,
+                   'title_lemma'::text AS via,
+                   g.title_lemma AS matched_text
+            FROM games g
+            WHERE g.title_lemma IS NOT NULL
+              AND g.title_lemma % :lemma_q
+              AND (g.status IS NULL OR g.status != 'merged')
+        )"""
+        lemma_union = "\n            UNION ALL SELECT * FROM from_title_lemma"
+
+    sql = f"""
         WITH q AS (SELECT lower(immutable_unaccent(:q)) AS norm),
         from_title_en AS (
             SELECT g.id AS game_id,
@@ -124,11 +154,11 @@ async def tier_1_trgm(
                    a.alias AS matched_text
             FROM game_aliases a, q
             WHERE a.alias_norm % q.norm
-        ),
+        ){lemma_cte},
         all_matches AS (
             SELECT * FROM from_title_en
             UNION ALL SELECT * FROM from_title_ru
-            UNION ALL SELECT * FROM from_alias
+            UNION ALL SELECT * FROM from_alias{lemma_union}
         ),
         per_game AS (
             SELECT game_id,
@@ -151,8 +181,10 @@ async def tier_1_trgm(
         JOIN games g ON g.id = pg.game_id
         ORDER BY pg.score DESC
         LIMIT 5
-        """
-    ).bindparams(q=title_raw)
+    """
+    stmt = text(sql).bindparams(q=title_raw)
+    if title_lemma_query:
+        stmt = stmt.bindparams(lemma_q=title_lemma_query)
 
     rows = list((await session.execute(stmt)).mappings().all())
     if not rows:
