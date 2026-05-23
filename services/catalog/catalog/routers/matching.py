@@ -424,6 +424,11 @@ async def reassess_all(
         None,
         description="только оффер'ы со score < max_score (или NULL)",
     ),
+    after_id: int | None = Query(
+        None,
+        description="cursor: обработать только offer.id > after_id "
+                    "(использовать `next_after_id` из предыдущего ответа)",
+    ),
     limit: int = Query(
         _REASSESS_ALL_LIMIT, ge=1, le=_REASSESS_ALL_LIMIT,
         description=f"максимум офферов за один прогон (потолок {_REASSESS_ALL_LIMIT})",
@@ -436,10 +441,14 @@ async def reassess_all(
     `POST /matching/log/batch-revert` откатить весь batch если оператор
     обнаружил систематическую ошибку.
 
-    Лимит на batch — 500 (`_REASSESS_ALL_LIMIT`). Для большего объёма —
-    запускать несколько раз с фильтром по `store` или после ингеста новых
-    данных. Это защита от OOM и от чрезмерной нагрузки на Ollama (если
-    много офферов улетит в `pending_ml`).
+    **Pagination через cursor**: `after_id` ограничивает выборку до
+    `offer.id > after_id`. Response возвращает `next_after_id` =
+    максимальный id обработанного batch'а — клиент передаёт его в
+    следующий запрос. Это решает проблему «после reassess офферы
+    остались unmatched → следующий batch берёт те же 500».
+
+    Лимит на batch — 500 (`_REASSESS_ALL_LIMIT`). Защита от OOM и от
+    чрезмерной нагрузки на Ollama при ML on.
 
     Не трогает manual / rejected — там уже есть решение оператора.
     """
@@ -456,6 +465,8 @@ async def reassess_all(
         stmt = stmt.where(
             or_(Offer.match_score < max_score, Offer.match_score.is_(None))
         )
+    if after_id is not None:
+        stmt = stmt.where(Offer.id > after_id)
 
     offers = (await session.execute(stmt)).scalars().all()
     if not offers:
@@ -463,6 +474,7 @@ async def reassess_all(
             "scanned": 0, "promoted_to_auto": 0, "queued_ml": 0,
             "score_improved": 0, "unchanged": 0,
             "batch_id": None, "limit_hit": False,
+            "next_after_id": None,
         }
 
     batch_id = uuid4()
@@ -517,6 +529,9 @@ async def reassess_all(
         "batch_id": str(batch_id),
         # Подсказка UI: пользователь видит, что лимит достигнут и надо запустить ещё раз.
         "limit_hit": len(offers) == limit,
+        # Cursor для следующего batch'а — max id обработанного.
+        # offers отсортированы ORDER BY id ASC, поэтому max = offers[-1].id.
+        "next_after_id": offers[-1].id if offers else None,
     }
 
 
