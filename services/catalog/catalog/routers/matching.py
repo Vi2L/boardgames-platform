@@ -429,6 +429,11 @@ async def reassess_all(
         description="cursor: обработать только offer.id > after_id "
                     "(использовать `next_after_id` из предыдущего ответа)",
     ),
+    include_auto: bool = Query(
+        False,
+        description="включить в выборку auto-офферы (для пересмотра подозрительных "
+                    "auto-матчей с низким score). Сочетать с `max_score=0.92`.",
+    ),
     limit: int = Query(
         _REASSESS_ALL_LIMIT, ge=1, le=_REASSESS_ALL_LIMIT,
         description=f"максимум офферов за один прогон (потолок {_REASSESS_ALL_LIMIT})",
@@ -450,11 +455,22 @@ async def reassess_all(
     Лимит на batch — 500 (`_REASSESS_ALL_LIMIT`). Защита от OOM и от
     чрезмерной нагрузки на Ollama при ML on.
 
+    **`include_auto=true`** (CAT-17 follow-up): расширяет выборку до
+    `match_status IN ('unmatched', 'auto')`. Используется для пересмотра
+    старых auto-матчей с низким score (обычно с `max_score=0.92`). Если
+    новый `match_sync` не подтверждает матч (`result.matched=False`) —
+    `_apply_match_result` выставит `match_status='unmatched'`, очистит
+    `game_id`, запишет audit `action=REASSESS` в `match_log` (можно
+    откатить через bulk-revert по `batch_id`).
+
     Не трогает manual / rejected — там уже есть решение оператора.
     """
+    # При include_auto расширяем выборку на auto-офферы (обычно для
+    # пересмотра подозрительных низкоscore-матчей с max_score=0.92).
+    allowed_statuses = ["unmatched", "auto"] if include_auto else ["unmatched"]
     stmt = (
         select(Offer)
-        .where(Offer.match_status == "unmatched")
+        .where(Offer.match_status.in_(allowed_statuses))
         .order_by(Offer.id)
         .limit(limit)
     )

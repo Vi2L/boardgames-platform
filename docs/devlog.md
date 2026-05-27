@@ -8,6 +8,153 @@
 
 ---
 
+## 2026-05-27 · [CAT-17 ops] include_auto в reassess + активация ML pipeline
+
+**Что сделано:** включён ML matching pipeline (T2 bge-m3 + T3 qwen2.5),
+обработана накопившаяся очередь из 917 офферов (re-enqueue skipped из
+прошлых отказов + reassess всех unmatched), один точечный фикс кода
+`reassess-all?include_auto=true` для пересмотра старых auto-матчей с
+низким score.
+
+**Изменение в коде** (1 файл):
+
+`catalog/routers/matching.py:reassess_all`: добавлен query-параметр
+`include_auto: bool = False`. При `True` выборка расширяется до
+`match_status IN ('unmatched', 'auto')`. Используется обычно с
+`max_score=0.92` для пересмотра подозрительных авто-матчей с низким score
+(старых решений LLM до моего pipeline). `_apply_match_result` уже
+корректно обрабатывает кейс «новый match_sync не подтверждает auto» —
+выставляет `match_status='unmatched'`, очищает `game_id`, пишет audit
+`action=REASSESS` в `match_log` (можно откатить через bulk-revert по
+`batch_id`). По умолчанию параметр выключен — старое поведение
+неизменно.
+
+**Ops actions** (в БД, без code-changes):
+
+1. `PATCH /admin/runtime-flags/ml_enabled {value: true}` — включён kill-switch
+   matching v2. Оба модели (`bge-m3`, `qwen2.5:7b-instruct`) уже были
+   available и в `circuit_state='closed'`.
+2. **Re-enqueue 332 skipped** с reason'ами, где новый pipeline может помочь:
+   - `llm_disabled: 67` (skipped когда ML был off)
+   - `vec_below_threshold: 174` (T2 нашёл кандидата ниже 0.85)
+   - `llm_low_confidence: 91` (T3 confidence <0.75)
+   - Не трогали `llm_no_match: 199` и `no_candidates: 2` — это
+     legitimate rejects от LLM («не та игра» / «нет кандидатов»).
+3. **Reassess всех 566 unmatched** через cursor-пагинацию. Все ушли в
+   `match_queue.status='pending'` со статусом `offers.match_status='pending_ml'`.
+4. Воркер обработал **917 офферов за ~14 минут** (с прерыванием на 4-дневный
+   Docker downtime посередине). Конечное состояние queue: 203 done, 820 skipped.
+
+**Эффект ML за 14 дней**:
+
+| Action в match_log | Count |
+|---|---|
+| `auto_t3` (LLM арбитр) | **193** |
+| `auto_t2` (bge-m3 cosine ≥0.85) | **32** |
+| `reject` (LLM «не настолка») | **44** |
+
+LLM reject'ы с понятными причинами: «видеоигра» (Mortal Kombat X, Age of
+Wonders Planetfall), «категория товаров» («Новые настольные игры»), «книга
+правил», «дополнение к Каркассон, но нет в кандидатах», «не настольная
+игра, а видеоигра». Это качественный фильтр — он отсекает мусор и пишет
+diagnostic reason в `match_decisions` как negative cache на 7 дней.
+
+**Coverage by store — реальный итог (baseline → текущее)**:
+
+| Store | Baseline | После CAT-17 (T1+pipeline) | После ML (CAT-17 ops) | Δ от baseline |
+|---|---|---|---|---|
+| hobbygames | 53.9% | 62.8% | **74.0%** | **+20.1%** |
+| lavkaigr | 61.1% | 61.1% | **71.4%** | **+10.3%** |
+| gaga | 35.3% | 38.2% | **47.4%** | **+12.1%** |
+| wildberries | 19.7% | 25.5% | **26.8%** | +7.1% |
+| avito | 11.5% | 14.3% | **19.9%** | +8.4% |
+| ozon | 2.2% | 6.5% | **8.3%** | +6.1% (×4) |
+
+T1 share вырос ×3 (1.5% → 4.3%) благодаря pipeline+penalty, плюс T2+T3
+вместе закрыли ещё ~9.5% (новые tier'ы поверх trgm). Coverage hobbygames
+прыгнул на 20pp — это эффект полного flow (clean title → trgm hits в catalog
+с морфологией → embedding для остатков → LLM для ambiguous).
+
+**Архитектурные решения**:
+
+- **`include_auto` через query-параметр, не отдельный endpoint** —
+  существующий `reassess-all` уже имел всю инфраструктуру (cursor,
+  batch_id, _apply_match_result, audit). Дублирование `/reassess-suspicious-auto`
+  отдельным endpoint'ом — overengineering для одного флага.
+- **Default `False`** — старое поведение не меняется, явно opt-in.
+- **Re-enqueue по конкретным reason'ам**, не «всё skipped целиком». LLM
+  явный «нет совпадения» (`llm_no_match`) — это legitimate reject, не
+  стоит мучить LLM повторно. Только те где новый pipeline даст другой
+  input.
+- **Reassess через cursor, не одной пачкой**. Лимит 500 защищает Ollama
+  (если бы 917 ушли одним залпом в `pending_ml` — воркер обработал бы
+  столько же, но при OOM на Ollama завис бы всю очередь).
+
+**Как пользоваться** (для оператора):
+
+```bash
+# Активация ML pipeline (если когда-нибудь снова выключали kill-switch)
+curl -X PATCH http://localhost:8002/admin/runtime-flags/ml_enabled \
+  -H 'content-type: application/json' -d '{"value": true}'
+
+# Re-enqueue ранее пропущенных по конкретному reason
+curl -X POST http://localhost:8002/matching/queue/re-enqueue-skipped \
+  -H 'content-type: application/json' \
+  -d '{"reason": ["llm_disabled"]}'
+
+# Reassess unmatched (cursor — итерируем до next_after_id=null)
+after_id=""
+while true; do
+  url="http://localhost:8002/matching/reassess-all?limit=500"
+  [ -n "$after_id" ] && url="${url}&after_id=${after_id}"
+  resp=$(curl -sf -X POST "$url")
+  next=$(echo "$resp" | jq -r .next_after_id)
+  [ "$next" = "null" ] && break
+  after_id="$next"
+done
+
+# Пересмотр подозрительных auto со score 0.85-0.91 (новый flag CAT-17 ops)
+after_id=""
+while true; do
+  url="http://localhost:8002/matching/reassess-all?limit=500&include_auto=true&max_score=0.92"
+  [ -n "$after_id" ] && url="${url}&after_id=${after_id}"
+  resp=$(curl -sf -X POST "$url")
+  next=$(echo "$resp" | jq -r .next_after_id)
+  [ "$next" = "null" ] && break
+  after_id="$next"
+done
+
+# Мониторинг через UI: /matching → Контроль (Ollama health), → Очередь
+# (skipped breakdown), → Отчёт (SLA + tier share).
+```
+
+**Что выявлено как известные дефекты для следующих сессий**:
+
+1. **`pending_ml` лимб в `offers`**: после воркер'овского `_finalize_skipped`
+   `offers.match_status` остаётся `pending_ml`, а не сбрасывается в
+   `unmatched`. Сейчас 600 офферов «зависли» — queue пуста, но в SLA
+   report они показаны как pending. Фикс: в `worker._finalize_skipped`
+   добавить SET match_status='unmatched' при reason типа
+   `vec_below_threshold` / `llm_no_match` / `llm_low_confidence` —
+   тогда оператор увидит их в обычной очереди.
+2. **SLA latency показывает wait+processing вместе**:
+   `processed_at - created_at` включает время ожидания в queue. p95 T3
+   = 1000+ сек на самом деле — это offers, которые «висели» 4 дня
+   пока Docker был down. Фикс: добавить `claimed_at` в SQL
+   `matching_report:sla_per_tier`, считать processing-latency отдельно
+   как `processed_at - claimed_at`.
+3. **Edition dedup (CAT-17.5)** остаётся заблокированным CAT-9
+   (`bgg_versions`). Пока pipeline + penalty закрывают 80% спин-офф
+   кейсов через `parent_game_id` существующей схемы.
+
+**Затронутые файлы**:
+- Backend (изменён): `catalog/routers/matching.py` (один query-параметр).
+- БД: 332 строки UPDATE в `match_queue` (re-enqueue), 566 строк UPDATE в
+  `offers` (status: unmatched → pending_ml) + INSERT в match_queue,
+  finalize воркером: 225 auto-матчей + 44 reject в `match_log`.
+
+---
+
 ## 2026-05-23 · [CAT-17 follow-up] Token-overlap penalty, regex расширения, cursor reassess + bulk cleanup
 
 **Что сделано:** серия follow-up'ов к [CAT-17] после реального прогона
