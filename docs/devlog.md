@@ -8,6 +8,35 @@
 
 ---
 
+## 2026-07-10 · [PRS-OT] OnlineTrade отключён из активного списка парсеров
+
+**Что сделано:** парсер OnlineTrade убран из инициализации в
+`parsers/api.py:lifespan` — вместе с ним удалён фоновый warmup-loop
+(`_onlinetrade_warmup_loop` + task), импорты и глобалы. Причина:
+onlinetrade.ru защищён ServicePipe с rotated visual CAPTCHA, которая не
+пробивается доступными способами (cookie-injection не работает из-за
+привязки токена к IP+fingerprint, interactive VNC не сработал — см.
+memory `browser-service-camoufox-playwright`). Раньше парсер всё равно
+инициализировался, но всегда падал с `RuntimeError` про ServicePipe и
+возвращал 0 товаров — то есть держал warmup-профиль и слот в ingest
+впустую. Код парсера (`stores/onlinetrade.py`) и его реэкспорт в
+`stores/__init__.py` сохранены — источник можно вернуть при появлении
+CAPTCHA-solver'а.
+
+**Как пользоваться:** ничего делать не нужно — источников стало 6
+(avito, wb, ozon, gaga, hobbygames, crowdgames, lavkaigr минус
+onlinetrade). Проверка: `docker logs bg-parsers` больше не содержит
+`[OnlineTrade] warmup loop started` и `Парсер onlinetrade упал`.
+**Чтобы вернуть парсер:** нужен один из вариантов — 2Captcha API
+(~$1/1000, платно) либо residential proxy с высокой репутацией IP;
+затем восстановить импорт + строку `OnlineTradeParser(...)` в списке
+`parsers` и (опционально) warmup-loop в `lifespan`.
+
+**Затронутые файлы:** `services/parsers/parsers/api.py` (единственная
+правка кода; `stores/onlinetrade.py` оставлен без изменений).
+
+---
+
 ## 2026-05-27 · [CAT-17 ops] include_auto в reassess + активация ML pipeline
 
 **Что сделано:** включён ML matching pipeline (T2 bge-m3 + T3 qwen2.5),

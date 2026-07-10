@@ -21,11 +21,10 @@ from .stores.crowdgames import CrowdGamesParser
 from .stores.gaga import GagaParser
 from .stores.hobbygames import HobbyGamesParser
 from .stores.lavkaigr import LavkaIgrParser
-from .stores.onlinetrade import (
-    OnlineTradeParser,
-    warmup_interval_seconds as onlinetrade_warmup_interval_seconds,
-    warmup_once as onlinetrade_warmup_once,
-)
+# OnlineTrade парсер отключён 2026-05-23: ServicePipe rotated CAPTCHA не пробивается
+# доступными способами (cookie injection и interactive VNC не сработали — см. memory
+# `browser-service-camoufox-playwright`). Файл `stores/onlinetrade.py` оставлен в репо
+# для возможного возврата (через 2Captcha API или residential proxy).
 from .stores.ozon import OzonParser, warmup_interval_seconds, warmup_once
 from .stores.wildberries import WildberriesParser
 
@@ -39,7 +38,6 @@ _catalog_publisher: CatalogPublisher
 _browser_client: BrowserClient | None = None
 _avito_qrator: AvitoQratorClient | None = None
 _ozon_warmup_task: asyncio.Task | None = None
-_onlinetrade_warmup_task: asyncio.Task | None = None
 
 
 async def _ozon_warmup_loop(browser_client: BrowserClient) -> None:
@@ -68,34 +66,10 @@ async def _ozon_warmup_loop(browser_client: BrowserClient) -> None:
         raise
 
 
-async def _onlinetrade_warmup_loop(browser_client: BrowserClient) -> None:
-    """Фоновая задача: держит persistent profile `onlinetrade` тёплым.
-
-    Аналог Ozon-warmup'а, но интервал чуть короче (default 30 мин) —
-    ServicePipe ротирует токены агрессивнее. Логика идентична: после
-    initial-challenge cookies остаются в `/data/profiles/onlinetrade`,
-    периодический «холостой» fetch на главную предотвращает их инвалидацию.
-
-    Интервал — через env ONLINETRADE_WARMUP_INTERVAL_MINUTES (default 30).
-    """
-    import logging
-    log = logging.getLogger(__name__)
-    interval = onlinetrade_warmup_interval_seconds()
-    log.info("[OnlineTrade] warmup loop started, interval=%ds", interval)
-    try:
-        while True:
-            await asyncio.sleep(interval)
-            ok = await onlinetrade_warmup_once(browser_client)
-            log.info("[OnlineTrade] warmup tick: %s", "ok" if ok else "failed")
-    except asyncio.CancelledError:
-        log.info("[OnlineTrade] warmup loop cancelled")
-        raise
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _db, _service, _catalog_publisher, _browser_client, _avito_qrator
-    global _ozon_warmup_task, _onlinetrade_warmup_task
+    global _ozon_warmup_task
 
     db_path = os.getenv("DB_PATH", "data/prices.sqlite")
     ttl = float(os.getenv("CACHE_TTL_HOURS", "4"))
@@ -143,9 +117,8 @@ async def lifespan(app: FastAPI):
         # PriceService запишет ошибку в SearchResult.errors — остальные
         # парсеры продолжат работать.
         OzonParser(browser_client=_browser_client),
-        # OnlineTrade — седьмой источник. Сайт защищён ServicePipe (JS challenge),
-        # поэтому только через browser-service. Та же graceful-degradation как у Ozon.
-        OnlineTradeParser(browser_client=_browser_client),
+        # OnlineTrade отключён 2026-05-23 — ServicePipe rotated CAPTCHA не лечится
+        # доступными способами. См. комментарий рядом с импортами и memory.
     ]
 
     # Регистрируем магазины в БД и подмешиваем _db для SnapshotRecorder.
@@ -160,23 +133,19 @@ async def lifespan(app: FastAPI):
     )
     stats_set_db(_db)
 
-    # Warmup loops для browser-зависимых парсеров. Без browser-service оба
-    # парсера всё равно не работают, поэтому keep-alive бессмысленен.
+    # Warmup loop для Ozon — держит persistent profile тёплым, чтобы первый
+    # user-запрос не был cold (10-12с). Без browser-service бессмыслен.
     if _browser_client is not None:
         _ozon_warmup_task = asyncio.create_task(_ozon_warmup_loop(_browser_client))
-        _onlinetrade_warmup_task = asyncio.create_task(
-            _onlinetrade_warmup_loop(_browser_client)
-        )
 
     yield  # приложение работает
 
-    for task in (_ozon_warmup_task, _onlinetrade_warmup_task):
-        if task is not None:
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
+    if _ozon_warmup_task is not None:
+        _ozon_warmup_task.cancel()
+        try:
+            await _ozon_warmup_task
+        except asyncio.CancelledError:
+            pass
 
     await _catalog_publisher.close()
     if _browser_client is not None:
